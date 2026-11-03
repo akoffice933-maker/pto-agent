@@ -1,0 +1,11 @@
+.git
+.github
+out
+data/demo/batch/scans
+data/demo/batch/truth
+data/demo/retro
+video
+.cache
+.pytest_cache
+__pycache__
+*.pyc

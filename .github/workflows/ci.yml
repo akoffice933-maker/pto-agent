@@ -1,0 +1,119 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Быстрая проверка: код, протокол MCP, тесты без демо-прогонов.
+  unit:
+    name: Тесты и MCP-протокол (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - name: Зависимости
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-pto.txt
+      - name: Демо-данные (смета, журнал, акты, нормы, чертёж, redline-скан)
+        run: |
+          python scripts/make_demo_data.py
+          python scripts/make_demo_dxf.py
+          python scripts/make_demo_redline.py
+      - name: Тесты
+        run: pytest tests -q
+      - name: MCP-сервер отвечает по stdio
+        run: |
+          echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+            | python -m pto_agent.mcp_server --base-dir . \
+            | python -c "import json,sys; d=json.load(sys.stdin); n=len(d['result']['tools']); print('инструментов:', n); sys.exit(0 if n==14 else 1)"
+
+  # Полный прогон: выпуск, деньги, портфель актов, дашборд — и все тесты на реальных артефактах.
+  e2e:
+    name: Сквозной прогон (выпуск → КС-2 → деньги → дашборд)
+    runs-on: ubuntu-latest
+    needs: unit
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Зависимости
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-pto.txt
+      - name: Демо-данные и чертежи
+        run: |
+          python scripts/make_demo_data.py
+          python scripts/make_demo_dxf.py
+          python scripts/make_demo_redline.py
+          python scripts/make_demo_batch.py
+          python scripts/make_demo_retro.py
+      - name: Сверка КС-2 и объёмов (MVP)
+        run: python -m pto_agent run --data data/demo --out out
+      - name: Выпуск текущего месяца
+        run: |
+          python -m pto_agent cad scan-batch \
+            --manifest data/demo/batch/manifest.json --engine mock \
+            --summary out/summary.json --out out/cad/batch
+      - name: Ретро-выпуск по прошлым актам
+        run: |
+          python -m pto_agent cad scan-batch --manifest data/demo/retro/manifest_ks35.json \
+            --engine mock --summary out/acts/summary_ks35.json --out out/cad/batch_ks35
+          python -m pto_agent cad scan-batch --manifest data/demo/retro/manifest_ks37.json \
+            --engine mock --summary out/acts/summary_ks37.json --out out/cad/batch_ks37
+      - name: Деньги и портфель актов
+        run: |
+          python scripts/make_demo_acts.py
+          python -m pto_agent cad impact --batch out/cad/batch/batch_summary.json \
+            --summary out/summary.json --out out/cad/impact --with-background
+          python -m pto_agent cad impact --acts data/demo/acts/acts.json \
+            --summary out/summary.json --out out/cad/portfolio
+      - name: Дашборд руководителя
+        run: python docs/build_dashboard.py
+      - name: Все тесты на собранных артефактах
+        run: pytest tests -q
+      - name: Собрать отчёты в артефакт CI
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reports
+          path: |
+            out/cad/portfolio/portfolio.xlsx
+            out/cad/batch/batch_summary.xlsx
+            out/cad/impact/impact.xlsx
+            Дашборд_руководителя_ПТО.html
+          if-no-files-found: warn
+
+  docker:
+    name: Docker-образ MCP-сервера
+    runs-on: ubuntu-latest
+    needs: unit
+    steps:
+      - uses: actions/checkout@v4
+      - name: Сборка
+        run: docker build -t pto-agent-mcp:ci .
+      - name: Запуск и проверка /health
+        run: |
+          docker run -d --name mcp -p 8765:8765 pto-agent-mcp:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8765/health; then echo; exit 0; fi
+            sleep 2
+          done
+          docker logs mcp; exit 1

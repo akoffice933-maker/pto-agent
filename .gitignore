@@ -1,0 +1,32 @@
+# ── артефакты прогонов (пересоздаются командами из README) ────────────────
+out/
+*.log
+
+# ── тяжёлые демо-артефакты: генерируются скриптами ───────────────────────
+data/demo/batch/scans/
+data/demo/batch/truth/
+data/demo/retro/
+data/demo/photo_scan.png
+drawings/*_scan.png
+
+# ── python ──────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ── ide / os ────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# ── секреты ─────────────────────────────────────────────────────────────
+.env
+config/llm_providers.local.yaml
