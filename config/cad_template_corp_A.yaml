@@ -1,0 +1,67 @@
+# ============================================================================
+#  Корпоративный шаблон оформления чертежей «corp-A» (исполнительные схемы)
+#  Используется CAD-модулем ИИ-агента ПТО для проверки чертежа перед выпуском.
+#  Изменение шаблона = новая версия (version) + запись в журнале аудита.
+# ============================================================================
+id: corp-A
+version: 4
+description: Шаблон застройщика для исполнительных схем по монолитному циклу
+updated: 2026-10-28
+
+units: mm                     # единицы модели
+paper: A1
+scale: "1:100"
+tolerance_mm: 0.5
+
+# Блок оформления: рамка и штамп. Объекты этих блоков агент не изменяет.
+frame_block: РАМКА_A1
+titleblock_block: ШТАМП_КОРП_A
+
+# Слои, объекты на которых агент не трогает ни при каких операциях
+protected_layers:
+  - "0"
+  - DEFPOINTS
+  - ОС_РАМКА
+  - ОС_ШТАМП
+
+# Обязательные слои рабочей части чертежа: имя -> ожидаемые свойства
+required_layers:
+  ПЛ_ФУНДАМЕНТ:      { color: 1, linetype: CONTINUOUS }
+  ИЗ_ГИДРОИЗОЛЯЦИЯ:  { color: 3, linetype: CONTINUOUS }
+  КО_КАРКАС:         { color: 2, linetype: CONTINUOUS }
+  ВК_ВОДОСНАБЖЕНИЕ:  { color: 4, linetype: CONTINUOUS }
+  КР_КРОВЛЯ:         { color: 6, linetype: CONTINUOUS }
+  ТЕКСТ:             { color: 7, linetype: CONTINUOUS }
+  РАЗМЕРЫ:           { color: 5, linetype: CONTINUOUS }
+
+# Блоки, разрешённые к применению (остальные — предупреждение)
+allowed_blocks:
+  - РАМКА_A1
+  - ШТАМП_КОРП_A
+  - ПОЗ_ОБЪЁМ
+  - КОЛОННА_400
+
+text_styles: [СПДС, GOST_TYPE_A]
+dim_styles: [СПДС_2.5]
+min_text_height_mm: 2.5
+max_polyline_vertices: 2000
+
+# Поля штампа, которые агенту разрешено заполнять (остальные — только человек)
+titleblock_fields:
+  ОБЪЕКТ:   { required: true }
+  ШИФР:     { required: true }
+  ВИД_РАБОТ: { required: true }
+  ДАТА:     { required: true }
+  ФИО:      { required: false, human_only: true }
+  МАСШТАБ:  { required: true }
+
+# Проверки перед выпуском схемы (соответствуют ТЗ, раздел CAD)
+checks:
+  objects_on_protected_layers: blocking    # объекты на слое 0 / слоях оформления
+  text_height: blocking                    # высота текста в печати >= 2,5 мм
+  titleblock_filled: blocking              # штамп заполнен
+  unknown_layer: warning                   # слой не из шаблона
+  unknown_block: warning                   # блок не из шаблона
+  unknown_text_style: warning
+  outside_frame: warning                   # объекты вне рамки
+  takeoff_vs_act_pct: 5                    # допустимое расхождение объёмов с КС-2, %

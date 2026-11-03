@@ -1,0 +1,194 @@
+# ============================================================================
+#  ИИ-агент ПТО — конфигурация подключения моделей по API
+#  Версия 1.0 / 02.11.2026
+#
+#  Принцип: приложение не знает, какая модель отвечает. Все вызовы идут через
+#  единый LLM-шлюз (OpenAI-совместимый интерфейс), провайдеры описываются
+#  этим файлом. Смена модели = правка конфига, а не кода.
+#
+#  Обязательные свойства шлюза:
+#   1) маршрутизация по классу данных и типу задачи;
+#   2) жёсткие лимиты бюджета и деградация при их достижении;
+#   3) fallback-цепочка и таймауты;
+#   4) журналирование каждого вызова (провайдер, модель, промпт-версия,
+#      токены, стоимость, задержка, результат валидации) в llm_call_log;
+#   5) запрет отправки данных классов «КТ» и «ПДн» во внешние API.
+# ============================================================================
+
+gateway:
+  version: 1
+  api_style: openai_compatible          # /v1/chat/completions, /v1/embeddings
+  base_path: /api/v1/llm
+  default_timeout_s: 60
+  max_retries: 2
+  retry_backoff: exponential            # 1s, 2s
+  request_log: full                     # хранить метаданные всегда; тело запроса — по флагу log_body
+  log_body: false                       # тела запросов не пишем в целях ИБ
+  cache:
+    enabled: true
+    ttl_s: 86400
+    scope: [norm_lookup, doc_classify]  # кэшируются только идемпотентные шаги
+  budget:
+    monthly_limit_rub: 60000
+    warn_at_pct: 80
+    hard_stop_at_pct: 100               # при достижении — только локальные модели
+    per_task_limit_rub: 40
+    per_user_daily_limit_rub: 800
+
+# ---------------------------------------------------------------------------
+# Провайдеры. Секреты только из окружения/Vault, в файле — имена переменных.
+# ---------------------------------------------------------------------------
+providers:
+  - id: local-qwen-32b
+    kind: vllm
+    base_url: http://10.20.0.11:8000
+    auth: { type: none }                # внутри контура
+    model: Qwen2.5-32B-Instruct
+    context_window: 128000
+    capabilities: [tools, json_mode, streaming]
+    vision: false
+    price_per_1k_in_rub: 0
+    price_per_1k_out_rub: 0
+    data_classes: [public, internal, commercial_secret, personal]
+    residency: on_premise
+    concurrency: 8
+    enabled: true
+
+  - id: local-qwen-vl-32b
+    kind: vllm
+    base_url: http://10.20.0.12:8000
+    auth: { type: none }
+    model: Qwen2.5-VL-32B-Instruct
+    context_window: 64000
+    capabilities: [vision, json_mode]
+    vision: true
+    price_per_1k_in_rub: 0
+    price_per_1k_out_rub: 0
+    data_classes: [public, internal, commercial_secret, personal]
+    residency: on_premise
+    enabled: true
+
+  - id: gigachat-pro
+    kind: gigachat
+    base_url: https://gigachat.devices.sberbank.ru/api/v1
+    auth:
+      type: oauth
+      client_id_env: GIGACHAT_CLIENT_ID
+      secret_env: GIGACHAT_SECRET
+      scope: GIGACHAT_API_PERS
+    model: GigaChat-Pro
+    context_window: 32000
+    capabilities: [tools, json_mode]
+    vision: false
+    price_per_1k_in_rub: 0.55
+    price_per_1k_out_rub: 1.10
+    data_classes: [public, internal, personal]   # КТ — запрещено
+    residency: rf_cloud
+    enabled: true
+
+  - id: yandexgpt-pro
+    kind: yandexgpt
+    base_url: https://llm.api.cloud.yandex.net/llm/v1
+    auth:
+      type: iam
+      token_env: YC_IAM_TOKEN
+      folder_env: YC_FOLDER_ID
+    model: yandexgpt/rc
+    context_window: 32000
+    capabilities: [json_mode]
+    vision: false
+    price_per_1k_in_rub: 0.50
+    price_per_1k_out_rub: 1.00
+    data_classes: [public, internal]
+    residency: rf_cloud
+    enabled: true
+    role: fallback_only
+
+  - id: external-forbidden
+    kind: openai_compatible
+    base_url: https://api.example-external.com/v1
+    auth: { type: api_key, key_env: EXTERNAL_API_KEY }
+    model: any
+    price_per_1k_in_rub: 0
+    price_per_1k_out_rub: 0
+    data_classes: []                    # политика: реальные данные не отправляются
+    residency: outside_rf
+    enabled: false                      # только для R&D на синтетике, включается вручную
+
+# ---------------------------------------------------------------------------
+# Маршрутизация: первое совпавшее правило применяется.
+# data_class вычисляется классификатором документа ДО вызова модели.
+# ---------------------------------------------------------------------------
+routing:
+  - id: personal-data-local-only
+    when: { data_class: [personal, commercial_secret] }
+    to: [local-qwen-32b]
+    rationale: "152-ФЗ и коммерческая тайна: обработка только в контуре заказчика"
+
+  - id: vision-tasks
+    when: { intent: [redline_analyze, cert_extract, scan_ocr], has_images: true }
+    to: [local-qwen-vl-32b, local-qwen-32b]
+
+  - id: heavy-reasoning
+    when: { intent: [ks2_validate, claims_draft, schedule_risk], data_class: [public, internal], complexity: high }
+    to: [gigachat-pro, local-qwen-32b]
+    rationale: "Длинные рассуждения по документам без КТ/ПДн — облако дешевле по времени"
+
+  - id: routine-extraction
+    when: { intent: [doc_classify, field_extract, journal_parse] }
+    to: [local-qwen-32b]
+    rationale: "Рутинные шаги — только локально: 67 % вызовов, нулевая стоимость"
+
+  - id: default-local
+    when: {}
+    to: [local-qwen-32b]
+
+fallback:
+  chain: [local-qwen-32b, gigachat-pro, yandexgpt-pro]
+  on: [timeout, 429, 5xx, content_filter, json_parse_error]
+  max_fallbacks: 2
+  on_all_failed: escalate_to_human    # агент не имитирует результат
+
+# ---------------------------------------------------------------------------
+# Промпты: версия привязана к модели, изменение фиксируется в журнале задач
+# ---------------------------------------------------------------------------
+prompts:
+  - id: ks2_draft
+    version: 1.4
+    file: prompts/01_ks2_reconciliation.md
+    default_model: local-qwen-32b
+    output_schema: KS2Draft
+    validators: [json_schema, arithmetic_recalc, source_presence]
+  - id: aosr_generate
+    version: 1.2
+    file: prompts/02_aosr_generation.md
+    default_model: local-qwen-32b
+    output_schema: AOSRDraft
+    validators: [json_schema, norm_cite_verify, date_chronology]
+  - id: norm_answer
+    version: 2.1
+    file: prompts/03_norm_control_rag.md
+    default_model: local-qwen-32b
+    output_schema: NormAnswer
+    validators: [cite_verify, date_applicability]
+  - id: cad_operations
+    version: 0.9
+    file: prompts/04_asbuilt_scheme_cad.md
+    default_model: local-qwen-vl-32b
+    output_schema: CadOperationSet
+    validators: [whitelist_ops, json_schema, geometry_units]
+
+# ---------------------------------------------------------------------------
+# Тесты при подключении нового провайдера/модели (обязательны до включения)
+# ---------------------------------------------------------------------------
+acceptance_for_new_model:
+  golden_set_slices: [gs01_ks2_dev, gs03_norms_dev]
+  must_pass:
+    json_schema_valid_pct: 99.5
+    tools_call_accuracy_pct: 98
+    russian_quality_min: 8          # внутренняя шкала 0–10
+    citation_quote_match_pct: 99
+    p95_latency_s: 20
+  cost_check:
+    max_cost_per_ks2_draft_rub: 6
+  then: "полный прогон test-среза golden set и подпись методолога"

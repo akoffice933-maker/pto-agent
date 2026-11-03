@@ -1,0 +1,8 @@
+block,id,file,object_code,work_type,doc_type,quality,period,source_org,anonymized,split,annotator,notes
+GS-01,GS-01-A-001,ks2_001.pdf,OBJ-142,concrete,KS2,scan_low,2026-09,subcontractor-1,yes,dev,PERSON_001,
+GS-01,GS-01-A-002,ks2_002.xlsx,OBJ-207,piping,KS2,text_layer,2026-08,subcontractor-2,yes,test,PERSON_001,
+GS-02,GS-02-P-001,journal_general_142.pdf,OBJ-142,concrete,JOURNAL,text_layer,2026-09,general_contractor,yes,dev,PERSON_001,
+GS-02,GS-02-P-002,aosr_02_207.pdf,OBJ-207,roofing,AOSR,scan_good,2026-08,subcontractor-2,yes,test,PERSON_002,
+GS-03,GS-03-N-001,-,-,concrete,-,-,-,-,-,dev,PERSON_002,нормативный вопрос
+GS-04,GS-04-R-001,dwg_142_kzh1.dwg,OBJ-142,concrete,SCHEME,vector,2026-10,general_contractor,yes,dev,PERSON_003,
+GS-05,GS-05-D-001,cert_4412.pdf,OBJ-142,concrete,CERT,scan_low,2026-02,supplier,yes,dev,PERSON_001,

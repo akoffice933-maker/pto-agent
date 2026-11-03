@@ -1,0 +1,1472 @@
+openapi: 3.1.0
+info:
+  title: ИИ-агент ПТО — API
+  version: 1.0.0
+  description: |
+    API оркестратора агентов ПТО. Все операции, изменяющие данные (запись файлов,
+    применение операций к чертежу, выпуск схем, отправка документов), требуют
+    подтверждения человеком: параметр `confirmed: true` + заголовок `X-Actor-Id`
+    с учётной записью подтвердившего. Без них операция выполняется в режиме
+    предпросмотра (`dry_run`) либо возвращает 428 Precondition Required.
+
+    Длительные задачи выполняются асинхронно: возвращается `task_id`, статус
+    опрашивается через `GET /tasks/{task_id}` (или через SSE `GET /tasks/{id}/stream`).
+
+    Идемпотентность обеспечивается заголовком `Idempotency-Key` для всех POST.
+  contact:
+    name: ПТО / ИТ-служба
+servers:
+  - url: https://pto-agent.local/api/v1
+    description: On-premise контур
+security:
+  - bearerAuth: []
+
+tags:
+  - name: objects
+    description: Объекты и сводки
+  - name: ks2
+    description: Акты КС-2 / КС-3
+  - name: volumes
+    description: Сверка объёмов
+  - name: documents
+    description: Исполнительная документация и комплектность
+  - name: norms
+    description: Нормативная база (RAG)
+  - name: cad
+    description: Исполнительные схемы и CAD-модуль
+  - name: tasks
+    description: Задачи агентов
+  - name: audit
+    description: Журнал аудита
+  - name: reports
+    description: Управленческая отчётность и остатки
+  - name: llm
+    description: Подключение ИИ-моделей по API и контроль расходов
+
+paths:
+  /objects:
+    get:
+      tags: [objects]
+      summary: Список объектов, доступных пользователю (с учётом RLS)
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - in: query
+          name: status
+          schema: { type: string, enum: [design, active, suspended, closed] }
+      responses:
+        '200':
+          description: Список объектов
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ConstructionObject' } }
+                  total: { type: integer }
+
+  /objects/{object_id}/summary:
+    get:
+      tags: [objects]
+      summary: Сводка по объекту — готовность КС-2, комплектность ИД, расхождения
+      parameters:
+        - $ref: '#/components/parameters/ObjectId'
+      responses:
+        '200':
+          description: Сводка
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ObjectSummary' }
+
+  # ---------------------------------------------------------------- КС-2 / КС-3
+  /ks2/draft:
+    post:
+      tags: [ks2]
+      summary: Сформировать черновик КС-2 за период (асинхронно)
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [object_id, contract_id, period]
+              properties:
+                object_id: { type: string, format: uuid }
+                contract_id: { type: string, format: uuid }
+                period:
+                  type: object
+                  required: [from, to]
+                  properties:
+                    from: { type: string, format: date }
+                    to: { type: string, format: date }
+                include_without_backing_docs:
+                  type: boolean
+                  default: false
+                  description: Включать позиции без подтверждающей ИД (помечаются флагом)
+                estimate_version: { type: integer }
+                template_id: { type: string, example: 'corp-ks2/v3' }
+      responses:
+        '202':
+          description: Задача создана
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TaskRef' }
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+
+  /ks2/{ks2_id}:
+    get:
+      tags: [ks2]
+      summary: Черновик КС-2 с позициями, расхождениями и источниками
+      parameters:
+        - in: path
+          name: ks2_id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Акт
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/KS2Draft' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /ks2/{ks2_id}/items/{line_no}:
+    patch:
+      tags: [ks2]
+      summary: Ручная правка позиции акта (фиксируется в журнале аудита)
+      parameters:
+        - in: path
+          name: ks2_id
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: line_no
+          required: true
+          schema: { type: integer }
+        - $ref: '#/components/parameters/ActorId'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                qty: { type: number }
+                price: { type: number }
+                exclude: { type: boolean }
+                comment: { type: string }
+      responses:
+        '200':
+          description: Обновлённая позиция
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/KS2Item' }
+
+  /ks2/{ks2_id}/render:
+    post:
+      tags: [ks2]
+      summary: Выпустить документы КС-2/КС-3 по шаблону (DOCX/XLSX/PDF)
+      description: Без `confirmed=true` возвращает 428. Выпуск фиксируется в audit_log и создаёт версию документа.
+      parameters:
+        - in: path
+          name: ks2_id
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/ActorId'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                formats: { type: array, items: { type: string, enum: [docx, xlsx, pdf] }, default: [docx, pdf] }
+                include_ks3: { type: boolean, default: false }
+                ks3_act_ids: { type: array, items: { type: string, format: uuid } }
+                confirmed: { type: boolean, default: false }
+      responses:
+        '202':
+          description: Формирование запущено
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TaskRef' }
+        '428':
+          $ref: '#/components/responses/ConfirmationRequired'
+
+  /ks3/draft:
+    post:
+      tags: [ks2]
+      summary: Сформировать справку КС-3 по набору актов КС-2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [object_id, contract_id, ks2_act_ids, period]
+              properties:
+                object_id: { type: string, format: uuid }
+                contract_id: { type: string, format: uuid }
+                ks2_act_ids: { type: array, items: { type: string, format: uuid } }
+                period:
+                  type: object
+                  properties:
+                    from: { type: string, format: date }
+                    to: { type: string, format: date }
+      responses:
+        '202':
+          description: Задача создана
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TaskRef' }
+
+  # ------------------------------------------------------------- Сверка объёмов
+  /reconciliation:
+    post:
+      tags: [volumes]
+      summary: Сверка объёмов проект ↔ факт ↔ акты субподрядчиков
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [object_id]
+              properties:
+                object_id: { type: string, format: uuid }
+                period:
+                  type: object
+                  properties:
+                    from: { type: string, format: date }
+                    to: { type: string, format: date }
+                sources:
+                  type: array
+                  items: { type: string, enum: [estimate, vor, bim, journal, subcontractor_acts] }
+                  default: [estimate, journal, subcontractor_acts]
+                thresholds:
+                  type: object
+                  properties:
+                    major_pct: { type: number, default: 5 }
+      responses:
+        '202':
+          description: Задача создана
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TaskRef' }
+
+  /discrepancies:
+    get:
+      tags: [volumes]
+      summary: Список расхождений с фильтрами
+      parameters:
+        - $ref: '#/components/parameters/ObjectIdQuery'
+        - in: query
+          name: severity
+          schema: { type: string, enum: [critical, major, info] }
+        - in: query
+          name: type
+          schema:
+            type: string
+            enum: [VOLUME_OVER_ESTIMATE, NOT_IN_ESTIMATE, PRICE_MISMATCH, UNIT_MISMATCH, DUPLICATE, MISSING_BACKING_DOCS, ALREADY_CLOSED, NO_SCHEME]
+        - $ref: '#/components/parameters/Page'
+      responses:
+        '200':
+          description: Расхождения
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Discrepancy' } }
+                  total: { type: integer }
+
+  /discrepancies/{discrepancy_id}/decision:
+    post:
+      tags: [volumes]
+      summary: Зафиксировать решение человека по расхождению
+      parameters:
+        - in: path
+          name: discrepancy_id
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/ActorId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision: { type: string, enum: [accepted, rejected, postponed] }
+                comment: { type: string }
+      responses:
+        '200':
+          description: Решение зафиксировано
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Discrepancy' }
+
+  # ------------------------------------------------------------------ Документы
+  /documents/extract:
+    post:
+      tags: [documents]
+      summary: Загрузить и структурировать документ (PDF/скан/DOCX/XLSX)
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, object_id, hint_type]
+              properties:
+                file: { type: string, format: binary }
+                object_id: { type: string, format: uuid }
+                hint_type:
+                  type: string
+                  enum: [aosr, ks2, journal, certificate, protocol, scheme, letter, estimate, unknown]
+                work_type_id: { type: string, format: uuid }
+      responses:
+        '202':
+          description: Задача извлечения создана
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TaskRef' }
+
+  /completeness/check:
+    post:
+      tags: [documents]
+      summary: Проверить комплектность пакета ИД по виду работ
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [object_id, work_type_id]
+              properties:
+                object_id: { type: string, format: uuid }
+                work_type_id: { type: string, format: uuid }
+                profile_version: { type: string }
+                package_document_ids: { type: array, items: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Отчёт о комплектности
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CompletenessReport' }
+
+  /documents/{document_id}/register:
+    post:
+      tags: [documents]
+      summary: Включить документ в реестр ИД и сформировать опись
+      parameters:
+        - in: path
+          name: document_id
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/ActorId'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                register_id: { type: string, format: uuid }
+                ks2_id: { type: string, format: uuid }
+                confirmed: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Строка реестра
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  register_id: { type: string, format: uuid }
+                  row_no: { type: integer }
+                  sheets: { type: integer }
+        '428':
+          $ref: '#/components/responses/ConfirmationRequired'
+
+  # --------------------------------------------------------------------- Нормы
+  /norms/query:
+    post:
+      tags: [norms]
+      summary: Нормативный запрос с обязательной цитатой
+      description: |
+        Возвращает ответ только при прохождении `cite_verify`. Если цитата не
+        найдена в указанном пункте указанной редакции — 409 с `answer_type=not_found`
+        и перечнем того, что искал агент.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query: { type: string, maxLength: 2000 }
+                object_id: { type: string, format: uuid }
+                doc_types: { type: array, items: { type: string, enum: [СП, ГОСТ, СНиП, 'ТР ТС', СанПиН, ФЕР, ТЕР, ГЭСН] } }
+                as_of_date:
+                  type: string
+                  format: date
+                  description: Дата применимости норм (для проверки документов прошлых лет)
+                top_k: { type: integer, default: 8, maximum: 20 }
+      responses:
+        '200':
+          description: Ответ с цитатами
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NormAnswer' }
+        '409':
+          description: Ответ не найден или цитата не прошла валидацию
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NormAnswer' }
+
+  /norms/{revision_id}/clause/{clause}:
+    get:
+      tags: [norms]
+      summary: Исходный текст пункта (переход к странице документа)
+      parameters:
+        - in: path
+          name: revision_id
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: clause
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Пункт нормы
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  designation: { type: string }
+                  clause: { type: string }
+                  body: { type: string }
+                  edition_label: { type: string }
+                  effective_from: { type: string, format: date }
+                  status: { type: string }
+                  file_url: { type: string }
+
+  # ---------------------------------------------------------------- CAD-модуль
+  /cad/drawings/{drawing_id}:
+    get:
+      tags: [cad]
+      summary: Метаданные чертежа (единицы, масштаб, слои, шаблон)
+      parameters:
+        - in: path
+          name: drawing_id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Метаданные
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DrawingInfo' }
+
+  /cad/redline/analyze:
+    post:
+      tags: [cad]
+      summary: Распознать redline-пометки на скане/PDF
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [drawing_id, redline_file_id]
+              properties:
+                drawing_id: { type: string, format: uuid }
+                redline_file_id: { type: string, format: uuid }
+                min_confidence: { type: number, default: 0.7, description: Ниже порога — только в needs_human_decision }
+      responses:
+        '202':
+          description: Задача создана
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TaskRef' }
+
+  /cad/operations:
+    post:
+      tags: [cad]
+      summary: Создать план операций (из redline / описания / АОСР) с валидацией
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [drawing_id, source_type]
+              properties:
+                drawing_id: { type: string, format: uuid }
+                source_type: { type: string, enum: [redline, text, aosr, bim] }
+                redline_file_id: { type: string, format: uuid }
+                description: { type: string, description: Текстовое описание изменений }
+                aosr_document_id: { type: string, format: uuid }
+                template_id: { type: string }
+      responses:
+        '201':
+          description: План операций (формируется при необходимости подтверждения)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CadOperationSet' }
+
+  /cad/operations/{op_set_id}/apply:
+    post:
+      tags: [cad]
+      summary: Применить план операций к чертежу
+      parameters:
+        - in: path
+          name: op_set_id
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/ActorId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mode]
+              properties:
+                mode: { type: string, enum: [dry_run, commit] }
+                op_ids: { type: array, items: { type: string }, description: Если не задано — все операции плана }
+                confirmed: { type: boolean, default: false, description: Обязательно true для mode=commit }
+                preserve_proxy: { type: boolean, default: true }
+      responses:
+        '200':
+          description: Результат применения / diff
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CadApplyResult' }
+        '409':
+          description: Валидация не пройдена (расхождение количества объектов, нарушение шаблона)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '428':
+          $ref: '#/components/responses/ConfirmationRequired'
+
+  /schemes/export:
+    post:
+      tags: [cad]
+      summary: Выпустить исполнительную схему (PDF/DWG/DXF + штамп + реестр ИД)
+      parameters:
+        - $ref: '#/components/parameters/ActorId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [drawing_id, drawing_version_id, outputs, titleblock]
+              properties:
+                drawing_id: { type: string, format: uuid }
+                drawing_version_id: { type: string, format: uuid }
+                outputs: { type: array, items: { type: string, enum: [pdf, dwg, dxf] } }
+                titleblock:
+                  type: object
+                  additionalProperties: { type: string }
+                  description: Поля штампа (объект, шифр, вид работ, дата, ФИО)
+                linked_aosr: { type: array, items: { type: string, format: uuid } }
+                confirmed: { type: boolean, default: false }
+      responses:
+        '202':
+          description: Выпуск запущен
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TaskRef' }
+        '428':
+          $ref: '#/components/responses/ConfirmationRequired'
+
+  # --------------------------------------------------------------------- Задачи
+  /tasks/{task_id}:
+    get:
+      tags: [tasks]
+      summary: Статус задачи агента
+      parameters:
+        - in: path
+          name: task_id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Задача
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentTask' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /tasks/{task_id}/messages:
+    post:
+      tags: [tasks]
+      summary: Ответ человека на уточняющий вопрос агента
+      parameters:
+        - in: path
+          name: task_id
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/ActorId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [answers]
+              properties:
+                answers:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      question_id: { type: string }
+                      value: { type: string }
+      responses:
+        '202':
+          description: Ответ принят, задача продолжает работу
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TaskRef' }
+
+  # ---------------------------------------------------------------------- Аудит
+  /audit/events:
+    get:
+      tags: [audit]
+      summary: Журнал аудита (только чтение, append-only)
+      parameters:
+        - $ref: '#/components/parameters/ObjectIdQuery'
+        - in: query
+          name: entity_type
+          schema: { type: string }
+        - in: query
+          name: entity_id
+          schema: { type: string, format: uuid }
+        - in: query
+          name: from
+          schema: { type: string, format: date-time }
+        - in: query
+          name: to
+          schema: { type: string, format: date-time }
+        - $ref: '#/components/parameters/Page'
+      responses:
+        '200':
+          description: Записи аудита
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/AuditEvent' } }
+                  total: { type: integer }
+
+  # ------------------------------------------------- Отчётность руководителю
+  /reports/management:
+    get:
+      tags: [reports]
+      summary: Полный срез для руководителя — стадия, остатки, деньги, ИИ, журнал
+      description: |
+        Один запрос возвращает всё, что нужно для управленческого решения:
+        стадии внедрения (план/факт), остаточные объёмы по видам работ,
+        финансовую позицию по договору, качество и стоимость ИИ, ленту последних
+        действий и список критичных расхождений. Каждая цифра содержит ссылку
+        на источник (trace_ref), чтобы её можно было раскрыть до документа.
+      parameters:
+        - $ref: '#/components/parameters/ObjectIdQuery'
+        - in: query
+          name: as_of
+          schema: { type: string, format: date }
+          description: Дата среза (по умолчанию — текущая)
+        - in: query
+          name: include
+          schema:
+            type: array
+            items: { type: string, enum: [stages, remainder, finance, ai, audit, alerts] }
+      responses:
+        '200':
+          description: Управленческий отчёт
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ManagementReport' }
+
+  /reports/management/export:
+    post:
+      tags: [reports]
+      summary: Выгрузить отчёт руководителю (HTML/PDF/XLSX) и разослать
+      parameters:
+        - $ref: '#/components/parameters/ActorId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [object_id, format]
+              properties:
+                object_id: { type: string, format: uuid }
+                format: { type: string, enum: [html, pdf, xlsx] }
+                period:
+                  type: object
+                  properties:
+                    from: { type: string, format: date }
+                    to: { type: string, format: date }
+                audiences:
+                  type: array
+                  items: { type: string, enum: [director, pto_head, customer] }
+                include_sources: { type: boolean, default: true, description: Приложить перечень источников по каждой цифре }
+      responses:
+        '202':
+          description: Формирование запущено (фиксируется в audit_log и report_export)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TaskRef' }
+
+  /works/remainder:
+    get:
+      tags: [reports]
+      summary: Остаточное количество работ по объекту
+      description: Остаток = смета − подписано КС-2 − выполнено по журналам, но не закрыто актом.
+      parameters:
+        - $ref: '#/components/parameters/ObjectIdQuery'
+        - in: query
+          name: as_of
+          schema: { type: string, format: date }
+        - in: query
+          name: only_open
+          schema: { type: boolean, default: false, description: Только позиции с остатком больше нуля }
+      responses:
+        '200':
+          description: Строки остатков
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  as_of: { type: string, format: date }
+                  currency: { type: string, default: RUB }
+                  items: { type: array, items: { $ref: '#/components/schemas/RemainderRow' } }
+                  totals: { $ref: '#/components/schemas/RemainderTotals' }
+                  trace_ref: { type: string, description: Ссылка на задачу расчёта и источники }
+
+  /finance/position:
+    get:
+      tags: [reports]
+      summary: Финансовая позиция по договору (закрыто, предъявлено, получено, дебиторка)
+      parameters:
+        - in: query
+          name: contract_id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Позиция по договору
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FinancePosition' }
+
+  /project/stages:
+    get:
+      tags: [reports]
+      summary: Стадии проекта внедрения — план/факт, прогресс, что реально сделано
+      parameters:
+        - in: query
+          name: project_id
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Стадии
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/StageStatus' } }
+
+  /project/stages/{stage_id}:
+    patch:
+      tags: [reports]
+      summary: Обновить факт по стадии (прогресс, что сделано, следующий шаг)
+      parameters:
+        - in: path
+          name: stage_id
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/ActorId'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                progress_pct: { type: number, minimum: 0, maximum: 100 }
+                status: { type: string, enum: [planned, in_progress, at_risk, done, cancelled] }
+                fact_note: { type: string }
+                next_step: { type: string }
+      responses:
+        '200':
+          description: Обновлённая стадия
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StageStatus' }
+
+  # --------------------------------------------------- Подключение ИИ по API
+  /llm/providers:
+    get:
+      tags: [llm]
+      summary: Провайдеры и модели, доступные в контуре
+      responses:
+        '200':
+          description: Список провайдеров
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/LlmProvider' } }
+                  budget:
+                    type: object
+                    properties:
+                      monthly_limit_rub: { type: number }
+                      spent_rub: { type: number }
+                      local_share_pct: { type: number }
+
+  /llm/providers/{provider_id}/test:
+    post:
+      tags: [llm]
+      summary: Проверить модель перед включением (схема, tool-calling, русский, задержка, стоимость)
+      description: Обязательная процедура приёмки нового провайдера по config/llm_providers.yaml → acceptance_for_new_model.
+      parameters:
+        - in: path
+          name: provider_id
+          required: true
+          schema: { type: string, example: gigachat-pro }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                golden_set_slices: { type: array, items: { type: string } }
+                sample_size: { type: integer, default: 20 }
+      responses:
+        '200':
+          description: Результат проверки
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  provider_id: { type: string }
+                  json_schema_valid_pct: { type: number }
+                  tools_call_accuracy_pct: { type: number }
+                  russian_quality_score: { type: number }
+                  citation_quote_match_pct: { type: number }
+                  p95_latency_s: { type: number }
+                  cost_per_ks2_draft_rub: { type: number }
+                  verdict: { type: string, enum: [pass, fail] }
+
+  /llm/costs:
+    get:
+      tags: [llm]
+      summary: Стоимость и качество вызовов моделей по дням и провайдерам
+      parameters:
+        - in: query
+          name: date_from
+          schema: { type: string, format: date }
+        - in: query
+          name: date_to
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: Статистика
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/LlmCallStats' } }
+                  totals:
+                    type: object
+                    properties:
+                      calls: { type: integer }
+                      cost_rub: { type: number }
+                      tokens_in: { type: integer }
+                      tokens_out: { type: integer }
+
+  /llm/routing/preview:
+    post:
+      tags: [llm]
+      summary: Какое правило маршрутизации и какая модель будут выбраны для задачи
+      description: Проверка политики «данные класса КТ/ПДн не покидают контур» до запуска задачи.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [intent, data_class]
+              properties:
+                intent: { type: string }
+                data_class: { type: string, enum: [public, internal, commercial_secret, personal] }
+                has_images: { type: boolean, default: false }
+                complexity: { type: string, enum: [low, medium, high] }
+      responses:
+        '200':
+          description: Выбранный маршрут
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  routing_rule: { type: string }
+                  selected_provider: { type: string }
+                  fallback_chain: { type: array, items: { type: string } }
+                  estimated_cost_rub: { type: number }
+                  blocked_reason: { type: string }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    ObjectId:
+      in: path
+      name: object_id
+      required: true
+      schema: { type: string, format: uuid }
+    ObjectIdQuery:
+      in: query
+      name: object_id
+      required: true
+      schema: { type: string, format: uuid }
+    ActorId:
+      in: header
+      name: X-Actor-Id
+      required: false
+      description: Учётная запись подтвердившего человека. Обязателен при confirmed=true.
+      schema: { type: string }
+    IdempotencyKey:
+      in: header
+      name: Idempotency-Key
+      required: false
+      schema: { type: string, maxLength: 64 }
+    Page:
+      in: query
+      name: page
+      schema:
+        type: object
+        properties:
+          limit: { type: integer, default: 50, maximum: 200 }
+          offset: { type: integer, default: 0 }
+
+  responses:
+    NotFound:
+      description: Объект не найден
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unprocessable:
+      description: Данных недостаточно для выполнения (не хватает периода, сметы, договора)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    ConfirmationRequired:
+      description: Требуется подтверждение человека (confirmed=true + X-Actor-Id)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    ConstructionObject:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        address: { type: string }
+        status: { type: string, enum: [design, active, suspended, closed] }
+
+    ObjectSummary:
+      type: object
+      properties:
+        object: { $ref: '#/components/schemas/ConstructionObject' }
+        ks2:
+          type: object
+          properties:
+            draft_acts: { type: integer }
+            positions_ready: { type: integer }
+            positions_without_docs: { type: integer }
+        completeness:
+          type: object
+          properties:
+            work_types_ready: { type: integer }
+            work_types_blocked: { type: integer }
+            completeness_pct: { type: number }
+        discrepancies:
+          type: object
+          properties:
+            critical: { type: integer }
+            major: { type: integer }
+            info: { type: integer }
+
+    SourceRef:
+      type: object
+      properties:
+        doc: { type: string }
+        page: { type: integer }
+        row: { type: integer }
+        file_id: { type: string, format: uuid }
+
+    KS2Item:
+      type: object
+      properties:
+        line_no: { type: integer }
+        estimate_code: { type: string }
+        name: { type: string }
+        unit_code: { type: string }
+        qty_estimate: { type: number }
+        qty_actual: { type: number }
+        qty_previously_closed: { type: number }
+        price: { type: number }
+        amount: { type: number }
+        has_backing_docs: { type: boolean }
+        flags:
+          type: array
+          items: { type: string }
+        sources:
+          type: array
+          items: { $ref: '#/components/schemas/SourceRef' }
+
+    KS2Draft:
+      type: object
+      required: [object, period, positions, totals]
+      properties:
+        id: { type: string, format: uuid }
+        object: { $ref: '#/components/schemas/ConstructionObject' }
+        number: { type: string }
+        period:
+          type: object
+          properties:
+            from: { type: string, format: date }
+            to: { type: string, format: date }
+        status: { type: string, enum: [draft, ai_generated, on_review, approved, signed, rejected] }
+        positions:
+          type: array
+          items: { $ref: '#/components/schemas/KS2Item' }
+        discrepancies:
+          type: array
+          items: { $ref: '#/components/schemas/Discrepancy' }
+        totals:
+          type: object
+          properties:
+            without_vat: { type: number }
+            vat: { type: number }
+            with_vat: { type: number }
+        confidence: { type: number, minimum: 0, maximum: 1 }
+        questions_to_user:
+          type: array
+          items:
+            type: object
+            properties:
+              question_id: { type: string }
+              text: { type: string }
+        prompt_version: { type: string }
+        model: { type: string }
+
+    Discrepancy:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        type:
+          type: string
+          enum: [VOLUME_OVER_ESTIMATE, NOT_IN_ESTIMATE, PRICE_MISMATCH, UNIT_MISMATCH, DUPLICATE, MISSING_BACKING_DOCS, ALREADY_CLOSED, NO_SCHEME]
+        severity: { type: string, enum: [critical, major, info] }
+        position_line_no: { type: integer }
+        values:
+          type: object
+          properties:
+            estimate: { type: number }
+            actual: { type: number }
+            delta: { type: number }
+            delta_pct: { type: number }
+        sources:
+          type: array
+          items: { $ref: '#/components/schemas/SourceRef' }
+        suggested_action: { type: string }
+        human_decision: { type: string, enum: [accepted, rejected, postponed] }
+        decided_by: { type: string }
+
+    CompletenessReport:
+      type: object
+      properties:
+        object_id: { type: string, format: uuid }
+        work_type_id: { type: string, format: uuid }
+        profile_version: { type: string }
+        required: { type: integer }
+        present: { type: integer }
+        with_issues: { type: integer }
+        missing: { type: integer }
+        details:
+          type: array
+          items:
+            type: object
+            properties:
+              doc_type: { type: string }
+              status: { type: string, enum: [present, missing, issues] }
+              document_id: { type: string, format: uuid }
+              issue: { type: string }
+              request_from: { type: string }
+        blockers:
+          type: array
+          items: { type: string }
+        ready_for_transfer: { type: boolean }
+
+    NormCitation:
+      type: object
+      required: [doc, clause, quote]
+      properties:
+        doc: { type: string, example: 'СП 63.13330.2018' }
+        title: { type: string }
+        clause: { type: string, example: '10.3.2' }
+        quote: { type: string }
+        edition: { type: string }
+        actual_as_of: { type: string, format: date }
+        status: { type: string, enum: [active, superseded, repealed] }
+        source_url_or_file: { type: string }
+
+    NormAnswer:
+      type: object
+      properties:
+        answer_type: { type: string, enum: [answer, not_found, ambiguous] }
+        conclusion: { type: string }
+        citations:
+          type: array
+          items: { $ref: '#/components/schemas/NormCitation' }
+        practical_implication: { type: string }
+        limitations:
+          type: array
+          items: { type: string }
+        requires_expert_review: { type: boolean }
+        confidence: { type: string, enum: [high, medium, low] }
+        as_of_date_used: { type: string, format: date }
+        cite_verified: { type: boolean }
+        superseded_docs:
+          type: array
+          items: { type: string }
+
+    DrawingInfo:
+      type: object
+      properties:
+        drawing_id: { type: string, format: uuid }
+        units: { type: string, enum: [mm, m] }
+        scale: { type: string }
+        scale_confirmed: { type: boolean }
+        sheets: { type: integer }
+        template_id: { type: string }
+        layers:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string }
+              purpose: { type: string }
+              is_protected: { type: boolean }
+        current_version:
+          type: object
+          properties:
+            version_no: { type: integer }
+            file_id: { type: string, format: uuid }
+            file_format: { type: string, enum: [dwg, dxf] }
+            entity_count: { type: integer }
+
+    CadOperation:
+      type: object
+      properties:
+        op_id: { type: string }
+        op_no: { type: integer }
+        type:
+          type: string
+          enum: [ADD_LINE, ADD_POLYLINE, MOVE_ENTITY, COPY_ENTITY, ROTATE_ENTITY, DELETE_ENTITY, SET_ATTRIBUTE, ADD_TEXT, ADD_DIM, ADD_HATCH, ADD_BLOCK, MODIFY_LAYER, UPDATE_TITLEBLOCK, ADD_RASTER]
+        params: { type: object }
+        reason: { type: string }
+        source:
+          type: object
+          properties:
+            type: { type: string, enum: [redline, text, aosr, bim] }
+            ref: { type: string }
+            confidence: { type: number }
+        requires_confirmation: { type: boolean }
+        status: { type: string, enum: [pending, applied, rejected, needs_human_decision] }
+
+    CadOperationSet:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        drawing_id: { type: string, format: uuid }
+        status: { type: string, enum: [planned, validated, confirmed, applied, rejected] }
+        operations:
+          type: array
+          items: { $ref: '#/components/schemas/CadOperation' }
+        needs_human_decision:
+          type: array
+          items:
+            type: object
+            properties:
+              ref: { type: string }
+              bbox: { type: array, items: { type: number } }
+              reason: { type: string }
+              confidence: { type: number }
+        conflicts:
+          type: array
+          items:
+            type: object
+            properties:
+              redline: { type: string }
+              aosr: { type: string }
+              resolution: { type: string }
+        validation:
+          type: object
+          properties:
+            template_ok: { type: boolean }
+            layers_ok: { type: boolean }
+            text_height_ok: { type: boolean }
+            warnings: { type: array, items: { type: string } }
+        preview:
+          type: object
+          properties:
+            preview_pdf: { type: string }
+            diff_image: { type: string }
+
+    CadApplyResult:
+      type: object
+      properties:
+        mode: { type: string, enum: [dry_run, commit] }
+        applied_ops: { type: integer }
+        skipped_ops: { type: integer }
+        entity_count_before: { type: integer }
+        entity_count_after: { type: integer }
+        new_version_no: { type: integer }
+        diff_image: { type: string }
+        warnings: { type: array, items: { type: string } }
+        audit_event_id: { type: integer }
+
+    TaskRef:
+      type: object
+      properties:
+        task_id: { type: string, format: uuid }
+        status: { type: string }
+        stream_url: { type: string }
+
+    AgentTask:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        agent: { type: string, enum: [orchestrator, documenter, estimator, normative, scheduler, cad, qc] }
+        status: { type: string, enum: [running, awaiting_human, done, failed, cancelled] }
+        intent: { type: string }
+        plan:
+          type: array
+          items: { type: string }
+        steps:
+          type: array
+          items:
+            type: object
+            properties:
+              step_no: { type: integer }
+              tool: { type: string }
+              ok: { type: boolean }
+              duration_ms: { type: integer }
+        result: { type: object }
+        questions:
+          type: array
+          items:
+            type: object
+            properties:
+              question_id: { type: string }
+              text: { type: string }
+              options: { type: array, items: { type: string } }
+        model: { type: string }
+        prompt_version: { type: string }
+        cost_rub: { type: number }
+        latency_ms: { type: integer }
+
+    AuditEvent:
+      type: object
+      properties:
+        id: { type: integer }
+        ts: { type: string, format: date-time }
+        actor_type: { type: string, enum: [user, agent, system] }
+        actor_id: { type: string }
+        action: { type: string }
+        entity_type: { type: string }
+        entity_id: { type: string, format: uuid }
+        object_id: { type: string, format: uuid }
+        payload: { type: object }
+        hash: { type: string }
+
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string, example: CONFIRMATION_REQUIRED }
+        message: { type: string }
+        details: { type: object }
+        trace_id: { type: string }
+
+    RemainderRow:
+      type: object
+      properties:
+        work_type: { type: string }
+        unit: { type: string }
+        qty_estimate: { type: number }
+        qty_closed: { type: number, description: Закрыто подписанными КС-2 }
+        qty_wip: { type: number, description: Выполнено по журналам, но не закрыто актом }
+        qty_remainder: { type: number }
+        amount_estimate: { type: number }
+        amount_closed: { type: number }
+        amount_remainder: { type: number }
+        progress_pct: { type: number }
+        doc_coverage_pct: { type: number, description: Доля объёмов, обеспеченных ИД }
+        status: { type: string, enum: [done, active, risk, wait] }
+        trace_ref: { type: string }
+
+    RemainderTotals:
+      type: object
+      properties:
+        amount_estimate: { type: number }
+        amount_closed: { type: number }
+        amount_wip: { type: number }
+        amount_remainder: { type: number }
+        progress_pct: { type: number }
+        progress_with_wip_pct: { type: number }
+
+    FinancePosition:
+      type: object
+      properties:
+        contract_id: { type: string, format: uuid }
+        number: { type: string }
+        amount_total: { type: number }
+        amount_closed: { type: number }
+        amount_submitted: { type: number }
+        amount_to_submit: { type: number }
+        amount_received: { type: number }
+        receivable: { type: number, description: Дебиторка = закрыто − получено }
+        vat_amount: { type: number }
+
+    StageStatus:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        scope: { type: string }
+        status: { type: string, enum: [planned, in_progress, at_risk, done, cancelled] }
+        progress_pct: { type: number }
+        planned_from: { type: string, format: date }
+        planned_to: { type: string, format: date }
+        actual_from: { type: string, format: date }
+        actual_to: { type: string, format: date }
+        schedule_delta_days: { type: integer, description: Отклонение от плана в днях }
+        fact_note: { type: string, description: Что реально сделано }
+        next_step: { type: string }
+        failed_checkpoints: { type: integer }
+        overdue_checkpoints: { type: integer }
+
+    AiUsage:
+      type: object
+      properties:
+        calls_month: { type: integer }
+        cost_month_rub: { type: number }
+        budget_limit_rub: { type: number }
+        local_share_pct: { type: number }
+        human_confirmed_calls: { type: integer }
+        auto_done_calls: { type: integer }
+        citation_verified_pct: { type: number }
+        blocked_by_cite_verify: { type: integer }
+        avg_latency_s: { type: number }
+        p95_latency_s: { type: number }
+        providers:
+          type: array
+          items: { $ref: '#/components/schemas/LlmProvider' }
+
+    LlmProvider:
+      type: object
+      properties:
+        id: { type: string }
+        kind: { type: string, enum: [vllm, ollama, openai_compatible, gigachat, yandexgpt] }
+        model: { type: string }
+        residency: { type: string, enum: [on_premise, rf_cloud, outside_rf] }
+        capabilities: { type: array, items: { type: string } }
+        vision: { type: boolean }
+        data_classes: { type: array, items: { type: string } }
+        enabled: { type: boolean }
+        calls: { type: integer }
+        cost_rub: { type: number }
+        share_pct: { type: number }
+
+    LlmCallStats:
+      type: object
+      properties:
+        day: { type: string, format: date }
+        provider_id: { type: string }
+        calls: { type: integer }
+        tokens_in: { type: integer }
+        tokens_out: { type: integer }
+        cost_rub: { type: number }
+        avg_latency_ms: { type: integer }
+        schema_ok_pct: { type: number }
+        fallbacks: { type: integer }
+        errors: { type: integer }
+
+    ManagementReport:
+      type: object
+      required: [object, as_of, kpi]
+      properties:
+        as_of: { type: string, format: date-time }
+        object: { $ref: '#/components/schemas/ConstructionObject' }
+        kpi:
+          type: object
+          properties:
+            progress_pct: { type: number }
+            progress_with_wip_pct: { type: number }
+            amount_remainder: { type: number }
+            amount_closed: { type: number }
+            amount_ready_to_submit: { type: number }
+            critical_discrepancies: { type: integer }
+            positions_without_docs: { type: integer }
+            doc_coverage_pct: { type: number }
+        stages:
+          type: array
+          items: { $ref: '#/components/schemas/StageStatus' }
+        remainder:
+          type: object
+          properties:
+            items: { type: array, items: { $ref: '#/components/schemas/RemainderRow' } }
+            totals: { $ref: '#/components/schemas/RemainderTotals' }
+        finance: { $ref: '#/components/schemas/FinancePosition' }
+        ai: { $ref: '#/components/schemas/AiUsage' }
+        recent_actions:
+          type: array
+          items: { $ref: '#/components/schemas/AuditEvent' }
+        alerts:
+          type: array
+          items:
+            type: object
+            properties:
+              severity: { type: string, enum: [critical, major, info] }
+              text: { type: string }
+              scope: { type: string }
+              amount_impact_rub: { type: number }
+              action_url: { type: string }
+        methodology: { type: string, description: Текст методики расчёта, прикладывается к отчёту }

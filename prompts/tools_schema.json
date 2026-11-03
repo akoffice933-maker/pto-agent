@@ -1,0 +1,247 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ПТО-агент: контракты инструментов (tool-calling)",
+  "description": "Единый реестр инструментов для агентов Документатор, Сметчик, Нормативщик, Чертёжник. Все инструменты вызываются только через оркестратор с проверкой прав и валидацией параметров. Деструктивные операции требуют флага confirmed=true и записи в журнал аудита.",
+  "version": "1.0",
+  "tools": [
+    {
+      "name": "get_estimate",
+      "agent": "estimator",
+      "side_effect": "read",
+      "description": "Возвращает позиции сметы по объекту.",
+      "input_schema": {
+        "type": "object",
+        "required": ["object_id"],
+        "properties": {
+          "object_id": {"type": "string"},
+          "period": {"type": "object", "properties": {"from": {"type": "string", "format": "date"}, "to": {"type": "string", "format": "date"}}},
+          "include_rates": {"type": "boolean", "default": true}
+        }
+      }
+    },
+    {
+      "name": "get_actual_volumes",
+      "agent": "estimator",
+      "side_effect": "read",
+      "description": "Фактические объёмы из журналов работ / суточных отчётов за период.",
+      "input_schema": {
+        "type": "object",
+        "required": ["object_id", "period"],
+        "properties": {
+          "object_id": {"type": "string"},
+          "period": {"type": "object", "properties": {"from": {"type": "string", "format": "date"}, "to": {"type": "string", "format": "date"}}},
+          "sources": {"type": "array", "items": {"enum": ["journal", "daily_report", "ks6a", "bim"]}}
+        }
+      }
+    },
+    {
+      "name": "get_previous_acts",
+      "agent": "estimator",
+      "side_effect": "read",
+      "description": "Ранее закрытые объёмы и суммы по объекту (накопительный учёт).",
+      "input_schema": {
+        "type": "object",
+        "required": ["object_id"],
+        "properties": {"object_id": {"type": "string"}, "contract_id": {"type": "string"}}
+      }
+    },
+    {
+      "name": "calc_totals",
+      "agent": "estimator",
+      "side_effect": "none",
+      "description": "Детерминированный расчёт сумм, НДС и итогов. Единственный разрешённый способ арифметики.",
+      "input_schema": {
+        "type": "object",
+        "required": ["positions"],
+        "properties": {
+          "positions": {"type": "array", "items": {"type": "object", "required": ["n", "qty", "price"], "properties": {"n": {"type": "integer"}, "qty": {"type": "number"}, "price": {"type": "number"}, "coefficient": {"type": "number", "default": 1}}}},
+          "vat_rate": {"type": "number", "default": 20},
+          "rounding": {"type": "string", "enum": ["2dp", "3dp"], "default": "2dp"}
+        }
+      }
+    },
+    {
+      "name": "reconcile_volumes",
+      "agent": "estimator",
+      "side_effect": "none",
+      "description": "Сверка проектных, фактических и актируемых объёмов; возвращает расхождения с критичностью.",
+      "input_schema": {
+        "type": "object",
+        "required": ["object_id"],
+        "properties": {
+          "object_id": {"type": "string"},
+          "thresholds": {"type": "object", "properties": {"major_pct": {"type": "number", "default": 5}}}
+        }
+      }
+    },
+    {
+      "name": "render_document",
+      "agent": "documenter",
+      "side_effect": "write",
+      "description": "Формирует документ по корпоративному шаблону (DOCX/XLSX/PDF). Требует confirmed=true для записи в хранилище.",
+      "input_schema": {
+        "type": "object",
+        "required": ["template_id", "data", "output_format"],
+        "properties": {
+          "template_id": {"type": "string"},
+          "data": {"type": "object"},
+          "output_format": {"type": "string", "enum": ["docx", "xlsx", "pdf"]},
+          "confirmed": {"type": "boolean", "default": false}
+        }
+      }
+    },
+    {
+      "name": "work_type_requirements",
+      "agent": "documenter",
+      "side_effect": "read",
+      "description": "Матрица требуемых документов ИД по виду работ с учётом профиля заказчика.",
+      "input_schema": {
+        "type": "object",
+        "required": ["work_type", "object_id"],
+        "properties": {"work_type": {"type": "string"}, "object_id": {"type": "string"}, "profile_version": {"type": "string"}}
+      }
+    },
+    {
+      "name": "completeness_check",
+      "agent": "documenter",
+      "side_effect": "none",
+      "description": "Проверка комплектности пакета ИД: наличие, актуальность, корректность заполнения.",
+      "input_schema": {
+        "type": "object",
+        "required": ["object_id", "work_type"],
+        "properties": {"object_id": {"type": "string"}, "work_type": {"type": "string"}, "package_ids": {"type": "array", "items": {"type": "string"}}}
+      }
+    },
+    {
+      "name": "material_docs",
+      "agent": "documenter",
+      "side_effect": "read",
+      "description": "Документы о качестве материалов из входного контроля (паспорта, сертификаты, декларации).",
+      "input_schema": {
+        "type": "object",
+        "required": ["object_id"],
+        "properties": {"object_id": {"type": "string"}, "work_type": {"type": "string"}, "date_range": {"type": "object"}}
+      }
+    },
+    {
+      "name": "validate_dates",
+      "agent": "documenter",
+      "side_effect": "none",
+      "description": "Проверка хронологии дат в комплекте документов.",
+      "input_schema": {
+        "type": "object",
+        "required": ["documents"],
+        "properties": {"documents": {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "string"}, "type": {"type": "string"}, "date": {"type": "string", "format": "date"}}}}}
+      }
+    },
+    {
+      "name": "norm_lookup",
+      "agent": "normative",
+      "side_effect": "read",
+      "description": "Гибридный поиск по нормативной базе с фильтрами по типу, статусу и дате применимости. Возвращает пункты с редакциями.",
+      "input_schema": {
+        "type": "object",
+        "required": ["query"],
+        "properties": {
+          "query": {"type": "string"},
+          "doc_types": {"type": "array", "items": {"enum": ["СП", "ГОСТ", "СНиП", "ТР ТС", "ФЕР", "ТЕР", "ГЭСН", "СанПиН"]}},
+          "status": {"type": "string", "enum": ["active", "any"], "default": "active"},
+          "as_of_date": {"type": "string", "format": "date"},
+          "top_k": {"type": "integer", "default": 8, "maximum": 20},
+          "rerank": {"type": "boolean", "default": true}
+        }
+      }
+    },
+    {
+      "name": "cite_verify",
+      "agent": "normative",
+      "side_effect": "none",
+      "description": "Проверяет дословность цитат и существование указанных пунктов в указанной редакции. Блокирует ответ при расхождении.",
+      "input_schema": {
+        "type": "object",
+        "required": ["citations"],
+        "properties": {"citations": {"type": "array", "items": {"type": "object", "required": ["doc", "clause", "quote"], "properties": {"doc": {"type": "string"}, "clause": {"type": "string"}, "quote": {"type": "string"}, "edition": {"type": "string"}}}}}
+      }
+    },
+    {
+      "name": "get_drawing_info",
+      "agent": "cad",
+      "side_effect": "read",
+      "description": "Метаданные чертежа: единицы, масштаб, слои, листы, шаблон оформления.",
+      "input_schema": {
+        "type": "object",
+        "required": ["file_id"],
+        "properties": {"file_id": {"type": "string"}}
+      }
+    },
+    {
+      "name": "analyze_redline",
+      "agent": "cad",
+      "side_effect": "read",
+      "description": "Распознавание пометок на скане/PDF: bbox, классификация, координаты в системе чертежа, уверенность.",
+      "input_schema": {
+        "type": "object",
+        "required": ["file_id", "redline_id"],
+        "properties": {
+          "file_id": {"type": "string"},
+          "redline_id": {"type": "string"},
+          "mode": {"type": "string", "enum": ["vision+ocr+geometry"], "default": "vision+ocr+geometry"}
+        }
+      }
+    },
+    {
+      "name": "validate_operations",
+      "agent": "cad",
+      "side_effect": "none",
+      "description": "Проверка плана операций на соответствие шаблону, белый список, ограничения оформления.",
+      "input_schema": {
+        "type": "object",
+        "required": ["template_id", "operations"],
+        "properties": {"template_id": {"type": "string"}, "operations": {"type": "array", "items": {"type": "object"}}}
+      }
+    },
+    {
+      "name": "apply_operations",
+      "agent": "cad",
+      "side_effect": "write",
+      "description": "Применение операций к чертежу. dry_run возвращает diff без изменения файла. commit требует confirmed=true и создаёт новую версию файла.",
+      "input_schema": {
+        "type": "object",
+        "required": ["file_id", "operations", "mode"],
+        "properties": {
+          "file_id": {"type": "string"},
+          "operations": {"type": "array", "items": {"type": "string"}},
+          "mode": {"type": "string", "enum": ["dry_run", "commit"]},
+          "confirmed": {"type": "boolean", "default": false},
+          "preserve_proxy": {"type": "boolean", "default": true},
+          "actor": {"type": "string", "description": "Учётная запись подтвердившего человека"}
+        }
+      },
+      "guardrails": ["запрещено при mode=commit без confirmed=true", "запрещён выпуск при расхождении количества объектов до/после конвертации", "запрещены операции со слоями 0, DEFPOINTS и слоями оформления"]
+    },
+    {
+      "name": "export_scheme",
+      "agent": "cad",
+      "side_effect": "write",
+      "description": "Выпуск исполнительной схемы: PDF + DWG/DXF + заполнение штампа + регистрация в реестре ИД.",
+      "input_schema": {
+        "type": "object",
+        "required": ["file_id", "outputs", "titleblock"],
+        "properties": {
+          "file_id": {"type": "string"},
+          "outputs": {"type": "array", "items": {"enum": ["pdf", "dwg", "dxf"]}},
+          "titleblock": {"type": "object"},
+          "linked_aosr": {"type": "array", "items": {"type": "string"}},
+          "confirmed": {"type": "boolean", "default": false}
+        }
+      }
+    }
+  ],
+  "cross_cutting_policy": {
+    "logging": "каждый вызов: tool, agent, args_hash, result_hash, actor, timestamp, object_id, trace_id",
+    "rbac": "инструмент доступен только ролям, у которых есть право на объект и тип операции",
+    "rate_limits": {"per_agent_task": 30, "per_user_minute": 60},
+    "retry": {"max_attempts": 3, "backoff": "exponential"},
+    "fallback": "при недоступности инструмента — эскалация человеку, не имитация результата"
+  }
+}

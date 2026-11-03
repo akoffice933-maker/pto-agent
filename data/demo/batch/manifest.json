@@ -1,0 +1,406 @@
+{
+  "release": "ЖК «Северный», корпус 2 — выпуск исполнительных схем 03.11.2026",
+  "generated_by": "scripts/make_demo_batch.py",
+  "sheets": [
+    {
+      "sheet_id": "К2-АР-01-v01",
+      "title": "К2-АР-01 · Монолитные работы. Фундаментная плита · итерация 1",
+      "scan": "data/demo/batch/scans/К2-АР-01-v01.png",
+      "drawing": "data/demo/batch/drawings/sheet_01.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-01-v01_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-01-v01.json",
+      "note": "лист комплекта 1, итерация правок 1",
+      "expected_marks": 5
+    },
+    {
+      "sheet_id": "К2-АР-01-v02",
+      "title": "К2-АР-01 · Монолитные работы. Фундаментная плита · итерация 2",
+      "scan": "data/demo/batch/scans/К2-АР-01-v02.png",
+      "drawing": "data/demo/batch/drawings/sheet_01.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-01-v02_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-01-v02.json",
+      "note": "лист комплекта 1, итерация правок 2",
+      "expected_marks": 5
+    },
+    {
+      "sheet_id": "К2-АР-01-v03",
+      "title": "К2-АР-01 · Монолитные работы. Фундаментная плита · итерация 3",
+      "scan": "data/demo/batch/scans/К2-АР-01-v03.png",
+      "drawing": "data/demo/batch/drawings/sheet_01.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-01-v03_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-01-v03.json",
+      "note": "лист комплекта 1, итерация правок 3",
+      "expected_marks": 5
+    },
+    {
+      "sheet_id": "К2-АР-01-v04",
+      "title": "К2-АР-01 · Монолитные работы. Фундаментная плита · итерация 4",
+      "scan": "data/demo/batch/scans/К2-АР-01-v04.png",
+      "drawing": "data/demo/batch/drawings/sheet_01.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-01-v04_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-01-v04.json",
+      "note": "лист комплекта 1, итерация правок 4",
+      "expected_marks": 6
+    },
+    {
+      "sheet_id": "К2-АР-01-v05",
+      "title": "К2-АР-01 · Монолитные работы. Фундаментная плита · итерация 5",
+      "scan": "data/demo/batch/scans/К2-АР-01-v05.png",
+      "drawing": "data/demo/batch/drawings/sheet_01.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-01-v05_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-01-v05.json",
+      "note": "лист комплекта 1, итерация правок 5",
+      "expected_marks": 6
+    },
+    {
+      "sheet_id": "К2-АР-01-v06",
+      "title": "К2-АР-01 · Монолитные работы. Фундаментная плита · итерация 6",
+      "scan": "data/demo/batch/scans/К2-АР-01-v06.png",
+      "drawing": "data/demo/batch/drawings/sheet_01.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-01-v06_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-01-v06.json",
+      "note": "лист комплекта 1, итерация правок 6",
+      "expected_marks": 5
+    },
+    {
+      "sheet_id": "К2-АР-01-v07",
+      "title": "К2-АР-01 · Монолитные работы. Фундаментная плита · итерация 7",
+      "scan": "data/demo/batch/scans/К2-АР-01-v07.png",
+      "drawing": "data/demo/batch/drawings/sheet_01.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-01-v07_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-01-v07.json",
+      "note": "лист комплекта 1, итерация правок 7",
+      "expected_marks": 5
+    },
+    {
+      "sheet_id": "К2-АР-01-v08",
+      "title": "К2-АР-01 · Монолитные работы. Фундаментная плита · итерация 8",
+      "scan": "data/demo/batch/scans/К2-АР-01-v08.png",
+      "drawing": "data/demo/batch/drawings/sheet_01.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-01-v08_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-01-v08.json",
+      "note": "лист комплекта 1, итерация правок 8",
+      "expected_marks": 4
+    },
+    {
+      "sheet_id": "К2-АР-01-v09",
+      "title": "К2-АР-01 · Монолитные работы. Фундаментная плита · итерация 9",
+      "scan": "data/demo/batch/scans/К2-АР-01-v09.png",
+      "drawing": "data/demo/batch/drawings/sheet_01.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-01-v09_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-01-v09.json",
+      "note": "лист комплекта 1, итерация правок 9",
+      "expected_marks": 4
+    },
+    {
+      "sheet_id": "К2-АР-01-v10",
+      "title": "К2-АР-01 · Монолитные работы. Фундаментная плита · итерация 10",
+      "scan": "data/demo/batch/scans/К2-АР-01-v10.png",
+      "drawing": "data/demo/batch/drawings/sheet_01.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-01-v10_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-01-v10.json",
+      "note": "лист комплекта 1, итерация правок 10",
+      "expected_marks": 5
+    },
+    {
+      "sheet_id": "К2-АР-02-v01",
+      "title": "К2-АР-02 · Монолитные работы. Стены подвала · итерация 1",
+      "scan": "data/demo/batch/scans/К2-АР-02-v01.png",
+      "drawing": "data/demo/batch/drawings/sheet_02.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-02-v01_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-02-v01.json",
+      "note": "лист комплекта 2, итерация правок 1",
+      "expected_marks": 6
+    },
+    {
+      "sheet_id": "К2-АР-02-v02",
+      "title": "К2-АР-02 · Монолитные работы. Стены подвала · итерация 2",
+      "scan": "data/demo/batch/scans/К2-АР-02-v02.png",
+      "drawing": "data/demo/batch/drawings/sheet_02.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-02-v02_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-02-v02.json",
+      "note": "лист комплекта 2, итерация правок 2",
+      "expected_marks": 6
+    },
+    {
+      "sheet_id": "К2-АР-02-v03",
+      "title": "К2-АР-02 · Монолитные работы. Стены подвала · итерация 3",
+      "scan": "data/demo/batch/scans/К2-АР-02-v03.png",
+      "drawing": "data/demo/batch/drawings/sheet_02.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-02-v03_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-02-v03.json",
+      "note": "лист комплекта 2, итерация правок 3",
+      "expected_marks": 5
+    },
+    {
+      "sheet_id": "К2-АР-02-v04",
+      "title": "К2-АР-02 · Монолитные работы. Стены подвала · итерация 4",
+      "scan": "data/demo/batch/scans/К2-АР-02-v04.png",
+      "drawing": "data/demo/batch/drawings/sheet_02.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-02-v04_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-02-v04.json",
+      "note": "лист комплекта 2, итерация правок 4",
+      "expected_marks": 5
+    },
+    {
+      "sheet_id": "К2-АР-02-v05",
+      "title": "К2-АР-02 · Монолитные работы. Стены подвала · итерация 5",
+      "scan": "data/demo/batch/scans/К2-АР-02-v05.png",
+      "drawing": "data/demo/batch/drawings/sheet_02.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-02-v05_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-02-v05.json",
+      "note": "лист комплекта 2, итерация правок 5",
+      "expected_marks": 5
+    },
+    {
+      "sheet_id": "К2-АР-02-v06",
+      "title": "К2-АР-02 · Монолитные работы. Стены подвала · итерация 6",
+      "scan": "data/demo/batch/scans/К2-АР-02-v06.png",
+      "drawing": "data/demo/batch/drawings/sheet_02.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-02-v06_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-02-v06.json",
+      "note": "лист комплекта 2, итерация правок 6",
+      "expected_marks": 5
+    },
+    {
+      "sheet_id": "К2-АР-02-v07",
+      "title": "К2-АР-02 · Монолитные работы. Стены подвала · итерация 7",
+      "scan": "data/demo/batch/scans/К2-АР-02-v07.png",
+      "drawing": "data/demo/batch/drawings/sheet_02.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-02-v07_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-02-v07.json",
+      "note": "лист комплекта 2, итерация правок 7",
+      "expected_marks": 5
+    },
+    {
+      "sheet_id": "К2-АР-02-v08",
+      "title": "К2-АР-02 · Монолитные работы. Стены подвала · итерация 8",
+      "scan": "data/demo/batch/scans/К2-АР-02-v08.png",
+      "drawing": "data/demo/batch/drawings/sheet_02.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-02-v08_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-02-v08.json",
+      "note": "лист комплекта 2, итерация правок 8",
+      "expected_marks": 5
+    },
+    {
+      "sheet_id": "К2-АР-02-v09",
+      "title": "К2-АР-02 · Монолитные работы. Стены подвала · итерация 9",
+      "scan": "data/demo/batch/scans/К2-АР-02-v09.png",
+      "drawing": "data/demo/batch/drawings/sheet_02.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-02-v09_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-02-v09.json",
+      "note": "лист комплекта 2, итерация правок 9",
+      "expected_marks": 4
+    },
+    {
+      "sheet_id": "К2-АР-02-v10",
+      "title": "К2-АР-02 · Монолитные работы. Стены подвала · итерация 10",
+      "scan": "data/demo/batch/scans/К2-АР-02-v10.png",
+      "drawing": "data/demo/batch/drawings/sheet_02.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-02-v10_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-02-v10.json",
+      "note": "лист комплекта 2, итерация правок 10",
+      "expected_marks": 6
+    },
+    {
+      "sheet_id": "К2-АР-03-v01",
+      "title": "К2-АР-03 · Кровля. ПВХ-мембрана · итерация 1",
+      "scan": "data/demo/batch/scans/К2-АР-03-v01.png",
+      "drawing": "data/demo/batch/drawings/sheet_03.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-03-v01_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-03-v01.json",
+      "note": "лист комплекта 3, итерация правок 1",
+      "expected_marks": 5
+    },
+    {
+      "sheet_id": "К2-АР-03-v02",
+      "title": "К2-АР-03 · Кровля. ПВХ-мембрана · итерация 2",
+      "scan": "data/demo/batch/scans/К2-АР-03-v02.png",
+      "drawing": "data/demo/batch/drawings/sheet_03.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-03-v02_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-03-v02.json",
+      "note": "лист комплекта 3, итерация правок 2",
+      "expected_marks": 5
+    },
+    {
+      "sheet_id": "К2-АР-03-v03",
+      "title": "К2-АР-03 · Кровля. ПВХ-мембрана · итерация 3",
+      "scan": "data/demo/batch/scans/К2-АР-03-v03.png",
+      "drawing": "data/demo/batch/drawings/sheet_03.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-03-v03_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-03-v03.json",
+      "note": "лист комплекта 3, итерация правок 3",
+      "expected_marks": 4
+    },
+    {
+      "sheet_id": "К2-АР-03-v04",
+      "title": "К2-АР-03 · Кровля. ПВХ-мембрана · итерация 4",
+      "scan": "data/demo/batch/scans/К2-АР-03-v04.png",
+      "drawing": "data/demo/batch/drawings/sheet_03.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-03-v04_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-03-v04.json",
+      "note": "лист комплекта 3, итерация правок 4",
+      "expected_marks": 5
+    },
+    {
+      "sheet_id": "К2-АР-03-v05",
+      "title": "К2-АР-03 · Кровля. ПВХ-мембрана · итерация 5",
+      "scan": "data/demo/batch/scans/К2-АР-03-v05.png",
+      "drawing": "data/demo/batch/drawings/sheet_03.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-03-v05_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-03-v05.json",
+      "note": "лист комплекта 3, итерация правок 5",
+      "expected_marks": 5
+    },
+    {
+      "sheet_id": "К2-АР-03-v06",
+      "title": "К2-АР-03 · Кровля. ПВХ-мембрана · итерация 6",
+      "scan": "data/demo/batch/scans/К2-АР-03-v06.png",
+      "drawing": "data/demo/batch/drawings/sheet_03.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-03-v06_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-03-v06.json",
+      "note": "лист комплекта 3, итерация правок 6",
+      "expected_marks": 4
+    },
+    {
+      "sheet_id": "К2-АР-03-v07",
+      "title": "К2-АР-03 · Кровля. ПВХ-мембрана · итерация 7",
+      "scan": "data/demo/batch/scans/К2-АР-03-v07.png",
+      "drawing": "data/demo/batch/drawings/sheet_03.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-03-v07_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-03-v07.json",
+      "note": "лист комплекта 3, итерация правок 7",
+      "expected_marks": 5
+    },
+    {
+      "sheet_id": "К2-АР-03-v08",
+      "title": "К2-АР-03 · Кровля. ПВХ-мембрана · итерация 8",
+      "scan": "data/demo/batch/scans/К2-АР-03-v08.png",
+      "drawing": "data/demo/batch/drawings/sheet_03.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-03-v08_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-03-v08.json",
+      "note": "лист комплекта 3, итерация правок 8",
+      "expected_marks": 5
+    },
+    {
+      "sheet_id": "К2-АР-03-v09",
+      "title": "К2-АР-03 · Кровля. ПВХ-мембрана · итерация 9",
+      "scan": "data/demo/batch/scans/К2-АР-03-v09.png",
+      "drawing": "data/demo/batch/drawings/sheet_03.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-03-v09_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-03-v09.json",
+      "note": "лист комплекта 3, итерация правок 9",
+      "expected_marks": 7
+    },
+    {
+      "sheet_id": "К2-АР-03-v10",
+      "title": "К2-АР-03 · Кровля. ПВХ-мембрана · итерация 10",
+      "scan": "data/demo/batch/scans/К2-АР-03-v10.png",
+      "drawing": "data/demo/batch/drawings/sheet_03.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-03-v10_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-03-v10.json",
+      "note": "лист комплекта 3, итерация правок 10",
+      "expected_marks": 5
+    },
+    {
+      "sheet_id": "К2-АР-04-v01",
+      "title": "К2-АР-04 · Водопровод. Ввод в здание · итерация 1",
+      "scan": "data/demo/batch/scans/К2-АР-04-v01.png",
+      "drawing": "data/demo/batch/drawings/sheet_04.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-04-v01_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-04-v01.json",
+      "note": "лист комплекта 4, итерация правок 1",
+      "expected_marks": 7
+    },
+    {
+      "sheet_id": "К2-АР-04-v02",
+      "title": "К2-АР-04 · Водопровод. Ввод в здание · итерация 2",
+      "scan": "data/demo/batch/scans/К2-АР-04-v02.png",
+      "drawing": "data/demo/batch/drawings/sheet_04.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-04-v02_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-04-v02.json",
+      "note": "лист комплекта 4, итерация правок 2",
+      "expected_marks": 5
+    },
+    {
+      "sheet_id": "К2-АР-04-v03",
+      "title": "К2-АР-04 · Водопровод. Ввод в здание · итерация 3",
+      "scan": "data/demo/batch/scans/К2-АР-04-v03.png",
+      "drawing": "data/demo/batch/drawings/sheet_04.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-04-v03_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-04-v03.json",
+      "note": "лист комплекта 4, итерация правок 3",
+      "expected_marks": 4
+    },
+    {
+      "sheet_id": "К2-АР-04-v04",
+      "title": "К2-АР-04 · Водопровод. Ввод в здание · итерация 4",
+      "scan": "data/demo/batch/scans/К2-АР-04-v04.png",
+      "drawing": "data/demo/batch/drawings/sheet_04.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-04-v04_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-04-v04.json",
+      "note": "лист комплекта 4, итерация правок 4",
+      "expected_marks": 5
+    },
+    {
+      "sheet_id": "К2-АР-04-v05",
+      "title": "К2-АР-04 · Водопровод. Ввод в здание · итерация 5",
+      "scan": "data/demo/batch/scans/К2-АР-04-v05.png",
+      "drawing": "data/demo/batch/drawings/sheet_04.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-04-v05_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-04-v05.json",
+      "note": "лист комплекта 4, итерация правок 5",
+      "expected_marks": 5
+    },
+    {
+      "sheet_id": "К2-АР-04-v06",
+      "title": "К2-АР-04 · Водопровод. Ввод в здание · итерация 6",
+      "scan": "data/demo/batch/scans/К2-АР-04-v06.png",
+      "drawing": "data/demo/batch/drawings/sheet_04.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-04-v06_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-04-v06.json",
+      "note": "лист комплекта 4, итерация правок 6",
+      "expected_marks": 5
+    },
+    {
+      "sheet_id": "К2-АР-04-v07",
+      "title": "К2-АР-04 · Водопровод. Ввод в здание · итерация 7",
+      "scan": "data/demo/batch/scans/К2-АР-04-v07.png",
+      "drawing": "data/demo/batch/drawings/sheet_04.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-04-v07_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-04-v07.json",
+      "note": "лист комплекта 4, итерация правок 7",
+      "expected_marks": 6
+    },
+    {
+      "sheet_id": "К2-АР-04-v08",
+      "title": "К2-АР-04 · Водопровод. Ввод в здание · итерация 8",
+      "scan": "data/demo/batch/scans/К2-АР-04-v08.png",
+      "drawing": "data/demo/batch/drawings/sheet_04.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-04-v08_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-04-v08.json",
+      "note": "лист комплекта 4, итерация правок 8",
+      "expected_marks": 5
+    },
+    {
+      "sheet_id": "К2-АР-04-v09",
+      "title": "К2-АР-04 · Водопровод. Ввод в здание · итерация 9",
+      "scan": "data/demo/batch/scans/К2-АР-04-v09.png",
+      "drawing": "data/demo/batch/drawings/sheet_04.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-04-v09_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-04-v09.json",
+      "note": "лист комплекта 4, итерация правок 9",
+      "expected_marks": 5
+    },
+    {
+      "sheet_id": "К2-АР-04-v10",
+      "title": "К2-АР-04 · Водопровод. Ввод в здание · итерация 10",
+      "scan": "data/demo/batch/scans/К2-АР-04-v10.png",
+      "drawing": "data/demo/batch/drawings/sheet_04.dxf",
+      "texts": "data/demo/batch/truth/К2-АР-04-v10_texts.json",
+      "truth": "data/demo/batch/truth/К2-АР-04-v10.json",
+      "note": "лист комплекта 4, итерация правок 10",
+      "expected_marks": 6
+    }
+  ]
+}
