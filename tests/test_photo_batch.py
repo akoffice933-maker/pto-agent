@@ -45,6 +45,10 @@ SCANS = ROOT / "data" / "demo" / "batch" / "scans"
 needs_scans = pytest.mark.skipif(
     not (SCANS.exists() and any(SCANS.glob("*.png")) and SUMMARY.exists()),
     reason="нет демо-сканов выпуска: python3 scripts/make_demo_batch.py")
+# плоский скан листа — тоже генерируется (scripts/make_demo_redline.py)
+needs_flat_scan = pytest.mark.skipif(
+    not (SCAN.exists() and PHOTO.exists()),
+    reason="нет демо-скана листа: python3 scripts/make_demo_redline.py")
 
 
 @pytest.fixture(scope="module")
@@ -126,6 +130,7 @@ def test_photo_calibration_dict_roundtrip(calib):
 
 
 # ── выпрямление ──────────────────────────────────────────────────────────
+@needs_flat_scan
 def test_rectify_identity_reproduces_image(anchors):
     """Если «фото» — это сам скан, выпрямление обязано вернуть его же."""
     scan = load_rgb(SCAN)
@@ -149,6 +154,7 @@ def test_rectify_photo_to_sheet_size(calib, anchors):
     assert list(out.shape[1::-1]) == anchors["rect_size"]
 
 
+@needs_flat_scan
 def test_photo_quality_detects_bad_shots():
     good = load_rgb(SCAN)
     assert photo_quality(good)["warnings"] == []
