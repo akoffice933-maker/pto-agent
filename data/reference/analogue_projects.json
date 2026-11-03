@@ -1,0 +1,207 @@
+{
+  "schema": "pto-agent/analogues@1",
+  "checked_at": "2026-11-03",
+  "checked_via": "GitHub REST API /repos/{owner}/{repo}",
+  "our_license": "MIT",
+  "rules": {
+    "copy_code": "код можно брать только при лицензии MIT / Apache-2.0 / BSD и с сохранением уведомления об авторстве",
+    "copy_data": "данные (расценки, базы) проверяются отдельно: лицензия данных может отличаться от лицензии кода",
+    "agpl": "AGPL-3.0: код не копируем в MIT-репозиторий; допустима только работа как с отдельным сервисом, который поднимает сам пользователь",
+    "no_license": "без лицензии = все права защищены: только чтение кода как идеи, никакого копирования, ни строчки"
+  },
+  "projects": [
+    {
+      "repo": "braedonsaunders/bidwright",
+      "url": "https://github.com/braedonsaunders/bidwright",
+      "license": "AGPL-3.0",
+      "stars": 79,
+      "language": "TypeScript",
+      "pushed_at": "2026-11-02",
+      "role": "Полная AI-native платформа смет: intake → takeoff → pricing → review → quote, агент с «руками», MCP",
+      "we_take": [
+        "декомпозицию этапов «вход → обмер → цена → проверка → предложение» — у нас она ложится на выпуск → КС-2 → деньги → портфель",
+        "таксономию MCP-инструментов (обмер, ценообразование, проверка) для сверки со своими 14 инструментами",
+        "идею «review-этапа» как отдельного шага с чек-листом, а не как побочного эффекта расчёта"
+      ],
+      "we_do_not_take": [
+        "код и тексты промптов — AGPL-3.0 несовместима с MIT-поставкой"
+      ],
+      "integration": "reference-only",
+      "copy_allowed": false
+    },
+    {
+      "repo": "Kentucky-ai/opentakeoff",
+      "url": "https://github.com/Kentucky-ai/opentakeoff",
+      "license": "AGPL-3.0",
+      "stars": 743,
+      "language": "TypeScript",
+      "pushed_at": "2026-11-02",
+      "role": "Open-source PDF takeoff, которым агент управляет по MCP (комнаты, символы, материалы, экспорт сметы)",
+      "we_take": [
+        "схему «движок обмера отдельно, агент — клиент MCP»: наш CAD-модуль можно подключать к такому движку как к внешнему серверу",
+        "подход к измерению помещений и подсчёту символов — как второй, независимый источник объёмов для сверки с КС-2",
+        "разделение «геометрия листа» и «стоимость» в отчётах"
+      ],
+      "we_do_not_take": [
+        "встраивание кода в наш пакет",
+        "PDF-рендеринг на их библиотеках внутри нашего репозитория"
+      ],
+      "integration": "external-mcp-server",
+      "copy_allowed": false
+    },
+    {
+      "repo": "oramaai/orama-core",
+      "url": "https://github.com/oramaai/orama-core",
+      "license": "MIT",
+      "stars": 16,
+      "language": "Python",
+      "pushed_at": "2026-02-20",
+      "role": "Чертёж → смета с CSI-кодами, материалами и трудозатратами; RAG по 55k+ расценкам",
+      "we_take": [
+        "структуру RAG-ответа с обязательной ссылкой на расценку — совпадает с нашим правилом «ответ только с цитатой»",
+        "схему нормализации позиции: код → единица → объём → цена, как основу для будущей базы ГЭСН/ФЕР",
+        "разделение material takeoff и labor hours в отчётности"
+      ],
+      "we_do_not_take": [
+        "готовую модель данных CSI как основную — у нас ГЭСН/ФЕР/КС-2"
+      ],
+      "integration": "pattern-and-code",
+      "copy_allowed": true,
+      "integration_note": "с указанием авторства в NOTICE"
+    },
+    {
+      "repo": "nickpanagios/estimaite-mcp",
+      "url": "https://github.com/nickpanagios/estimaite-mcp",
+      "license": "MIT",
+      "stars": 0,
+      "language": null,
+      "pushed_at": "2026-08-05",
+      "role": "Удалённый MCP-сервер для обмера и смет: загрузить PDF, померить, оценить по видам работ, выгрузить смету",
+      "we_take": [
+        "описание инструментов в стиле «upload → measure → price → export» — хороший образец для наших схем `scan_redline_image`, `plan_from_scan_redline`, `commit_operations`",
+        "формат ответа «смета + пояснение + источник каждого числа»",
+        "идею удалённого (remote) MCP как способа не тащить тяжёлые зависимости в наш образ"
+      ],
+      "we_do_not_take": [
+        "привязку к их прайс-листам"
+      ],
+      "integration": "schema-reference",
+      "copy_allowed": true
+    },
+    {
+      "repo": "Sumitkumar005/Construction-AI-Agent",
+      "url": "https://github.com/Sumitkumar005/Construction-AI-Agent",
+      "license": "NO-LICENSE",
+      "stars": 4,
+      "language": "Python",
+      "pushed_at": "2026-01-01",
+      "role": "Multi-agent (LangGraph) система обмера и извлечения объёмов, CV/YOLO по планам",
+      "we_take": [
+        "разделение ролей агентов (детекция → извлечение объёмов → проверка) — у нас это уже разделено модулями vision/plan/impact",
+        "идею валидатора, который смотрит на выход предыдущего агента, а не на исходные данные"
+      ],
+      "we_do_not_take": [
+        "код (лицензии нет)",
+        "YOLO-детекцию как основной путь — у нас офлайн-CV по разнице с чертежом"
+      ],
+      "integration": "reference-only",
+      "copy_allowed": false
+    },
+    {
+      "repo": "datadrivenconstruction/DDC_Skills_for_AI_Agents_in_Construction",
+      "url": "https://github.com/datadrivenconstruction/DDC_Skills_for_AI_Agents_in_Construction",
+      "license": "MIT",
+      "stars": 385,
+      "language": "Python",
+      "pushed_at": "2026-10-19",
+      "role": "221 skill для агентов в строительстве, включая multi-agent-estimation (QTO + Pricing + Validation)",
+      "we_take": [
+        "формат skill-описания (когда вызывать, входы/выходы, что считается успехом) — пригодится для наших промптов и MCP-описаний",
+        "тройку ролей QTO / Pricing / Validation как чек-лист для сметного расширения",
+        "дисциплину «skill = одна проверяемая операция»"
+      ],
+      "we_do_not_take": [
+        "CrewAI как зависимость — у нас без оркестратора, MCP-клиент сам решает порядок"
+      ],
+      "integration": "pattern-and-code",
+      "copy_allowed": true,
+      "integration_note": "с указанием авторства в NOTICE"
+    },
+    {
+      "repo": "datadrivenconstruction/OpenConstructionEstimate-DDC-CWICR",
+      "url": "https://github.com/datadrivenconstruction/OpenConstructionEstimate-DDC-CWICR",
+      "license": "NOASSERTION",
+      "stars": 266,
+      "language": "HTML",
+      "pushed_at": "2026-08-21",
+      "role": "Открытая база расценок для AI-агентов: 55k+ работ, 27k+ ресурсов, 30 регионов, включая ГЭСН/ФЕР/ТЕР",
+      "we_take": [
+        "как источник расценок для расчёта «деньги по выпуску» там, где нашей сметы не хватает",
+        "структуру позиции «работа + ресурсы + регион + редакция» — совместима с нашими `config/` и RAG по нормативам"
+      ],
+      "we_do_not_take": [
+        "данные до ручной проверки лицензии — GitHub показывает NOASSERTION, нужна явная проверка условий распространения базы"
+      ],
+      "integration": "data-source",
+      "copy_allowed": false,
+      "integration_note": "только после ручной проверки условий базы"
+    },
+    {
+      "repo": "jayden-lg/costing-master",
+      "url": "https://github.com/jayden-lg/costing-master",
+      "license": "MIT",
+      "stars": 60,
+      "language": null,
+      "pushed_at": "2026-05-27",
+      "role": "Китайский «мастер смет»: полный цикл (бюджет, расчёт, аудит, договоры) по GB/T 50500-2024",
+      "we_take": [
+        "сценарий «аудит сметы» как отдельный отчёт с перечнем нарушений и ссылкой на пункт норматива — прямой аналог нашей проверки по СП",
+        "разделение «смета / договор / акт» в отчётности",
+        "перечень типовых ошибок сметчика для чек-листа"
+      ],
+      "we_do_not_take": [
+        "китайские нормативы и форматы как есть"
+      ],
+      "integration": "pattern-and-code",
+      "copy_allowed": true,
+      "integration_note": "с указанием авторства в NOTICE"
+    },
+    {
+      "repo": "barmanoff/chance-electro-capstone",
+      "url": "https://github.com/barmanoff/chance-electro-capstone",
+      "license": "NO-LICENSE",
+      "stars": 5,
+      "language": "Python",
+      "pushed_at": "2026-07-06",
+      "role": "Multi-agent сметы для электромонтажа: фото «на салфетке» → proposal + invoice + GO/NO-GO по марже; MCP pricing server",
+      "we_take": [
+        "связку «фото с телефона → смета» — у нас фото уже есть, не хватает коммерческого выхода (КП), а не только КС-2",
+        "идею вердикта GO/NO-GO по марже: близка к нашему «деньги под риском», но со стороны подрядчика",
+        "формат «proposal + invoice + обоснование»"
+      ],
+      "we_do_not_take": [
+        "код (лицензии нет)"
+      ],
+      "integration": "reference-only",
+      "copy_allowed": false
+    },
+    {
+      "repo": "rd8r8bkd9m-tech/smeta",
+      "url": "https://github.com/rd8r8bkd9m-tech/smeta",
+      "license": "MIT",
+      "stars": 0,
+      "language": "HTML",
+      "pushed_at": "2026-01-19",
+      "role": "Российская PWA для смет, в планах — мультиагентная система и заявка на соответствие ГОСТ",
+      "we_take": [
+        "русскую терминологию интерфейса и структуру разделов сметы",
+        "идею заявки на соответствие ГОСТ как формы отчёта"
+      ],
+      "we_do_not_take": [
+        "UI-стек: у нас HTML-отчёты генерируются из Python"
+      ],
+      "integration": "terminology-reference",
+      "copy_allowed": true
+    }
+  ]
+}
