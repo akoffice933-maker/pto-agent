@@ -246,6 +246,14 @@ python3 scripts/make_demo_retro.py && python3 scripts/make_demo_acts.py   # ре
 # полный цикл MVP агента (сверка → черновик КС-2 → отчёт → аудит)
 python3 -m pto_agent run --data data/demo --out out
 python3 -m pytest tests -q
+```
+
+Тесты, которым нужны тяжёлые демо-артефакты (сканы выпуска, ретро-выпуски, `out/cad/batch*`),
+помечены `skipif` и просто пропускаются, если артефактов нет: свежий клон даёт **0 падений**
+(132 passed / 24 skipped после `make_demo_redline.py`), а джоб `e2e` в CI собирает весь набор
+и прогоняет все тесты на реальных отчётах.
+
+```bash
 
 # поднять БД (после установки расширений pgcrypto, vector, pg_trgm)
 psql -d pto_agent -f db/schema.sql
