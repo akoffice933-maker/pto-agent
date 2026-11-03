@@ -193,6 +193,56 @@ def cmd_route(args):
     return res
 
 
+def cmd_export_1c(args):
+    """Проверенная КС-2 → CSV для загрузки в 1С/БИТ.Строительство."""
+    from .integrations.one_c import OneCError, export_ks2_csv
+    try:
+        summary = json.loads(Path(args.summary).read_text(encoding="utf-8"))
+        res = export_ks2_csv(summary, args.out, quantity=args.quantity)
+    except (OneCError, FileNotFoundError) as e:
+        print(f"Выгрузка не выполнена: {e}", file=sys.stderr)
+        return 2
+    print(f"Выгружено в 1С: {res['file']} · строк {res['rows']} · сумма {res['amount']:,.2f} ₽"
+          .replace(",", " "))
+    print(f"Объём: {res['quantity']} (claim — к предъявлению, journal — по журналу, "
+          f"estimate — по смете)")
+    return 0
+
+
+def cmd_import_1c(args):
+    """CSV из 1С/Гранд-Сметы → наши строки сметы и/или реестр актов."""
+    from .integrations.one_c import (OneCError, acts_document, import_acts_csv,
+                                     import_smeta_csv)
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    code = 0
+    if args.smeta:
+        try:
+            smeta = import_smeta_csv(args.smeta)
+            path = out_dir / "smeta_from_1c.json"
+            path.write_text(json.dumps(smeta, ensure_ascii=False, indent=2), encoding="utf-8")
+            print(f"Смета: {smeta['count']} строк · предупреждений {len(smeta['warnings'])} → {path}")
+        except OneCError as e:
+            print(f"Смета не прочитана: {e}", file=sys.stderr)
+            code = 2
+    if args.acts:
+        try:
+            imported = import_acts_csv(args.acts)
+            doc = acts_document(imported, object_name=args.object_name)
+            path = out_dir / "acts_from_1c.json"
+            path.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
+            total = sum(a["amount_rub"] or 0 for a in doc["acts"])
+            print(f"Акты: {imported['count']} · сумма {total:,.2f} ₽ · "
+                  f"предупреждений {len(imported['warnings'])} → {path}".replace(",", " "))
+        except OneCError as e:
+            print(f"Акты не прочитаны: {e}", file=sys.stderr)
+            code = 2
+    if not args.smeta and not args.acts:
+        print("Укажите --smeta и/или --acts", file=sys.stderr)
+        return 2
+    return code
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     # подкоманды CAD и MCP живут в своих пакетах: делегируем до разбора argparse,
@@ -248,6 +298,21 @@ def main(argv=None):
     rt.add_argument("--images", action="store_true")
     rt.add_argument("--complexity", default="high", choices=["low", "medium", "high"])
     rt.set_defaults(func=cmd_route)
+
+    ex1 = sub.add_parser("export-1c", help="проверенная КС-2 → CSV для 1С/БИТ.Строительство")
+    ex1.add_argument("--summary", default="out/summary.json")
+    ex1.add_argument("--out", default="out/1c/ks2_for_1c.csv")
+    ex1.add_argument("--quantity", default="claim",
+                     choices=["claim", "journal", "estimate"],
+                     help="какой объём выгружать: к предъявлению / по журналу / по смете")
+    ex1.set_defaults(func=cmd_export_1c)
+
+    im1 = sub.add_parser("import-1c", help="CSV из 1С/Гранд-Сметы → смета и реестр актов")
+    im1.add_argument("--smeta", help="CSV со строками сметы")
+    im1.add_argument("--acts", help="CSV с реестром актов КС-2")
+    im1.add_argument("--object-name", default="из 1С")
+    im1.add_argument("--out", default="out/1c")
+    im1.set_defaults(func=cmd_import_1c)
 
     args = p.parse_args(argv)
     result = args.func(args)

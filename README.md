@@ -3,7 +3,7 @@
 [![CI](https://github.com/akoffice933-maker/pto-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/akoffice933-maker/pto-agent/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue)
 ![MCP](https://img.shields.io/badge/MCP-2025--06--18-1F3864)
-![Tests](https://img.shields.io/badge/tests-172%20passed-brightgreen)
+![Tests](https://img.shields.io/badge/tests-184%20passed-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 **Агент для ПТО в строительстве:** сверяет КС-2 с журналом и сметой, распознаёт выпуск
@@ -101,6 +101,7 @@ python3 -m pytest tests -q
 
 | Файл | Что внутри |
 |---|---|
+| `12_Сравнение_с_БИТ_Строительство.docx` (`docs/12_…md`) | **1С/БИТ.Строительство vs pto-agent:** матрица из 26 задач инженера ПТО (кто закрывает), где мы честно слабее, три уровня стыковки (файловый обмен → HTTP-сервис 1С → программный робот), реализованный контракт обмена CSV |
 | `11_Смежные_проекты_и_лицензии.docx` (`docs/11_…md`) | **Смежные проекты:** 10 открытых сметных/обмерных проектов с проверенными звёздами и лицензиями, матрица «код можно / нельзя» (AGPL и «без лицензии» — только идеи), три сценария стыковки (внешний MCP-обмер, база ГЭСН/ФЕР, паттерны multi-agent), чего сознательно не делаем, дорожная карта |
 | `10_MCP_обвязка.docx` (`docs/10_…md`) | **MCP одной командой:** установщик конфигов для Claude Desktop / Cursor / VS Code, HTTP-транспорт и Docker, настройки из окружения, 15 тестов протокола, правила безопасности |
 | `09_Портфель_актов_и_график_финансирования.docx` (`docs/09_…md`) | **Деньги под риском по объекту:** реестр актов, покрытие проверкой 100 % после ретро-выпуска, разбивка по месяцам; непроверенный акт — «не оценено», а не «0 ₽» |
@@ -114,6 +115,8 @@ python3 -m pytest tests -q
 | `Dockerfile`, `mcp/docker-compose.yml` | HTTP-транспорт MCP в контейнере: `/health`, инспектор, журнал аудита на хосте |
 | `pyproject.toml` | Пакет и точки входа: `pto-agent`, `pto-cad`, `pto-mcp` |
 | `tests/test_mcp_protocol.py` | 15 тестов протокола: рукопожатие, список инструментов, ошибки JSON-RPC, чистота stdout, схемы, http, установщик |
+| `pto_agent/integrations/one_c.py` | **Обмен с 1С/БИТ.Строительство:** выгрузка проверенной КС-2 и реестра актов в CSV (`utf-8-sig`, `;`, десятичная запятая), терпимое чтение смет и актов из 1С (синонимы шапок, cp1251, пробелы тысяч), «не оценено» вместо нуля |
+| `tests/test_one_c.py` | 12 тестов обмена: формат для 1С, режимы объёма (claim/journal/estimate), импорт сметы и актов, кодировки и разделители, круг «экспорт → импорт» без потери сумм |
 | `pto_agent/cad/external_takeoff.py` | **Внешний обмер по MCP:** клиент (stdio/http, SSE), нормализация чужой схемы к нашей, сверка «чужой обмер ↔ наш DXF/смета», правило «не оценено ≠ 0», лицензионный режим «отдельный сервис» для AGPL |
 | `config/external_takeoff.example.yaml` | Конфиг внешнего обмера: транспорт, команда/url, инструмент, лицензия; готовый self-check на нашем же MCP-сервере |
 | `tests/test_external_takeoff.py` | 22 теста: фейковые stdio- и http-серверы, SSE, ошибки JSON-RPC и `isError`, нормализация items/positions/lines, отказ на AGPL без подтверждения, совместимость с нашим сервером |
@@ -248,6 +251,9 @@ python3 -m pto_agent cad impact --batch out/cad/batch/batch_summary.json \
         --summary out/summary.json --out out/cad/impact --with-background
 python3 -m pto_agent cad impact --acts data/demo/acts/acts.json \
         --summary out/summary.json --out out/cad/portfolio
+# обмен с 1С/БИТ.Строительство: смета и акты из 1С → наши структуры
+python3 -m pto_agent import-1c --smeta выгрузка_сметы.csv --acts реестр_кс2.csv --out out/1c
+python3 -m pto_agent export-1c --summary out/summary.json --out out/1c/ks2_for_1c.csv
 # внешний обмер по MCP (чужой сервер меряет, мы сверяем) — self-check на своём сервере
 python3 -m pto_agent cad takeoff-external --config config/external_takeoff.example.yaml \
         --pdf drawings/korpus2_plan_v1.dxf --file drawings/korpus2_plan_v1.dxf --out out/cad/external
@@ -334,3 +340,19 @@ python3 scripts/check_analogues.py --offline    # структура и поли
 python3 scripts/check_analogues.py              # сверить звёзды и лицензии с GitHub API
 python3 -m pytest tests/test_analogues.py -q     # 10 тестов политики
 ```
+
+## 10. Как мы соотносимся с 1С/БИТ.Строительство
+
+Подробно — [`docs/12_Сравнение_с_БИТ_Строительство.md`](docs/12_Сравнение_с_БИТ_Строительство.md)
+(матрица из 26 задач инженера ПТО и три уровня стыковки).
+
+| | БИТ.Строительство (1С) | pto-agent |
+|---|---|---|
+| Что это | отраслевая ERP: 16 модулей, Реестр российского ПО | AI-агент контроля и анализа, MIT |
+| Сильная сторона | учёт объектов, смет, материалов, КС-2/КС-3/КС-6а/М-29, БДР/БДДС, Гантт, архив ИД, ЭП | сверка КС-2 (7 классов расхождений), «деньги под риском», распознавание сканов и фото, CAD-redline, MCP |
+| Чего нет | распознавания рукописных пометок, «стоимости спора», правки DXF по пометкам | учёта, финансов, планирования, печатных форм, архива с ЭП |
+| Стыковка | файловый CSV-обмен (реализован) → HTTP-сервис 1С → программный робот по расписанию | `python3 -m pto_agent import-1c` / `export-1c` |
+| Кому что | «что у нас есть и сколько потратили» | «правда ли то, что предъявляют, и сколько стоит спор» |
+
+Мы не заменяем ERP: контроль нечего проверять там, где нет учёта. Пилот поверх работающей 1С
+делается файловым обменом за неделю и не требует доступа к конфигурации.
