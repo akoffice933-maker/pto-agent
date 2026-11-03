@@ -1,0 +1,68 @@
+{
+  "object": "ЖК «Северный», корпус 2",
+  "contract": "Д-142/2026",
+  "generated": "2026-11-03",
+  "note": "Реестр актов объекта: суммы — по сметным ценам, статус проверки — по наличию распознанного выпуска. Источники: acts_previous.xlsx, smeta_v1.xlsx, прогон выпуска out/cad/batch.",
+  "acts": [
+    {
+      "act_id": "КС-2 №35",
+      "period": "сентябрь 2026",
+      "month": "2026-09",
+      "act_date": "2026-09-30",
+      "amount_rub": 4168000.0,
+      "positions": [
+        {
+          "code": "ФЕР 06-01-001-01",
+          "qty": 200.0,
+          "unit": "м3",
+          "price": 18500.0,
+          "amount_rub": 3700000.0
+        },
+        {
+          "code": "ФЕР 08-02-001-01",
+          "qty": 600.0,
+          "unit": "м2",
+          "price": 780.0,
+          "amount_rub": 468000.0
+        }
+      ],
+      "status": "проверен",
+      "note": "ретро-выпуск: пометки сверены с количествами акта КС-2 №35 (а не с текущим журналом)",
+      "release": "out/cad/batch_ks35/batch_summary.json",
+      "share_of_object_acts": null
+    },
+    {
+      "act_id": "КС-2 №37",
+      "period": "сентябрь 2026",
+      "month": "2026-09",
+      "act_date": "2026-09-30",
+      "amount_rub": 248000.0,
+      "positions": [
+        {
+          "code": "ФЕР 16-02-003-01",
+          "qty": 200.0,
+          "unit": "м",
+          "price": 1240.0,
+          "amount_rub": 248000.0
+        }
+      ],
+      "status": "проверен",
+      "note": "ретро-выпуск: пометки сверены с количествами акта КС-2 №37 (а не с текущим журналом)",
+      "release": "out/cad/batch_ks37/batch_summary.json",
+      "share_of_object_acts": null
+    },
+    {
+      "act_id": "КС-2 №38",
+      "period": "октябрь 2026",
+      "month": "2026-10",
+      "act_date": "2026-10-29",
+      "amount_rub": 34106600.0,
+      "positions": [],
+      "status": "проверен",
+      "release": "out/cad/batch/batch_summary.json",
+      "background": true,
+      "note": "текущий выпуск: 40 листов распознано, пометки сверены с актом и сметой",
+      "share_of_object_acts": null
+    }
+  ]
+}
