@@ -65,6 +65,21 @@ docker build -t pto-agent-mcp:0.6 . && docker run -p 8765:8765 pto-agent-mcp:0.6
 операций только с `confirm{by, role, comment}`, пакетная обработка выпуска, деньги по акту
 и по портфелю актов. Подробно — [`docs/10_MCP_обвязка.md`](docs/10_MCP_обвязка.md).
 
+## Публикация на GitHub
+
+Репозиторий собран локально (ветка `main`, 7 коммитов) и готов к пушу:
+
+```bash
+./scripts/publish_github.sh git@github.com:USER/pto-agent.git   # свой remote
+# или, если установлен GitHub CLI:
+./scripts/publish_github.sh USER/pto-agent                       # создаст репозиторий и запушит
+```
+
+Что уже сделано в репозитории: `.gitignore` (артефакты прогонов и тяжёлые демо-сканы
+не в git — они генерируются скриптами), `LICENSE` (MIT), CI на GitHub Actions
+(`unit` на Python 3.10/3.12 → `e2e` со сквозным прогоном → сборка Docker-образа).
+После пуша замените `USER` в бейджах и ссылках на свой аккаунт.
+
 ---
 
 # Пакет проекта: что внутри

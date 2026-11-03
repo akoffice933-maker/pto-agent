@@ -45,4 +45,3 @@ include = ["pto_agent*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
