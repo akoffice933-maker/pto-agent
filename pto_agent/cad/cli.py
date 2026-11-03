@@ -12,6 +12,9 @@ from ..impact import (assess_impact, impact_chart, impact_to_markdown,
 from ..portfolio import (assess_portfolio, load_acts, portfolio_to_markdown,
                          write_portfolio_reports)
 from .diff import diff_drawings
+from .external_takeoff import (ExternalTakeoffError, align, load_config,
+                               local_positions_from_dxf, local_positions_from_summary,
+                               run_external_takeoff, write_report)
 from .drawing import Drawing
 from .ops import apply_operations, history_entry
 from .redline import plan_from_discrepancies
@@ -341,6 +344,41 @@ def cmd_redline_from_scan(args):
     return 0
 
 
+def cmd_takeoff_external(args):
+    """Обмер чужим MCP-сервером (PDF и пр.) → наши позиции + сверка с нашим обмером/сметой."""
+    try:
+        cfg = load_config(args.config)
+        report = run_external_takeoff(cfg, args.pdf,
+                                      ack_separate_service=args.ack_separate_service,
+                                      timeout=args.timeout)
+    except ExternalTakeoffError as e:
+        print(f"Внешний обмер не выполнен: {e}", file=sys.stderr)
+        return 2
+
+    local = None
+    if args.file:
+        local = local_positions_from_dxf(Drawing.open(args.file))
+    elif args.summary and Path(args.summary).exists():
+        local = local_positions_from_summary(json.loads(Path(args.summary).read_text(encoding="utf-8")))
+    alignment = align(report["positions"], local, pct=args.tolerance_pct) if local is not None else None
+
+    paths = write_report(report, alignment, args.out)
+    print(f"Источник:  {report['source']} ({report['license']}) · "
+          f"{report['transport']} · протокол {report.get('protocol') or '—'}")
+    print(f"Инструмент: {report['tool']} · позиций: {report['count']} "
+          f"(с объёмом {report['estimated']}, не оценено {report['not_estimated']})")
+    if alignment is not None:
+        print(f"Сверка:    совпало {len(alignment['matched'])} из {alignment['local_positions']} · "
+              f"расхождений {len(alignment['issues'])} "
+              f"(критичных {alignment['critical']})")
+        for issue in alignment["issues"][:10]:
+            print(f"  • {issue['type']:<22} {issue.get('code') or '—':<16} {issue['message']}")
+    if report["warnings"]:
+        print(f"Предупреждения: {len(report['warnings'])} (см. отчёт)")
+    print(f"Отчёт:     {paths['markdown']} · {paths['json']}")
+    return 0
+
+
 def cmd_impact(args):
     """Пересчитать деньги по готовой сводке выпуска: без повторного распознавания.
 
@@ -589,6 +627,20 @@ def build_parser():
     bt.add_argument("--no-resume", action="store_true",
                     help="не брать готовые листы из кеша")
     bt.set_defaults(func=cmd_scan_batch)
+
+    ex = sub.add_parser("takeoff-external",
+                        help="обмер чужим MCP-сервером и сверка с нашим обмером/сметой")
+    ex.add_argument("--config", default="config/external_takeoff.example.yaml",
+                    help="конфиг внешнего MCP-обмера (JSON/YAML)")
+    ex.add_argument("--pdf", required=True, help="файл, который мерит внешний сервер")
+    ex.add_argument("--file", help="наш DXF для сверки объёмов")
+    ex.add_argument("--summary", default=None, help="out/summary.json для сверки со сметой")
+    ex.add_argument("--tolerance-pct", type=float, default=5.0, help="допуск сверки, %%")
+    ex.add_argument("--timeout", type=float, default=None)
+    ex.add_argument("--ack-separate-service", action="store_true",
+                    help="подтвердить режим «отдельный сервис» для AGPL-обмера")
+    ex.add_argument("--out", default="out/cad/external")
+    ex.set_defaults(func=cmd_takeoff_external)
 
     im = sub.add_parser("impact",
                         help="стоимость споров: сводка выпуска → деньги по КС-2")

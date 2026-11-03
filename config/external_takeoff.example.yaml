@@ -1,0 +1,42 @@
+# Внешний обмер по MCP: чужой сервер меряет, мы приводим результат к своей схеме.
+# Проверка конфига и лицензионного режима: python3 scripts/check_analogues.py --offline
+# Запуск:
+#   python3 -m pto_agent cad takeoff-external --config config/external_takeoff.example.yaml \
+#           --pdf drawings/korpus2_plan_v1.png --file drawings/korpus2_plan_v1.dxf \
+#           --out out/cad/external
+#
+# ВАЖНО: код внешнего сервера не импортируется и не копируется в наш репозиторий (MIT).
+# Для AGPL-3.0 (opentakeoff, bidwright) допустим только режим «отдельный сервис» —
+# он подтверждается флагом --ack-separate-service или ключом separate_service_ack: true.
+
+external_takeoff:
+  # ── вариант 1: наш собственный MCP-сервер (работает без внешних зависимостей, для проверки схемы)
+  name: pto-agent (self check)
+  transport: stdio
+  command: ["python3", "-m", "pto_agent.mcp_server", "--base-dir", "."]
+  tool: cad_takeoff
+  license: MIT
+  arguments:
+    file_path: "{pdf_path}"
+    summary_path: out/summary.json
+  timeout_s: 120
+
+  # ── вариант 2: внешний обмер (раскомментировать нужный блок, остальное — закомментировать)
+  # name: opentakeoff
+  # transport: stdio
+  # command: ["npx", "-y", "opentakeoff@latest", "--mcp"]
+  # tool: measure_pdf            # имя уточнить по tools/list своего сервера
+  # license: AGPL-3.0            # код не копируем: только вызов как отдельного процесса
+  # separate_service_ack: true
+  # arguments:
+  #   pdf_path: "{pdf_path}"
+  # timeout_s: 600
+  #
+  # name: estimaite
+  # transport: http
+  # url: http://127.0.0.1:8787/mcp
+  # tool: takeoff
+  # license: MIT
+  # arguments:
+  #   pdf_path: "{pdf_path}"
+  # timeout_s: 300

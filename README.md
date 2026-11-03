@@ -3,7 +3,7 @@
 [![CI](https://github.com/akoffice933-maker/pto-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/akoffice933-maker/pto-agent/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue)
 ![MCP](https://img.shields.io/badge/MCP-2025--06--18-1F3864)
-![Tests](https://img.shields.io/badge/tests-156%20passed-brightgreen)
+![Tests](https://img.shields.io/badge/tests-172%20passed-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 **Агент для ПТО в строительстве:** сверяет КС-2 с журналом и сметой, распознаёт выпуск
@@ -21,7 +21,7 @@
 | Фото с телефона → чертёж | гомография по 4 точкам, rms 0,0 мм, 5/5 пометок |
 | Деньги по выпуску | 1 850 000 ₽ под риском = 5,42 % акта, каждый рубль с формулой |
 | Портфель актов объекта | 3 акта, покрытие 100 %, 2 091 000 ₽ под риском (5,43 %) |
-| MCP | 14 инструментов, stdio + http, установка одной командой |
+| MCP | 15 инструментов, stdio + http, установка одной командой |
 
 ## Быстрый старт
 
@@ -61,7 +61,7 @@ python3 -m pto_agent.mcp_server --transport http --port 8765   # http + инсп
 docker build -t pto-agent-mcp:0.6 . && docker run -p 8765:8765 pto-agent-mcp:0.6
 ```
 
-14 инструментов: чтение DXF и takeoff, распознавание сканов и план правок, применение
+15 инструментов: чтение DXF и takeoff, распознавание сканов и план правок, применение
 операций только с `confirm{by, role, comment}`, пакетная обработка выпуска, деньги по акту
 и по портфелю актов. Подробно — [`docs/10_MCP_обвязка.md`](docs/10_MCP_обвязка.md).
 
@@ -114,6 +114,9 @@ python3 -m pytest tests -q
 | `Dockerfile`, `mcp/docker-compose.yml` | HTTP-транспорт MCP в контейнере: `/health`, инспектор, журнал аудита на хосте |
 | `pyproject.toml` | Пакет и точки входа: `pto-agent`, `pto-cad`, `pto-mcp` |
 | `tests/test_mcp_protocol.py` | 15 тестов протокола: рукопожатие, список инструментов, ошибки JSON-RPC, чистота stdout, схемы, http, установщик |
+| `pto_agent/cad/external_takeoff.py` | **Внешний обмер по MCP:** клиент (stdio/http, SSE), нормализация чужой схемы к нашей, сверка «чужой обмер ↔ наш DXF/смета», правило «не оценено ≠ 0», лицензионный режим «отдельный сервис» для AGPL |
+| `config/external_takeoff.example.yaml` | Конфиг внешнего обмера: транспорт, команда/url, инструмент, лицензия; готовый self-check на нашем же MCP-сервере |
+| `tests/test_external_takeoff.py` | 22 теста: фейковые stdio- и http-серверы, SSE, ошибки JSON-RPC и `isError`, нормализация items/positions/lines, отказ на AGPL без подтверждения, совместимость с нашим сервером |
 | `pto_agent/cad/` | CAD-модуль: `drawing` (чтение DXF), `template` (корпоративный шаблон), `ops` (белый список, валидация, dry_run/commit), `diff`, `redline` (пометки по расхождениям), `takeoff` (объёмы схемы ↔ акт), `render` (PNG), `mcp_server` (MCP stdio/http) |
 | `config/cad_template_corp_A.yaml` | Корпоративный шаблон `corp-A/v4`: 8 слоёв, белый список блоков, стили, поля штампа, масштаб 1:100, допуск сверки ±5 % |
 | `drawings/`, `scripts/make_demo_dxf.py` | Демо-чертёж A1 с заложенными дефектами оформления и машиночитаемыми объёмами; генератор + PNG-предпросмотр |
@@ -245,6 +248,9 @@ python3 -m pto_agent cad impact --batch out/cad/batch/batch_summary.json \
         --summary out/summary.json --out out/cad/impact --with-background
 python3 -m pto_agent cad impact --acts data/demo/acts/acts.json \
         --summary out/summary.json --out out/cad/portfolio
+# внешний обмер по MCP (чужой сервер меряет, мы сверяем) — self-check на своём сервере
+python3 -m pto_agent cad takeoff-external --config config/external_takeoff.example.yaml \
+        --pdf drawings/korpus2_plan_v1.dxf --file drawings/korpus2_plan_v1.dxf --out out/cad/external
 python3 scripts/make_demo_retro.py && python3 scripts/make_demo_acts.py   # ретро-выпуск
 
 # полный цикл MVP агента (сверка → черновик КС-2 → отчёт → аудит)
@@ -318,6 +324,10 @@ psql -d pto_agent -f db/002_transparency_llm.sql
 Правило простое: **лицензия сильнее звёзд**. В MIT-поставку не попадает ни строчки AGPL-кода
 и кода без лицензии; такие проекты либо остаются внешним процессом, либо дают только идею.
 Проверяется автоматически:
+
+Шаг 1 дорожной карты сделан: адаптер `pto_agent/cad/external_takeoff.py`, CLI
+`python3 -m pto_agent cad takeoff-external` и 15-й MCP-инструмент `external_takeoff` — агент сам
+зовёт чужой обмер и сверяет его с нашим чертежом; чужой код остаётся за границей протокола.
 
 ```bash
 python3 scripts/check_analogues.py --offline    # структура и политика, без сети (то же делает CI)

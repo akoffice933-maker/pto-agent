@@ -22,6 +22,8 @@ from ..impact import assess_impact, impact_chart, write_impact_xlsx
 from ..portfolio import (assess_portfolio, load_acts, write_portfolio_reports)
 from .diff import diff_drawings
 from .drawing import Drawing
+from .external_takeoff import (align, load_config, local_positions_from_dxf,
+                              local_positions_from_summary, run_external_takeoff)
 from .ops import OPERATIONS, apply_operations, history_entry, validate_operations
 from .redline import plan_from_discrepancies
 from .render import render_png
@@ -327,6 +329,37 @@ def t_takeoff(args, ctx):
         out["comparison"] = compare_takeoff(items, lines,
                                             pct=float(args.get("tolerance_pct") or 5))
     return out
+
+
+@tool("external_takeoff",
+      "Обмер чужим MCP-сервером (PDF, экспорт из BIM, IFC): вызов по конфигу, приведение "
+      "ответа к нашим позициям и сверка с нашим обмером или сметой. Код внешнего сервера "
+      "не встраивается — только вызов по протоколу; для AGPL-обмеров нужен режим "
+      "«отдельный сервис» (ack_separate_service).",
+      {"type": "object", "properties": {
+          "config_path": {"type": "string",
+                          "description": "JSON/YAML: транспорт, команда/url, инструмент, лицензия"},
+          "file_path": {"type": "string", "description": "файл, который мерит внешний сервер"},
+          "drawing_path": {"type": "string", "description": "наш DXF для сверки объёмов"},
+          "summary_path": {"type": "string", "description": "out/summary.json для сверки со сметой"},
+          "tolerance_pct": {"type": "number", "default": 5},
+          "ack_separate_service": {"type": "boolean", "default": False,
+                                   "description": "подтверждение режима «отдельный сервис» (AGPL)"}},
+       "required": ["config_path", "file_path"]})
+def t_external_takeoff(args, ctx):
+    cfg = load_config(_p(args, "config_path"))
+    report = run_external_takeoff(cfg, _p(args, "file_path"),
+                                  ack_separate_service=bool(args.get("ack_separate_service")))
+    local = None
+    if args.get("drawing_path"):
+        local = local_positions_from_dxf(Drawing.open(_p(args, "drawing_path")))
+    elif args.get("summary_path") and Path(args["summary_path"]).exists():
+        local = local_positions_from_summary(
+            json.loads(Path(args["summary_path"]).read_text(encoding="utf-8")))
+    if local is not None:
+        report["alignment"] = align(report["positions"], local,
+                                    pct=float(args.get("tolerance_pct") or 5))
+    return report
 
 
 @tool("cad_diff",
