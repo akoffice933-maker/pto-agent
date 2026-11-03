@@ -1,0 +1,16 @@
+# HTTP-транспорт MCP в контейнере. Инспектор: http://localhost:8765/
+services:
+  pto-cad-mcp:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: pto-agent-mcp:0.6
+    ports:
+      - "8765:8765"
+    environment:
+      PTO_MCP_BASE_DIR: /app
+      PTO_MCP_TRANSPORT: http
+    volumes:
+      # журнал аудита и отчёты — на хосте, чтобы их видел инженер
+      - ../out:/app/out
+    restart: unless-stopped

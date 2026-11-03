@@ -1,0 +1,12 @@
+{
+  "servers": {
+    "pto-cad": {
+      "type": "stdio",
+      "command": "python3",
+      "args": ["-m", "pto_agent.mcp_server", "--base-dir", "${workspaceFolder}"],
+      "env": {
+        "PTO_MCP_BASE_DIR": "${workspaceFolder}"
+      }
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "pto-cad": {
+      "command": "python3",
+      "args": ["-m", "pto_agent.mcp_server", "--base-dir", "${PROJECT_DIR}"],
+      "env": {
+        "PTO_MCP_BASE_DIR": "${PROJECT_DIR}"
+      }
+    }
+  }
+}
