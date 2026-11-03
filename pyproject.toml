@@ -7,7 +7,7 @@ name = "pto-agent"
 version = "0.6.0"
 description = "ИИ-агент ПТО: сверка КС-2 и объёмов, распознавание выпуска ИД, деньги под риском, MCP-инструменты"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "ПТО-агент" }]
 keywords = ["ПТО", "КС-2", "строительство", "MCP", "CAD", "DXF", "redline"]

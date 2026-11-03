@@ -9,7 +9,10 @@ data/demo/retro/
 data/demo/photo_scan.png
 drawings/*_scan.png
 
-# ── python ──────────────────────────────────────────────────────────────
+# ── python и кэши инструментов ──────────────────────────────────────────
+.cache/
+.config/
+.local/
 __pycache__/
 *.py[cod]
 .venv/

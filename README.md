@@ -1,7 +1,7 @@
 # ИИ-агент ПТО
 
 [![CI](https://github.com/akoffice933-maker/pto-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/akoffice933-maker/pto-agent/actions/workflows/ci.yml)
-![Python](https://img.shields.io/badge/python-3.10%20%7C%203.12-blue)
+![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue)
 ![MCP](https://img.shields.io/badge/MCP-2025--06--18-1F3864)
 ![Tests](https://img.shields.io/badge/tests-156%20passed-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -74,7 +74,7 @@ git clone https://github.com/akoffice933-maker/pto-agent.git
 ```
 
 Что настроено: `.gitignore` (артефакты прогонов и тяжёлые демо-сканы в git не едут —
-генерируются скриптами), `LICENSE` (MIT), CI на GitHub Actions: `unit` на Python 3.10/3.12 →
+генерируются скриптами), `LICENSE` (MIT), CI на GitHub Actions: `unit` на Python 3.11/3.12 →
 `e2e` со сквозным прогоном (выпуск → деньги → дашборд) → сборка Docker-образа.
 Чтобы запушить в свой форк: `./scripts/publish_github.sh git@github.com:ВАШ_АККАУНТ/pto-agent.git`.
 
