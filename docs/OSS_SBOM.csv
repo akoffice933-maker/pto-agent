@@ -1,0 +1,24 @@
+component,version,license,usage_type,in_delivery,source_url,notes
+openpyxl,3.1.5,MIT,library,yes,https://openpyxl.readthedocs.io,чтение и запись XLSX
+python-docx,1.1.2,MIT,library,yes,https://python-docx.readthedocs.io,генерация DOCX
+PyYAML,6.0.3,MIT,library,yes,https://pyyaml.org,конфиг маршрутизации и фронтматтер нормативов
+pydantic,2.14.1,MIT,library,yes,https://docs.pydantic.dev,валидация схем
+pytest,9.0.3,MIT,dev_dependency,no,https://pytest.org,автотесты
+ezdxf,1.4.5,MIT,library,yes,https://ezdxf.mozman.at,"headless чтение/запись DXF, bbox, рендер через addons.drawing"
+matplotlib,3.10.9,PSF-based (BSD-compatible),library,yes,https://matplotlib.org,растровый предпросмотр листа и фрагмента
+numpy,2.3.5,BSD-3-Clause,library,yes,https://numpy.org,маски чернил и анализ скана
+scipy,1.17.1,BSD-3-Clause,library,yes,https://scipy.org,"морфология маски, склейка штрихов (ndimage)"
+Pillow,12.3.0,MIT-CMU (HPND),library,yes,https://python-pillow.org,"чтение сканов, нарезка фрагментов, PNG-фрагменты для модели"
+pymupdf,—,AGPL-3.0/коммерческая,excluded,no,https://pypi.org/project/PyMuPDF/,"нужен для PDF; в поставку не берём без юридической проверки — схема выпускается в DXF+PNG"
+MCP (Model Context Protocol) spec,2025-06-18,спецификация (без кода),protocol,no,https://modelcontextprotocol.io,"реализация JSON-RPC 2.0 на stdlib, без SDK"
+ai-pmo-skills,HEAD (2026-11),MIT,methodology_only,no,https://github.com/alexgrebeshok-coder/ai-pmo-skills,"формат SKILL.md и чек-лист приёмки КС-2; код не копировался"
+DDC_Skills,HEAD (2026-11),MIT,architecture_reference,no,https://github.com/datadrivenconstruction,"идея навыков с контрактом вход/выход"
+Autocad-MCP,HEAD (2026-11),MIT,architecture_reference,no,https://github.com/U-C4N/Autocad-MCP,"схема MCP-инструментов, headless-режим"
+cad-ai-agent,HEAD (2026-11),Apache-2.0,architecture_reference,no,https://github.com/jeremylongshore/cad-ai-agent,"паттерн безопасного редактирования с подтверждением"
+Python,3.11+,PSF-2.0,runtime,yes,https://python.org,среда исполнения
+construction-ai-core,—,NO LICENSE,excluded,no,—,"код не используется: отсутствует файл лицензии"
+moge-document-expertise-ai,—,NO LICENSE,excluded,no,—,"код не используется: отсутствует файл лицензии"
+AGPL/GPL components,—,AGPL/GPL-3.0,excluded,no,—,"в поставку не включаются (в т.ч. graph-серверы под AGPL)"
+opencv-python,4.11.0,Apache-2.0,installed_unused,no,https://opencv.org,"установлен в песочнице, в коде не используется — в поставку не входит"
+Qwen2.5-VL-32B-Instruct,—,Apache-2.0,model_dependency,no,https://huggingface.co/Qwen,"локальная VL-модель через vLLM; запускается в контуре заказчика, в поставку не входит"
+vLLM,—,Apache-2.0,runtime_service,no,https://docs.vllm.ai,"OpenAI-совместимый сервер инференса для локальной VL-модели"

@@ -1,0 +1,789 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ПТО-контроль · дашборд руководителя</title>
+<style>
+  :root {
+    --navy:#1F3864; --blue:#2E5C9A; --accent:#C0502A; --ok:#2E7D5B;
+    --warn:#B7791F; --info:#4A6FA5; --bg:#F4F6FA; --card:#FFFFFF;
+    --border:#DCE3EE; --text:#1E2430; --mut:#6B7688;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+        font:15px/1.5 -apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif; }
+  .topbar { background:var(--navy); color:#fff; padding:18px 28px 16px; }
+  .topbar h1 { margin:0; font-size:22px; letter-spacing:.2px; }
+  .topbar .crumbs { font-size:13px; color:#B8C7DF; margin-top:4px; }
+  .topbar .right { float:right; text-align:right; font-size:12.5px; color:#B8C7DF; }
+  .badge-demo { display:inline-block; background:#C0502A; color:#fff; font-size:11px;
+                 font-weight:700; padding:2px 8px; border-radius:10px; letter-spacing:.4px; }
+  .wrap { max-width:1240px; margin:0 auto; padding:0 28px 60px; }
+  nav.tabs { position:sticky; top:0; z-index:5; background:var(--bg); padding:12px 0 10px;
+             border-bottom:1px solid var(--border); margin-bottom:20px; }
+  nav.tabs a { display:inline-block; margin-right:18px; color:var(--mut); text-decoration:none;
+               font-size:13.5px; padding:4px 0; border-bottom:2px solid transparent; }
+  nav.tabs a:hover { color:var(--navy); border-bottom-color:var(--navy); }
+  section { margin-bottom:34px; }
+  h2 { font-size:18px; margin:0 0 4px; color:var(--navy); }
+  .hint { font-size:12.5px; color:var(--mut); margin:0 0 14px; }
+  .cards { display:grid; grid-template-columns:repeat(5,1fr); gap:14px; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:14px 16px; }
+  .card .k { font-size:12px; color:var(--mut); text-transform:uppercase; letter-spacing:.5px; }
+  .card .v { font-size:26px; font-weight:700; color:var(--navy); margin:6px 0 2px; }
+  .card .d { font-size:12.5px; color:var(--mut); }
+  .card .d b { color:var(--text); }
+  .cards.four { grid-template-columns:repeat(4,1fr); }
+  .card.alert-card { border-left:4px solid var(--accent); }
+  .strip { display:flex; align-items:baseline; gap:14px; flex-wrap:wrap;
+            background:linear-gradient(90deg,#FDF1EC,#FFFFFF); border:1px solid #F0D3C6;
+            border-left:4px solid var(--accent); border-radius:10px; padding:13px 16px; }
+  .strip-k { font-size:12.5px; color:var(--mut); text-transform:uppercase; letter-spacing:.4px; }
+  .strip-v { font-size:22px; font-weight:700; color:var(--accent); }
+  .strip-d { font-size:13px; color:var(--text); }
+  .strip a { margin-left:auto; text-decoration:none; }
+  .card.ok-card { border-left:4px solid var(--ok); }
+  table.inner { font-size:12.5px; }
+  table.inner th { padding:7px 8px; font-size:11px; }
+  table.inner td { padding:7px 8px; }
+  table { width:100%; border-collapse:collapse; background:var(--card);
+           border:1px solid var(--border); border-radius:10px; overflow:hidden; font-size:13.5px; }
+  th { background:#EDF1F8; color:var(--navy); text-align:left; font-weight:700;
+        padding:9px 10px; font-size:12px; text-transform:uppercase; letter-spacing:.3px;
+        border-bottom:1px solid var(--border); }
+  td { padding:9px 10px; border-bottom:1px solid #EEF1F7; vertical-align:top; }
+  tr:last-child td { border-bottom:none; }
+  tfoot td { background:#F7F9FC; font-weight:700; border-top:2px solid var(--border); }
+  tr.row-risk td { background:#FDF6F3; }
+  .num { text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .strong { font-weight:700; color:var(--navy); }
+  .mono { font-family:"SFMono-Regular",Consolas,"Liberation Mono",monospace; font-size:12.5px; }
+  .small { font-size:12.5px; }
+  .mut { color:var(--mut); }
+  .sub { font-size:12px; color:var(--mut); margin-top:2px; }
+  .nowrap { white-space:nowrap; }
+  .ok-t { color:var(--ok); }
+  .wip-t { color:var(--warn); }
+  .badge { display:inline-block; font-size:11px; font-weight:700; padding:2px 8px;
+            border-radius:10px; white-space:nowrap; }
+  .b-ok { background:#E4F2EB; color:#1F6347; }
+  .b-active { background:#E6EDF8; color:#22467B; }
+  .b-risk { background:#FBE7E0; color:#9C3A1B; }
+  .b-wait { background:#EDF0F5; color:#5D6878; }
+  .b-warn { background:#FBF0DA; color:#8A5A10; }
+  .b-info { background:#E9EFF8; color:#3B5876; }
+  .bar { display:inline-block; width:120px; height:9px; background:#E8EDF5;
+          border-radius:5px; overflow:hidden; vertical-align:middle; position:relative; }
+  .bar-done { display:block; height:100%; border-radius:5px 0 0 5px; }
+  .bar-wip { display:block; height:100%; background:repeating-linear-gradient(
+              45deg,#C9A227,#C9A227 3px,#E4D08A 3px,#E4D08A 6px); }
+  .bar-cell { white-space:nowrap; }
+  .pct { font-size:12px; color:var(--mut); margin-left:8px; }
+  .prog { width:110px; height:8px; background:#E8EDF5; border-radius:5px; overflow:hidden; }
+  .prog-fill { height:100%; }
+  .two { display:grid; grid-template-columns:1.25fr 1fr; gap:18px; }
+  .three { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
+  .panel { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:16px; }
+  .panel h3 { margin:0 0 10px; font-size:14.5px; color:var(--navy); }
+  .kv { display:flex; justify-content:space-between; padding:7px 0; border-bottom:1px dashed #E6EBF3; font-size:13.5px; }
+  .kv:last-child { border-bottom:none; }
+  .kv .k { color:var(--mut); padding-right:12px; }
+  .kv .v { font-weight:700; }
+  .kv .v.small { font-weight:400; text-align:right; max-width:62%; }
+  .alert { display:grid; grid-template-columns:96px 1fr auto; gap:12px; align-items:center;
+            background:var(--card); border:1px solid var(--border); border-left-width:4px;
+            border-radius:8px; padding:10px 12px; margin-bottom:9px; }
+  .a-risk { border-left-color:var(--accent); }
+  .a-warn { border-left-color:var(--warn); }
+  .a-info { border-left-color:var(--info); }
+  .btn-ghost { background:#fff; border:1px solid var(--border); color:var(--navy);
+                border-radius:7px; padding:6px 12px; font-size:12.5px; cursor:pointer; }
+  .btn-ghost:hover { background:#EDF1F8; }
+  .dot { display:inline-block; width:18px; height:18px; line-height:18px; text-align:center;
+          border-radius:50%; font-size:10.5px; color:#fff; font-weight:700; margin-right:4px; }
+  .d-ok { background:var(--ok); }
+  .d-agent { background:var(--blue); }
+  .d-block { background:var(--accent); }
+  .note { background:#FFF8E9; border:1px solid #F0DDAE; border-radius:8px; padding:12px 14px;
+           font-size:13px; color:#6B5622; }
+  footer { border-top:1px solid var(--border); margin-top:26px; padding-top:16px;
+            font-size:12px; color:var(--mut); }
+  @media (max-width:1000px) { .cards, .cards.four { grid-template-columns:repeat(2,1fr); }
+    .two, .three { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="right">
+    Данные на 02.11.2026 09:40<br>
+    Объект: <b style="color:#fff">ЖК «Северный», корпус 2</b> · договор Д-142/2026<br>
+    <span class="badge-demo">ДЕМО-ДАННЫЕ</span>
+  </div>
+  <h1>ПТО-контроль — прозрачность и остатки</h1>
+  <div class="crumbs">Срез для руководителя · обновляется автоматически при каждом действии агента и инженера</div>
+</div>
+
+<div class="wrap">
+<nav class="tabs">
+  <a href="#stage">Где мы сейчас</a>
+  <a href="#remainder">Остатки по работам</a>
+  <a href="#money">Деньги по договору</a>
+  <a href="#risk">Деньги под риском</a>
+  <a href="#ai">Прозрачность ИИ</a>
+  <a href="#audit">Журнал действий</a>
+  <a href="#alerts">Требует решения</a>
+</nav>
+
+<!-- ================== КАРТОЧКИ ================== -->
+<section>
+  <div class="cards">
+    <div class="card">
+      <div class="k">Освоено по объёмам</div>
+      <div class="v">52,6 %</div>
+      <div class="d">с учётом выполненных,<br>но не закрытых: <b>56,1 %</b></div>
+    </div>
+    <div class="card alert-card">
+      <div class="k">Остаток по смете</div>
+      <div class="v">76 768 000 ₽</div>
+      <div class="d">по 9 незавершённым видам работ</div>
+    </div>
+    <div class="card">
+      <div class="k">Закрыто актами КС-2</div>
+      <div class="v">91 934 000 ₽</div>
+      <div class="d">подписано заказчиком<br>предъявлено на проверке: <b>24 780 000 ₽</b></div>
+    </div>
+    <div class="card ok-card">
+      <div class="k">Готово к предъявлению</div>
+      <div class="v">6 050 000 ₽</div>
+      <div class="d">выполнено, но не закрыто актом —<br>не ждёт работ, ждёт документов</div>
+    </div>
+    <div class="card alert-card">
+      <div class="k">Критичных расхождений</div>
+      <div class="v">6</div>
+      <div class="d">из них без ИД: <b>316 позиций</b><br>на сумму 18,4 млн ₽</div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="strip">
+    <span class="strip-k">Сколько под вопросом (3 акта объекта)</span>
+    <span class="strip-v">2 091 000 ₽</span>
+    <span class="strip-d">это 5,43 % проверенной суммы и 5,43 % всех актов · проверено 100 % предъявленного</span>
+    <a class="btn-ghost" href="#risk">Раскрыть по позициям</a>
+  </div>
+</section>
+
+<!-- ================== ЭТАПЫ ================== -->
+<section id="stage">
+  <h2>Где мы сейчас: стадии проекта и стадии объекта</h2>
+  <p class="hint">Одна и та же страница отвечает на два вопроса: на каком этапе внедрение системы и в каком состоянии каждый вид работ на объекте.</p>
+  <table>
+    <thead>
+      <tr><th style="width:74px">Готовность</th><th>Этап</th><th style="width:150px">Сроки</th>
+          <th style="width:130px">Прогресс</th><th>Факт (что реально сделано)</th><th>Что дальше</th></tr>
+    </thead>
+    <tbody>
+    <tr>
+      <td><b>100 %</b></td>
+      <td><b>Этап 0</b><div class="sub">Обследование, сбор корпуса, golden set</div></td>
+      <td class="mono nowrap">10.11–05.12.2026</td>
+      <td><div class="prog"><div class="prog-fill" style="width:100%;background:#2E7D5B"></div></div></td>
+      <td class="small">Собрано 74 из 100 пакетов, размечено 12 актов КС-2, 20 норм-вопросов</td>
+      <td class="small mut">Разметка: 138 из 360 единиц</td>
+    </tr>
+    <tr>
+      <td><b>72 %</b></td>
+      <td><b>MVP</b><div class="sub">КС-2, сверка объёмов, комплектность, АОСР</div></td>
+      <td class="mono nowrap">08.12.2026–27.02.2027</td>
+      <td><div class="prog"><div class="prog-fill" style="width:72%;background:#2E5C9A"></div></div></td>
+      <td class="small">Сервис расчётов и сверки на golden set: recall ошибок 0,91 (порог 0,95)</td>
+      <td class="small mut">Доработка: recall 0,91 → 0,95, АОСР в работе</td>
+    </tr>
+    <tr>
+      <td><b>0 %</b></td>
+      <td><b>Пилот</b><div class="sub">1–2 объекта, 3–5 инженеров</div></td>
+      <td class="mono nowrap">02.03–10.04.2027</td>
+      <td><div class="prog"><div class="prog-fill" style="width:0%;background:#C9D2E0"></div></div></td>
+      <td class="small">Не начат — ждёт готовности MVP</td>
+      <td class="small mut">Подготовить регламент HITL и обучение</td>
+    </tr>
+    <tr>
+      <td><b>0 %</b></td>
+      <td><b>Версия 1.0</b><div class="sub">1С, реестры, графики, входной контроль</div></td>
+      <td class="mono nowrap">13.04–25.06.2027</td>
+      <td><div class="prog"><div class="prog-fill" style="width:0%;background:#C9D2E0"></div></div></td>
+      <td class="small">Не начат</td>
+      <td class="small mut">Согласовать доступ к 1С (тестовый контур)</td>
+    </tr>
+    <tr>
+      <td><b>0 %</b></td>
+      <td><b>CAD + 2.0</b><div class="sub">Исполнительные схемы, мультиагентность, BIM</div></td>
+      <td class="mono nowrap">28.06–24.12.2027</td>
+      <td><div class="prog"><div class="prog-fill" style="width:0%;background:#C9D2E0"></div></div></td>
+      <td class="small">Не начат</td>
+      <td class="small mut">Собрать 20 redline-кейсов на этапе 0</td>
+    </tr></tbody>
+  </table>
+</section>
+
+<!-- ================== ОСТАТКИ ================== -->
+<section id="remainder">
+  <h2>Остаточное количество работ — полный вывод</h2>
+  <p class="hint">Остаток = смета − подписано КС-2 − выполнено, но не закрыто актом. Жёлтая штриховка — работы выполнены на объекте, но ещё не оформлены документально.</p>
+  <table>
+    <thead>
+      <tr>
+        <th style="width:44px">№</th><th>Вид работ</th>
+        <th class="num">Смета</th><th class="num">Подписано</th><th class="num">Выполнено,<br>не закрыто</th>
+        <th class="num">Остаток</th><th class="num">Остаток, ₽</th>
+        <th style="width:210px">Выполнение</th><th style="width:120px">Статус</th>
+      </tr>
+    </thead>
+    <tbody>
+    <tr class="">
+      <td class="mono">01</td>
+      <td>Земляные работы</td>
+      <td class="num">8 600</td>
+      <td class="num ok-t">8 600</td>
+      <td class="num wip-t">0</td>
+      <td class="num strong">0</td>
+      <td class="num">0</td>
+      <td class="bar-cell"><span class="bar"><span class="bar-done" style="width:100.0%;background:#2E7D5B"></span></span><span class="pct">100,0 %</span></td>
+      <td><span class="badge b-ok">Завершено</span></td>
+    </tr>
+    <tr class="">
+      <td class="mono">02</td>
+      <td>Бетонная подготовка</td>
+      <td class="num">420</td>
+      <td class="num ok-t">420</td>
+      <td class="num wip-t">0</td>
+      <td class="num strong">0</td>
+      <td class="num">0</td>
+      <td class="bar-cell"><span class="bar"><span class="bar-done" style="width:100.0%;background:#2E7D5B"></span></span><span class="pct">100,0 %</span></td>
+      <td><span class="badge b-ok">Завершено</span></td>
+    </tr>
+    <tr class="row-risk">
+      <td class="mono">03</td>
+      <td>Монолитные конструкции (надземная часть)</td>
+      <td class="num">3 450</td>
+      <td class="num ok-t">2 140</td>
+      <td class="num wip-t">180</td>
+      <td class="num strong">1 130</td>
+      <td class="num">14 012 000</td>
+      <td class="bar-cell"><span class="bar"><span class="bar-done" style="width:62.0%;background:#C0502A"></span><span class="bar-wip" style="width:5.2%"></span></span><span class="pct">62,0 %</span></td>
+      <td><span class="badge b-risk">Отставание</span></td>
+    </tr>
+    <tr class="">
+      <td class="mono">04</td>
+      <td>Армирование</td>
+      <td class="num">610</td>
+      <td class="num ok-t">402</td>
+      <td class="num wip-t">24</td>
+      <td class="num strong">184</td>
+      <td class="num">14 352 000</td>
+      <td class="bar-cell"><span class="bar"><span class="bar-done" style="width:65.9%;background:#2E5C9A"></span><span class="bar-wip" style="width:3.9%"></span></span><span class="pct">65,9 %</span></td>
+      <td><span class="badge b-active">В работе</span></td>
+    </tr>
+    <tr class="">
+      <td class="mono">05</td>
+      <td>Гидроизоляция фундаментов</td>
+      <td class="num">4 200</td>
+      <td class="num ok-t">4 200</td>
+      <td class="num wip-t">0</td>
+      <td class="num strong">0</td>
+      <td class="num">0</td>
+      <td class="bar-cell"><span class="bar"><span class="bar-done" style="width:100.0%;background:#2E7D5B"></span></span><span class="pct">100,0 %</span></td>
+      <td><span class="badge b-ok">Завершено</span></td>
+    </tr>
+    <tr class="">
+      <td class="mono">06</td>
+      <td>Кладка наружных стен</td>
+      <td class="num">1 850</td>
+      <td class="num ok-t">940</td>
+      <td class="num wip-t">60</td>
+      <td class="num strong">850</td>
+      <td class="num">7 565 000</td>
+      <td class="bar-cell"><span class="bar"><span class="bar-done" style="width:50.8%;background:#2E5C9A"></span><span class="bar-wip" style="width:3.2%"></span></span><span class="pct">50,8 %</span></td>
+      <td><span class="badge b-active">В работе</span></td>
+    </tr>
+    <tr class="row-risk">
+      <td class="mono">07</td>
+      <td>Монтаж трубопроводов ОВ</td>
+      <td class="num">5 400</td>
+      <td class="num ok-t">2 650</td>
+      <td class="num wip-t">320</td>
+      <td class="num strong">2 430</td>
+      <td class="num">4 495 500</td>
+      <td class="bar-cell"><span class="bar"><span class="bar-done" style="width:49.1%;background:#C0502A"></span><span class="bar-wip" style="width:5.9%"></span></span><span class="pct">49,1 %</span></td>
+      <td><span class="badge b-risk">Отставание</span></td>
+    </tr>
+    <tr class="">
+      <td class="mono">08</td>
+      <td>Монтаж систем вентиляции</td>
+      <td class="num">2 100</td>
+      <td class="num ok-t">780</td>
+      <td class="num wip-t">130</td>
+      <td class="num strong">1 190</td>
+      <td class="num">4 046 000</td>
+      <td class="bar-cell"><span class="bar"><span class="bar-done" style="width:37.1%;background:#2E5C9A"></span><span class="bar-wip" style="width:6.2%"></span></span><span class="pct">37,1 %</span></td>
+      <td><span class="badge b-active">В работе</span></td>
+    </tr>
+    <tr class="">
+      <td class="mono">09</td>
+      <td>Электромонтажные работы</td>
+      <td class="num">18 600</td>
+      <td class="num ok-t">6 300</td>
+      <td class="num wip-t">900</td>
+      <td class="num strong">11 400</td>
+      <td class="num">4 788 000</td>
+      <td class="bar-cell"><span class="bar"><span class="bar-done" style="width:33.9%;background:#2E5C9A"></span><span class="bar-wip" style="width:4.8%"></span></span><span class="pct">33,9 %</span></td>
+      <td><span class="badge b-active">В работе</span></td>
+    </tr>
+    <tr class="">
+      <td class="mono">10</td>
+      <td>Кровельные работы</td>
+      <td class="num">3 100</td>
+      <td class="num ok-t">590</td>
+      <td class="num wip-t">0</td>
+      <td class="num strong">2 510</td>
+      <td class="num">6 149 500</td>
+      <td class="bar-cell"><span class="bar"><span class="bar-done" style="width:19.0%;background:#9AA6B8"></span></span><span class="pct">19,0 %</span></td>
+      <td><span class="badge b-wait">Не начато</span></td>
+    </tr>
+    <tr class="">
+      <td class="mono">11</td>
+      <td>Отделочные работы</td>
+      <td class="num">12 400</td>
+      <td class="num ok-t">0</td>
+      <td class="num wip-t">0</td>
+      <td class="num strong">12 400</td>
+      <td class="num">16 740 000</td>
+      <td class="bar-cell"><span class="bar"><span class="bar-done" style="width:0.0%;background:#9AA6B8"></span></span><span class="pct">0,0 %</span></td>
+      <td><span class="badge b-wait">Не начато</span></td>
+    </tr>
+    <tr class="">
+      <td class="mono">12</td>
+      <td>Благоустройство</td>
+      <td class="num">2 800</td>
+      <td class="num ok-t">0</td>
+      <td class="num wip-t">0</td>
+      <td class="num strong">2 800</td>
+      <td class="num">4 620 000</td>
+      <td class="bar-cell"><span class="bar"><span class="bar-done" style="width:0.0%;background:#9AA6B8"></span></span><span class="pct">0,0 %</span></td>
+      <td><span class="badge b-wait">Не начато</span></td>
+    </tr></tbody>
+    <tfoot>
+      <tr>
+        <td colspan="2">Итого по объекту, ₽</td>
+        <td class="num">174 752 000</td>
+        <td class="num">91 934 000</td>
+        <td class="num">6 050 000</td>
+        <td class="num">—</td>
+        <td class="num">76 768 000</td>
+        <td class="num">52,6 %</td>
+        <td class="small mut">3 из 12<br>завершено</td>
+      </tr>
+    </tfoot>
+  </table>
+</section>
+
+<!-- ================== ДЕНЬГИ ================== -->
+<section id="money">
+  <h2>Деньги по договору</h2>
+  <p class="hint">Сумма в ₽ без НДС, если не указано иное. «Получено» — фактическое поступление от заказчика.</p>
+  <div class="two">
+    <div class="panel">
+      <h3>План / факт освоения по месяцам, млн ₽</h3>
+      <svg viewBox="-40 0 690 210" width="100%" height="230" role="img"
+           aria-label="Столбчатая диаграмма план/факт по месяцам">
+        <line x1="0" y1="180.0" x2="640" y2="180.0" stroke="#E4E9F2"/><text x="-6" y="184.0" font-size="10" fill="#8894A6" text-anchor="end">0</text><line x1="0" y1="137.5" x2="640" y2="137.5" stroke="#E4E9F2"/><text x="-6" y="141.5" font-size="10" fill="#8894A6" text-anchor="end">4</text><line x1="0" y1="95.0" x2="640" y2="95.0" stroke="#E4E9F2"/><text x="-6" y="99.0" font-size="10" fill="#8894A6" text-anchor="end">8</text><line x1="0" y1="52.5" x2="640" y2="52.5" stroke="#E4E9F2"/><text x="-6" y="56.5" font-size="10" fill="#8894A6" text-anchor="end">12</text><line x1="0" y1="10.0" x2="640" y2="10.0" stroke="#E4E9F2"/><text x="-6" y="14.0" font-size="10" fill="#8894A6" text-anchor="end">16</text><rect x="19.2" y="114.1" width="29.9" height="65.9" fill="#8FA6C8" rx="2"/><rect x="51.2" y="116.2" width="29.9" height="63.8" fill="#1F3864" rx="2"/><text x="35.2" y="198" font-size="11" fill="#5A5A5A" text-anchor="middle">май</text><text x="51.2" y="111.2" font-size="10" fill="#1F3864" text-anchor="middle">6,0</text><rect x="125.9" y="90.8" width="29.9" height="89.2" fill="#8FA6C8" rx="2"/><rect x="157.9" y="96.1" width="29.9" height="83.9" fill="#1F3864" rx="2"/><text x="141.9" y="198" font-size="11" fill="#5A5A5A" text-anchor="middle">июн</text><text x="157.9" y="91.1" font-size="10" fill="#1F3864" text-anchor="middle">7,9</text><rect x="232.5" y="72.7" width="29.9" height="107.3" fill="#8FA6C8" rx="2"/><rect x="264.5" y="80.1" width="29.9" height="99.9" fill="#1F3864" rx="2"/><text x="248.5" y="198" font-size="11" fill="#5A5A5A" text-anchor="middle">июл</text><text x="264.5" y="75.1" font-size="10" fill="#1F3864" text-anchor="middle">9,4</text><rect x="339.2" y="56.8" width="29.9" height="123.2" fill="#8FA6C8" rx="2"/><rect x="371.2" y="71.6" width="29.9" height="108.4" fill="#1F3864" rx="2"/><text x="355.2" y="198" font-size="11" fill="#5A5A5A" text-anchor="middle">авг</text><text x="371.2" y="66.6" font-size="10" fill="#1F3864" text-anchor="middle">10,2</text><rect x="445.9" y="50.4" width="29.9" height="129.6" fill="#8FA6C8" rx="2"/><rect x="477.9" y="83.3" width="29.9" height="96.7" fill="#1F3864" rx="2"/><text x="461.9" y="198" font-size="11" fill="#5A5A5A" text-anchor="middle">сен</text><text x="477.9" y="78.3" font-size="10" fill="#1F3864" text-anchor="middle">9,1</text><rect x="552.5" y="44.0" width="29.9" height="136.0" fill="#8FA6C8" rx="2"/><rect x="584.5" y="99.2" width="29.9" height="80.8" fill="#1F3864" rx="2"/><text x="568.5" y="198" font-size="11" fill="#5A5A5A" text-anchor="middle">окт</text><text x="584.5" y="94.2" font-size="10" fill="#1F3864" text-anchor="middle">7,6</text>
+        <rect x="490" y="2" width="10" height="10" fill="#8FA6C8" rx="2"/>
+        <text x="506" y="11" font-size="11" fill="#5A5A5A">план</text>
+        <rect x="550" y="2" width="10" height="10" fill="#1F3864" rx="2"/>
+        <text x="566" y="11" font-size="11" fill="#5A5A5A">факт</text>
+      </svg>
+    </div>
+    <div class="panel">
+      <h3>Позиция по договору Д-142/2026</h3>
+      <div class="kv"><span class="k">Сумма договора с НДС</span><span class="v">209 702 400 ₽</span></div>
+      <div class="kv"><span class="k">Сметная стоимость работ</span><span class="v">174 752 000 ₽</span></div>
+      <div class="kv"><span class="k">Закрыто КС-2 (подписано)</span><span class="v">91 934 000 ₽</span></div>
+      <div class="kv"><span class="k">Предъявлено, на проверке</span><span class="v">24 780 000 ₽</span></div>
+      <div class="kv"><span class="k">Остаток к предъявлению</span><span class="v">58 038 000 ₽</span></div>
+      <div class="kv"><span class="k">Оплачено заказчиком</span><span class="v" style="color:#2E7D5B">79 063 240 ₽</span></div>
+      <div class="kv"><span class="k">Дебиторка (закрыто − оплачено)</span><span class="v" style="color:#C0502A">12 870 760 ₽</span></div>
+      <div class="kv"><span class="k">НДС к уплате с закрытых</span><span class="v">18 386 800 ₽</span></div>
+      <div class="kv"><span class="k">Под риском по актам объекта</span><span class="v" style="color:#C0502A">2 091 000 ₽</span></div>
+      <p class="hint" style="margin:12px 0 0">Риск: 6 050 000 ₽ выполнено, но не может быть предъявлено из-за неполной ИД — это прямая задержка выручки.
+      Сколько именно стоит каждый спор с актом и по каким актам — в разделе <a href="#risk">«Деньги под риском»</a>.</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="risk">
+  <h2>Деньги под риском: чего стоит спор с актом</h2>
+  <p class="hint">Выпуск распознан, каждая пометка инженера сверена с КС-2 и сметой, спор переведён в рубли
+  по цене позиции и разложен по актам объекта. Источник: <span class="mono">out/cad/portfolio/portfolio.json</span> · расчёт от 03.11.2026.</p>
+  
+  <div class="cards four">
+    <div class="card alert-card">
+      <div class="k">Под риском по актам</div>
+      <div class="v">2 091 000 ₽</div>
+      <div class="d">5,43 % проверенной суммы ·
+      5,43 % всех актов<br>
+      позиций: <b>4</b> · листов: <b>55</b></div>
+    </div>
+    <div class="card">
+      <div class="k">Проверено выпуском</div>
+      <div class="v">100 %</div>
+      <div class="d">38 522 600 ₽ из 38 522 600 ₽<br>
+      актов проверено: <b>3 из 3</b></div>
+    </div>
+    <div class="card ok-card">
+      <div class="k">Без проверки не осталось</div>
+      <div class="v">0 ₽</div>
+      <div class="d">все 3 акта прошли выпуск, включая ретро<br>непроверенных актов на объекте не осталось</div>
+    </div>
+    <div class="card">
+      <div class="k">Фон ПТО (не из выпуска)</div>
+      <div class="v">9 349 600 ₽</div>
+      <div class="d">расхождения объекта, известные до сканов;<br>с выпуском <b>не складываются</b></div>
+    </div>
+  </div>
+  
+  <div class="two" style="margin-top:16px">
+    <div class="panel">
+      <h3>Акты объекта: что проверено и что под вопросом</h3>
+      <table class="inner">
+        <thead><tr><th>Акт</th><th>Месяц</th><th class="num">Сумма, ₽</th>
+              <th class="num">Под риском</th><th class="num">Доля</th><th>Статус</th></tr></thead>
+        <tbody>
+    <tr class="row-risk">
+      <td class="mono nowrap">КС-2 №35</td>
+      <td class="small">сентябрь 2026</td>
+      <td class="num">4 168 000</td>
+      <td class="num strong">216 200</td>
+      <td class="num">5,19 %</td>
+      <td><span class="badge b-risk">споры</span></td>
+    </tr>
+    <tr class="row-risk">
+      <td class="mono nowrap">КС-2 №37</td>
+      <td class="small">сентябрь 2026</td>
+      <td class="num">248 000</td>
+      <td class="num strong">24 800</td>
+      <td class="num">10 %</td>
+      <td><span class="badge b-risk">споры</span></td>
+    </tr>
+    <tr class="row-risk">
+      <td class="mono nowrap">КС-2 №38</td>
+      <td class="small">октябрь 2026</td>
+      <td class="num">34 106 600</td>
+      <td class="num strong">1 850 000</td>
+      <td class="num">5,42 %</td>
+      <td><span class="badge b-risk">споры</span></td>
+    </tr></tbody>
+        <tfoot><tr><td colspan="2">Итого 3 акта</td>
+          <td class="num">38 522 600</td>
+          <td class="num">2 091 000</td>
+          <td class="num">5,43 %</td>
+          <td class="small mut">покрытие 100 %</td></tr></tfoot>
+      </table>
+      <p class="hint" style="margin:10px 0 0">Под риском считается только по проверенным актам:
+      у актов без распознанного выпуска стоит «не оценено», а не ноль.</p>
+    </div>
+    <div class="panel">
+      <h3>По месяцам: сколько предъявлено и сколько под вопросом</h3>
+      <table class="inner">
+        <thead><tr><th>Месяц</th><th class="num">Актов</th><th class="num">Сумма, ₽</th>
+              <th class="num">Под риском</th><th class="num">Доля</th></tr></thead>
+        <tbody>
+    <tr>
+      <td class="small nowrap">сентябрь 2026</td>
+      <td class="num">2</td>
+      <td class="num">4 416 000</td>
+      <td class="num strong">241 000</td>
+      <td class="num">5,46 %</td>
+    </tr>
+    <tr>
+      <td class="small nowrap">октябрь 2026</td>
+      <td class="num">1</td>
+      <td class="num">34 106 600</td>
+      <td class="num strong">1 850 000</td>
+      <td class="num">5,42 %</td>
+    </tr></tbody>
+      </table>
+      <p class="hint" style="margin:10px 0 0">График финансирования: деньги под риском
+      уменьшают то, что можно уверенно планировать к поступлению в этом месяце.</p>
+    </div>
+  </div>
+  <div class="two" style="margin-top:16px"><div class="panel"><h3>Где лежат деньги: сумма спора по позициям</h3><svg viewBox="0 0 770 170" style="width:100%;height:auto" role="img" aria-label="Суммы споров по позициям"><text x="200" y="23" font-size="12" fill="#1E2430" text-anchor="end">ФЕР 06-01-001-01</text><rect x="210" y="10" width="102.2" height="18" fill="#C0502A" rx="2"/><text x="261.1" y="23" font-size="11" fill="#fff" text-anchor="middle">2 035</text><rect x="312.2" y="10" width="37.2" height="18" fill="#C3C9D4" rx="2"/><text x="355.4" y="23" font-size="11" fill="#6B7688">740</text><text x="200" y="57" font-size="12" fill="#1E2430" text-anchor="end">ФЕР 08-02-001-01</text><rect x="210" y="44" width="1.6" height="18" fill="#C0502A" rx="2"/><text x="210.8" y="57" font-size="11" fill="#fff" text-anchor="middle">31</text><text x="200" y="91" font-size="12" fill="#1E2430" text-anchor="end">ФЕР 16-02-003-01</text><rect x="210" y="78" width="1.2" height="18" fill="#C0502A" rx="2"/><text x="210.6" y="91" font-size="11" fill="#fff" text-anchor="middle">25</text><rect x="211.2" y="78" width="2.5" height="18" fill="#C3C9D4" rx="2"/><text x="219.7" y="91" font-size="11" fill="#6B7688">50</text><text x="200" y="125" font-size="12" fill="#1E2430" text-anchor="end">ФЕР 06-01-001-02</text><rect x="210.0" y="112" width="430.0" height="18" fill="#C3C9D4" rx="2"/><text x="646.0" y="125" font-size="11" fill="#6B7688">8 560</text><text x="210" y="164" font-size="11" fill="#6B7688">тыс. ₽ спора · тёмное — пометки выпуска, серое — фон ПТО</text></svg></div><div class="panel"><h3>Что не удалось оценить в деньгах</h3><div class="kv"><span class="k">ФЕР 11-01-011-01 · UNIT_MISMATCH</span><span class="v small">сначала пересчёт единиц, потом деньги: смета м², журнал м³<span class="mut"> · повторов 1</span></span></div><div class="kv"><span class="k">— · NOT_IN_ESTIMATE</span><span class="v small">340 м² вне сметы: сумму нужно определять по дополнительному соглашению<span class="mut"> · повторов 1</span></span></div></div></div>
+  <table class="inner" style="margin-top:16px"><thead><tr><th style="width:170px">Позиция</th><th>Наименование и вид спора</th><th class="num" style="width:130px">По выпуску, ₽</th><th class="num" style="width:120px">Фон ПТО, ₽</th><th style="width:230px">Формула</th><th class="num" style="width:90px">Актов/листов</th></tr></thead><tbody>
+    <tr class="row-risk">
+      <td class="mono nowrap">ФЕР 06-01-001-01</td>
+      <td>Устройство фундаментной плиты железобетонной, бетон B25<div class="sub">Завышение против акта — риск отказа заказчика, Подпись «согласовано» под критичным расхождением</div></td>
+      <td class="num strong">2 035 000</td>
+      <td class="num">740 000</td>
+      <td class="small mut">(210 − 200) м³ × 18 500 ₽/м³; (1 300 − 1 240) м³ × 18 500 ₽/м³; 40 м³ × 18 500 ₽/м³</td>
+      <td class="num">2</td>
+    </tr>
+    <tr class="row-risk">
+      <td class="mono nowrap">ФЕР 08-02-001-01</td>
+      <td>Гидроизоляция фундаментной плиты обмазочная<div class="sub">Завышение против акта — риск отказа заказчика</div></td>
+      <td class="num strong">31 200</td>
+      <td class="num">—</td>
+      <td class="small mut">(640 − 600) м² × 780 ₽/м²</td>
+      <td class="num">1</td>
+    </tr>
+    <tr class="row-risk">
+      <td class="mono nowrap">ФЕР 16-02-003-01</td>
+      <td>Прокладка трубопроводов водоснабжения из стальных труб Д 50 мм<div class="sub">Недопредъявлено — деньги не получены, Объём сверх ранее закрытого</div></td>
+      <td class="num strong">24 800</td>
+      <td class="num">49 600</td>
+      <td class="small mut">(200 − 180) м × 1 240 ₽/м; 40 м сверх закрытого × 1 240 ₽/м</td>
+      <td class="num">2</td>
+    </tr>
+    <tr>
+      <td class="mono nowrap">ФЕР 06-01-001-02</td>
+      <td>Устройство фундаментных балок железобетонных<div class="sub">Подпись «согласовано» под критичным расхождением, Предъявлено без подтверждающих документов</div></td>
+      <td class="num strong">—</td>
+      <td class="num">8 560 000</td>
+      <td class="small mut">10 м³ × 21 400 ₽/м³; сумма предъявления без АОСР/схемы</td>
+      <td class="num">1</td>
+    </tr></tbody></table>
+  <div class="note" style="margin-top:16px">
+    <b>Четыре правила, без которых цифра врёт.</b> (1) Один спор считается один раз: пометка «1 300 м³» стоит
+    на каждой итерации листа, но деньги по ней — одни; повторы и листы показываются отдельно.
+    (2) Пометки выпуска и фон ПТО не складываются: второе было известно до сканов.
+    (3) Непроверенный акт — это «не оценено», а не «0 ₽»: ноль читался бы как «там всё чисто».
+    (4) Нет цены или объёма — нет суммы: строка уходит в «не оценено» с причиной.
+    Сумма «под риском» — не «потеряно»: чем закончится спор, решают документы и заказчик.
+  </div>
+</section>
+
+
+<!-- ================== ИИ ================== -->
+<section id="ai">
+  <h2>Прозрачность ИИ: что делает модель, чем платим, как проверяем</h2>
+  <p class="hint">Подключение моделей через API — сменное: локальные модели в контуре заказчика, РФ-облако как второй контур, зарубежные API запрещены политикой для реальных данных.</p>
+  <div class="three" style="margin-bottom:16px">
+    <div class="card">
+      <div class="k">Вызовов моделей за месяц</div>
+      <div class="v">41 260</div>
+      <div class="d">за последние 24 ч: <b>1 840</b><br>
+      с подтверждением человека: <b>214</b> · без участия: <b>1 626</b></div>
+    </div>
+    <div class="card">
+      <div class="k">Стоимость ИИ за месяц</div>
+      <div class="v">34 246 ₽</div>
+      <div class="d">лимит: 60 000 ₽ · использовано <b>57,1 %</b><br>
+      токенов: 61,4 млн вход / 8,9 млн выход</div>
+    </div>
+    <div class="card ok-card">
+      <div class="k">Качество ответов</div>
+      <div class="v">99,4 %</div>
+      <div class="d">ответов с проверенной цитатой<br>
+      заблокировано cite_verify: <b>7</b> · выдуманных ссылок: <b>1</b></div>
+    </div>
+  </div>
+  <table>
+    <thead>
+      <tr><th>Модель / провайдер</th><th class="num">Вызовов</th><th class="num">Стоимость</th>
+          <th style="width:200px">Доля</th><th>Задачи</th><th style="width:110px">Статус</th></tr>
+    </thead>
+    <tbody>
+    <tr>
+      <td><b>vLLM · Qwen2.5-32B-Instruct (on-prem)</b><div class="sub">Локально, контур КТ</div></td>
+      <td class="num">21400</td>
+      <td class="num">—</td>
+      <td class="bar-cell"><span class="bar"><span class="bar-done" style="width:53.3%;background:#2E5C9A"></span></span><span class="pct">53,3 %</span></td>
+      <td class="small">КС-2, АОСР, документы с ПДн и КТ</td>
+      <td><span class="badge b-ok">активен</span></td>
+    </tr>
+    <tr>
+      <td><b>vLLM · Qwen2.5-VL-32B (on-prem)</b><div class="sub">Локально, контур КТ</div></td>
+      <td class="num">6320</td>
+      <td class="num">—</td>
+      <td class="bar-cell"><span class="bar"><span class="bar-done" style="width:15.7%;background:#2E5C9A"></span></span><span class="pct">15,7 %</span></td>
+      <td class="small">Сканы, redline, сертификаты</td>
+      <td><span class="badge b-ok">активен</span></td>
+    </tr>
+    <tr>
+      <td><b>GigaChat Pro (API, РФ-контур)</b><div class="sub">Защищённое облако</div></td>
+      <td class="num">9180</td>
+      <td class="num">9 957 ₽</td>
+      <td class="bar-cell"><span class="bar"><span class="bar-done" style="width:22.9%;background:#2E5C9A"></span></span><span class="pct">22,9 %</span></td>
+      <td class="small">Длинные рассуждения, проверка актов</td>
+      <td><span class="badge b-ok">активен</span></td>
+    </tr>
+    <tr>
+      <td><b>YandexGPT Pro (API, РФ-контур)</b><div class="sub">Защищённое облако</div></td>
+      <td class="num">3260</td>
+      <td class="num">3 215 ₽</td>
+      <td class="bar-cell"><span class="bar"><span class="bar-done" style="width:8.1%;background:#2E5C9A"></span></span><span class="pct">8,1 %</span></td>
+      <td class="small">Резервный провайдер (fallback)</td>
+      <td><span class="badge b-ok">активен</span></td>
+    </tr>
+    <tr>
+      <td><b>OpenRouter / зарубежные API</b><div class="sub">Запрещено политикой</div></td>
+      <td class="num">—</td>
+      <td class="num">—</td>
+      <td class="bar-cell"><span class="bar"><span class="bar-done" style="width:0.0%;background:#2E5C9A"></span></span><span class="pct">—</span></td>
+      <td class="small">Только R&D без реальных данных</td>
+      <td><span class="badge b-risk">запрещён</span></td>
+    </tr></tbody>
+  </table>
+  <div class="three" style="margin-top:14px">
+    <div class="panel"><h3>Задержка ответа</h3>
+      <div class="kv"><span class="k">Средняя</span><span class="v">6,8 с</span></div>
+      <div class="kv"><span class="k">p95</span><span class="v">13,2 с</span></div>
+      <div class="kv"><span class="k">Цель по ТЗ</span><span class="v">≤ 15 с</span></div>
+    </div>
+    <div class="panel"><h3>Контроль и правила</h3>
+      <div class="kv"><span class="k">Запросов вне контура</span><span class="v" style="color:#2E7D5B">0</span></div>
+      <div class="kv"><span class="k">Промптов с версией</span><span class="v">100 %</span></div>
+      <div class="kv"><span class="k">Задач с фиксацией модели</span><span class="v">100 %</span></div>
+    </div>
+    <div class="panel"><h3>Экономия затрат</h3>
+      <div class="kv"><span class="k">Доля рутины на локальных</span><span class="v">67 %</span></div>
+      <div class="kv"><span class="k">Маршрутизация моделей</span><span class="v">−41 % стоимости</span></div>
+      <div class="kv"><span class="k">Кэш повторных запросов</span><span class="v">18 % попаданий</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ================== ЖУРНАЛ ================== -->
+<section id="audit">
+  <h2>Журнал действий: кто, что, на основании чего</h2>
+  <p class="hint">Неизменяемая запись (append-only, хэш-цепочка). Каждое действие агента и человека прослеживается до документа-источника и до подписи.</p>
+  <table>
+    <thead>
+      <tr><th style="width:64px">Время</th><th style="width:190px">Кто</th><th style="width:170px">Объект</th>
+          <th>Действие и основание</th><th style="width:190px">Модель / промпт</th><th style="width:110px">Хэш</th></tr>
+    </thead>
+    <tbody>
+    <tr>
+      <td class="mono nowrap">09:38</td>
+      <td><span class="dot d-ok">✓</span> <b>Инженер ПТО</b><div class="sub mono">А. Ковалёв</div></td>
+      <td>КС-2 №38 за октябрь</td>
+      <td>Подтвердил выпуск акта<div class="sub">сумма 4 812 400 ₽ · подпись за инженером</div></td>
+      <td class="small mut nowrap">prompt v1.4 · Qwen-32B</td>
+      <td class="mono small mut">a4f1…9c2e</td>
+    </tr>
+    <tr>
+      <td class="mono nowrap">09:34</td>
+      <td><span class="dot d-agent">◆</span> <b>Агент «Сметчик»</b><div class="sub mono">estimator</div></td>
+      <td>КС-2 №38</td>
+      <td>Черновик: 42 позиции, 6 расхождений<div class="sub">источники: журнал работ №10, смета v3</div></td>
+      <td class="small mut nowrap">prompt v1.4 · Qwen-32B</td>
+      <td class="mono small mut">7be2…41dd</td>
+    </tr>
+    <tr>
+      <td class="mono nowrap">09:31</td>
+      <td><span class="dot d-block">!</span> <b>Система</b><div class="sub mono">cite_verify</div></td>
+      <td>Нормативная справка</td>
+      <td>Заблокирован ответ: цитата не найдена в п. 6.1.5<div class="sub">требуется проверка источника вручную</div></td>
+      <td class="small mut nowrap">validator v2</td>
+      <td class="mono small mut">09ac…b7f3</td>
+    </tr>
+    <tr>
+      <td class="mono nowrap">09:12</td>
+      <td><span class="dot d-ok">✓</span> <b>Инженер ПТО</b><div class="sub mono">М. Гасанова</div></td>
+      <td>АОСР-142-31</td>
+      <td>Исправила ссылку на РД после замечания агента<div class="sub">было: 142-КЖ1 л.9 → стало: л.12</div></td>
+      <td class="small mut nowrap">—</td>
+      <td class="mono small mut">5d10…2a8b</td>
+    </tr>
+    <tr>
+      <td class="mono nowrap">08:55</td>
+      <td><span class="dot d-agent">◆</span> <b>Агент «Чертёжник»</b><div class="sub mono">cad</div></td>
+      <td>ИС-142-07</td>
+      <td>Применено 4 операции, 1 пометка → на человека<div class="sub">redline_07.pdf · уверенность 0,42</div></td>
+      <td class="small mut nowrap">Qwen2.5-VL · prompt v0.9</td>
+      <td class="mono small mut">c3f8…6d14</td>
+    </tr>
+    <tr>
+      <td class="mono nowrap">08:47</td>
+      <td><span class="dot d-ok">✓</span> <b>Инженер ПТО</b><div class="sub mono">А. Ковалёв</div></td>
+      <td>ИС-142-07</td>
+      <td>Подтвердил diff-изменения чертежа<div class="sub">версия 4 → 5, предыдущая сохранена</div></td>
+      <td class="small mut nowrap">—</td>
+      <td class="mono small mut">c3f8…6d14</td>
+    </tr>
+    <tr>
+      <td class="mono nowrap">08:20</td>
+      <td><span class="dot d-agent">◆</span> <b>Агент «Документатор»</b><div class="sub mono">documenter</div></td>
+      <td>Пакет ИД: монолит</td>
+      <td>Комплектность 6/8, блокер: протокол испытаний<div class="sub">запрос направлен в лабораторию</div></td>
+      <td class="small mut nowrap">Qwen-32B · prompt v1.2</td>
+      <td class="mono small mut">1ab9…77c0</td>
+    </tr>
+    <tr>
+      <td class="mono nowrap">07:05</td>
+      <td><span class="dot d-ok">✓</span> <b>Планировщик</b><div class="sub mono">scheduler</div></td>
+      <td>Отчёт руководителю</td>
+      <td>Сформирован утренний срез и отправлен<div class="sub">получатели: 4</div></td>
+      <td class="small mut nowrap">—</td>
+      <td class="mono small mut">ee01…3f9a</td>
+    </tr></tbody>
+  </table>
+</section>
+
+<!-- ================== АЛЕРТЫ ================== -->
+<section id="alerts">
+  <h2>Требует решения руководителя</h2>
+  <p class="hint">Каждый пункт связан с конкретным видом работ, суммой и ответственным. Нажатие «Решить» открывает карточку с историей и вариантами.</p>
+  
+    <div class="alert a-risk">
+      <span class="badge b-risk">Критично</span>
+      <div><div>Выпуск: споры с актом на 2 091 000 ₽ — ФЕР 06-01-001-01, акты: КС-2 №35, КС-2 №38</div><div class="sub">Деньги под риском · акты объекта</div></div>
+      <button class="btn-ghost" onclick="alert('Демонстрационный режим: карточка решения откроется в системе')">Решить</button>
+    </div>
+    <div class="alert a-risk">
+      <span class="badge b-risk">Критично</span>
+      <div><div>Монолитные конструкции: остаток 1 130 м³ при отставании 11 дней</div><div class="sub">Монолитные конструкции (надземная часть)</div></div>
+      <button class="btn-ghost" onclick="alert('Демонстрационный режим: карточка решения откроется в системе')">Решить</button>
+    </div>
+    <div class="alert a-risk">
+      <span class="badge b-risk">Критично</span>
+      <div><div>316 позиций КС-2 без подтверждающей ИД на 18,4 млн ₽</div><div class="sub">Комплектность ИД</div></div>
+      <button class="btn-ghost" onclick="alert('Демонстрационный режим: карточка решения откроется в системе')">Решить</button>
+    </div>
+    <div class="alert a-risk">
+      <span class="badge b-risk">Критично</span>
+      <div><div>Сертификат на бетон В25 партии 4412: истёк 30.10.2026</div><div class="sub">Входной контроль</div></div>
+      <button class="btn-ghost" onclick="alert('Демонстрационный режим: карточка решения откроется в системе')">Решить</button>
+    </div>
+    <div class="alert a-warn">
+      <span class="badge b-warn">Существенно</span>
+      <div><div>Расхождение объёмов ОВ: акт субподрядчика +7,4 % к смете</div><div class="sub">Монтаж трубопроводов ОВ</div></div>
+      <button class="btn-ghost" onclick="alert('Демонстрационный режим: карточка решения откроется в системе')">Решить</button>
+    </div>
+    <div class="alert a-warn">
+      <span class="badge b-warn">Существенно</span>
+      <div><div>Кровля: подрядчик не вышел на захватку, работа не начата</div><div class="sub">Кровельные работы</div></div>
+      <button class="btn-ghost" onclick="alert('Демонстрационный режим: карточка решения откроется в системе')">Решить</button>
+    </div>
+    <div class="alert a-info">
+      <span class="badge b-info">Инфо</span>
+      <div><div>5 инструментов агента вызывались с ошибкой таймаута (1С)</div><div class="sub">Интеграции</div></div>
+      <button class="btn-ghost" onclick="alert('Демонстрационный режим: карточка решения откроется в системе')">Решить</button>
+    </div>
+  <div class="note" style="margin-top:14px">
+    <b>Как считаются остатки.</b> Остаток по виду работ = объём по смете − объём, закрытый подписанными актами КС-2 − объём, подтверждённый журналами работ, но ещё не оформленный актом.
+    Работы, выполненные без подтверждающих документов, в остаток не списываются: физически они сделаны, но предъявить их нельзя. Поэтому на дашборде две разные цифры — «выполнено» и «закрыто».
+    Источники: смета v3 (утверждена 12.08.2026), журналы работ №10–12, подписанные КС-2 №29–38, выгрузка 1С на 02.11.2026 09:40.
+  </div>
+</section>
+
+<footer>
+  Дашборд руководителя · сформирован автоматически 02.11.2026 09:40 · данные синтетические (демонстрация структуры отчёта)<br>
+  Прозрачность обеспечивается журналом аудита с хэш-цепочкой; любая цифра на этой странице раскрывается до документа-источника.
+  Версия отчёта 1.0 · методика расчёта зафиксирована в ТЗ, раздел 18.
+</footer>
+</div>
+</body>
+</html>
