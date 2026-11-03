@@ -55,6 +55,8 @@ def portfolio():
     return json.loads(PORTFOLIO.read_text(encoding="utf-8"))
 
 
+@pytest.mark.skipif(not (PORTFOLIO.exists() or BATCH.exists()),
+                    reason="страница собрана без прогонов выпуска")
 def test_dashboard_has_risk_section(html):
     section = _plain(_risk_section(html))
     assert "Деньги под риском" in section

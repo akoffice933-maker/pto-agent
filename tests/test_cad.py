@@ -40,6 +40,8 @@ def drawing(tmp_path):
 
 @pytest.fixture(scope="module")
 def summary():
+    if not SUMMARY.exists():
+        pytest.skip("нет сводки ПТО: python3 -m pto_agent run --data data/demo --out out")
     return json.loads(SUMMARY.read_text(encoding="utf-8"))
 
 

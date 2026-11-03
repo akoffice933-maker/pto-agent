@@ -39,6 +39,12 @@ DXF = ROOT / "drawings" / "korpus2_plan_v1.dxf"
 TEMPLATE = ROOT / "config" / "cad_template_corp_A.yaml"
 SUMMARY = ROOT / "out" / "summary.json"
 MANIFEST = ROOT / "data" / "demo" / "batch" / "manifest.json"
+SCANS = ROOT / "data" / "demo" / "batch" / "scans"
+
+# сканы — тяжёлый демо-артефакт: в git их нет, генерируются scripts/make_demo_batch.py
+needs_scans = pytest.mark.skipif(
+    not (SCANS.exists() and any(SCANS.glob("*.png")) and SUMMARY.exists()),
+    reason="нет демо-сканов выпуска: python3 scripts/make_demo_batch.py")
 
 
 @pytest.fixture(scope="module")
@@ -157,6 +163,8 @@ def test_photo_quality_detects_bad_shots():
 
 
 # ── конвейер на фото ─────────────────────────────────────────────────────
+@pytest.mark.skipif(not (SCAN.exists() and PHOTO.exists() and SUMMARY.exists()),
+                    reason="нет демо-фото/скана: python3 scripts/make_demo_photo.py")
 def test_photo_matches_flat_scan(drawing, anchors, summary):
     """Фото под углом даёт тот же результат, что ровный скан."""
     tpl = load_template(TEMPLATE)
@@ -203,6 +211,7 @@ def test_photo_truth_alignment(drawing, anchors):
 
 
 # ── манифест и пакет ─────────────────────────────────────────────────────
+@needs_scans
 def test_manifest_loads_release():
     sheets = load_manifest(MANIFEST)
     assert len(sheets) == 40
@@ -225,6 +234,7 @@ def test_manifest_rejects_bad_entry(tmp_path):
         load_manifest(bad)
 
 
+@needs_scans
 def test_process_sheet_and_cache(tmp_path):
     sheets = load_manifest(MANIFEST)[:1]
     rec = process_sheet(sheets[0], engine="mock", template_path=str(TEMPLATE),
@@ -239,6 +249,7 @@ def test_process_sheet_and_cache(tmp_path):
     assert again.get("from_cache") is True
 
 
+@needs_scans
 def test_failed_sheet_does_not_break_release(tmp_path):
     sheets = load_manifest(MANIFEST)[:2]
     broken = dict(sheets[1], sheet_id="broken", drawing=str(tmp_path / "нет-такого.dxf"))
@@ -253,6 +264,7 @@ def test_failed_sheet_does_not_break_release(tmp_path):
            "не найден" in summary["failed_sheets"][0]["error"].lower()
 
 
+@needs_scans
 def test_offline_batch_forces_single_thread(tmp_path):
     sheets = load_manifest(MANIFEST)[:1]
     summary = run_batch(sheets, engine="offline", workers=4, out_dir=tmp_path,
@@ -286,6 +298,7 @@ def test_aggregate_counts_conflicts_and_decisions():
     assert summary["failed_sheets"][0]["error"] == "boom"
 
 
+@needs_scans
 def test_reports_are_written(tmp_path):
     sheets = load_manifest(MANIFEST)[:2]
     summary = run_batch(sheets, engine="mock", out_dir=tmp_path,
@@ -302,6 +315,7 @@ def test_reports_are_written(tmp_path):
     assert wb["Листы"].max_row == 3          # шапка + 2 листа
 
 
+@needs_scans
 def test_cli_scan_batch(tmp_path):
     sheets = load_manifest(MANIFEST)[:2]
     manifest = tmp_path / "mini.json"

@@ -21,6 +21,12 @@ from pto_agent.portfolio import (assess_portfolio, check_act_vs_estimate,  # noq
 
 SUMMARY = ROOT / "out" / "summary.json"
 ACTS = ROOT / "data" / "demo" / "acts" / "acts.json"
+RELEASES = [ROOT / "out" / "cad" / "batch_ks35" / "batch_summary.json",
+            ROOT / "out" / "cad" / "batch_ks37" / "batch_summary.json",
+            ROOT / "out" / "cad" / "batch" / "batch_summary.json"]
+needs_releases = pytest.mark.skipif(
+    not all(p.exists() for p in RELEASES),
+    reason="нет собранных выпусков актов: make_demo_retro.py + cad scan-batch")
 
 
 @pytest.fixture(scope="module")
@@ -205,7 +211,7 @@ def test_reports_render(pto, tmp_path):
     assert json.loads(paths["json"].read_text(encoding="utf-8"))["totals"]["acts_total"] == 2
 
 
-@pytest.mark.skipif(not ACTS.exists(), reason="нет реестра актов")
+@needs_releases
 def test_demo_portfolio_is_coherent():
     """Демо-объект: три акта, все проверены (после ретро-выпуска по №35 и №37)."""
     pto = json.loads(SUMMARY.read_text(encoding="utf-8"))
@@ -226,7 +232,7 @@ def test_demo_portfolio_is_coherent():
     assert months["2026-10"]["at_risk_rub"] == pytest.approx(1_850_000)
 
 
-@pytest.mark.skipif(not ACTS.exists(), reason="нет реестра актов")
+@needs_releases
 def test_cli_portfolio(tmp_path):
     res = subprocess.run([sys.executable, "-m", "pto_agent", "cad", "impact",
                           "--acts", str(ACTS), "--summary", str(SUMMARY),
@@ -238,7 +244,7 @@ def test_cli_portfolio(tmp_path):
     assert data["totals"]["at_risk_rub"] == pytest.approx(2_091_000)
 
 
-@pytest.mark.skipif(not ACTS.exists(), reason="нет реестра актов")
+@needs_releases
 def test_mcp_portfolio(tmp_path):
     from pto_agent.cad.mcp_server import TOOLS, handle_rpc, make_ctx
     assert len(TOOLS) == 14                                  # портфель — тот же инструмент

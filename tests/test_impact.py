@@ -26,6 +26,8 @@ BATCH = ROOT / "out" / "cad" / "batch" / "batch_summary.json"
 
 @pytest.fixture(scope="module")
 def pto():
+    if not SUMMARY.exists():
+        pytest.skip("нет сводки ПТО: python3 -m pto_agent run --data data/demo --out out")
     return json.loads(SUMMARY.read_text(encoding="utf-8"))
 
 

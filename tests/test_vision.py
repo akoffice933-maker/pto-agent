@@ -46,18 +46,31 @@ def tpl():
     return load_template(TEMPLATE)
 
 
+def _need_scan():
+    if not SCAN.exists():
+        pytest.skip("нет демо-скана: python3 scripts/make_demo_redline.py")
+
+
+def _need_summary():
+    if not SUMMARY.exists():
+        pytest.skip("нет сводки ПТО: python3 -m pto_agent run --data data/demo --out out")
+
+
 @pytest.fixture(scope="module")
 def summary():
+    _need_summary()
     return json.loads(SUMMARY.read_text(encoding="utf-8"))
 
 
 @pytest.fixture(scope="module")
 def truth():
+    _need_scan()
     return json.loads(TRUTH.read_text(encoding="utf-8"))
 
 
 @pytest.fixture(scope="module")
 def run_mock(drawing):
+    _need_scan()
     log = ROOT / "out" / "cad" / "llm_calls_test.jsonl"
     log.unlink(missing_ok=True)
     return analyze_scan(SCAN, drawing=drawing, engine="mock", truth_path=TRUTH,
@@ -66,6 +79,7 @@ def run_mock(drawing):
 
 @pytest.fixture(scope="module")
 def run_offline(drawing):
+    _need_scan()
     return analyze_scan(SCAN, drawing=drawing, engine="offline", texts_path=TEXTS)
 
 
@@ -94,6 +108,7 @@ def test_schema_reads_quantities_and_approval():
 
 # ── калибровка ───────────────────────────────────────────────────────────
 def test_calibration_by_frame_anchors(drawing):
+    _need_scan()
     cal = Calibration.auto(SCAN, drawing.inventory()["extents"])
     assert cal.scale_x != 0 and cal.scale_y != 0
     assert abs(cal.scale_x) == pytest.approx(abs(cal.scale_y), rel=0.01)
@@ -183,6 +198,7 @@ def test_calibration_warning_is_visible(run_mock):
 
 # ── распознавание: офлайн-CV ─────────────────────────────────────────────
 def test_offline_detector_finds_same_marks(drawing):
+    _need_scan()
     run = analyze_scan(SCAN, drawing=drawing, engine="offline")
     assert run["engine_used"] == "offline_cv"
     assert len(run["marks"]) == 5
@@ -214,6 +230,7 @@ def test_offline_and_mock_plans_agree(run_mock, run_offline, drawing, tpl, summa
 
 # ── анти-галлюцинационная проверка ───────────────────────────────────────
 def test_hallucinated_mark_is_rejected(drawing, tmp_path):
+    _need_scan()
     """Модель «увидела» пометку в пустом месте листа — bbox без чернил отбраковывается."""
     fake = {"image_size": [3000, 2119], "marks": [
         {"mark_id": "h1", "type": "circle", "bbox_px": [120, 1880, 260, 1960],
@@ -232,6 +249,7 @@ def test_hallucinated_mark_is_rejected(drawing, tmp_path):
 
 
 def test_low_ink_fraction_rejects_bbox(drawing, tmp_path):
+    _need_scan()
     """Проверка «под bbox есть чернила» отсекает выдуманный bbox."""
     from pto_agent.cad.vision.imaging import colored_ink_mask, ink_fraction, load_rgb
     rgb = load_rgb(SCAN)
@@ -302,6 +320,7 @@ def test_mcp_exposes_scan_tools():
 
 
 def test_mcp_plan_from_scan_redline():
+    _need_scan()
     ctx = make_ctx(ROOT, ROOT / "out" / "cad" / "audit.jsonl")
     req = {"jsonrpc": "2.0", "id": 7, "method": "tools/call",
            "params": {"name": "plan_from_scan_redline", "arguments": {
@@ -317,6 +336,7 @@ def test_mcp_plan_from_scan_redline():
 
 
 def test_mcp_scan_reports_stats():
+    _need_scan()
     ctx = make_ctx(ROOT, ROOT / "out" / "cad" / "audit.jsonl")
     req = {"jsonrpc": "2.0", "id": 8, "method": "tools/call",
            "params": {"name": "scan_redline_image", "arguments": {

@@ -20,6 +20,12 @@ from pto_agent.portfolio import assess_portfolio, load_acts                # noq
 RETRO = ROOT / "data" / "demo" / "retro"
 ACTS = ROOT / "data" / "demo" / "acts" / "acts.json"
 SUMMARY = ROOT / "out" / "summary.json"
+RELEASES = [ROOT / "out" / "cad" / "batch_ks35" / "batch_summary.json",
+            ROOT / "out" / "cad" / "batch_ks37" / "batch_summary.json",
+            ROOT / "out" / "cad" / "batch" / "batch_summary.json"]
+needs_releases = pytest.mark.skipif(
+    not all(p.exists() for p in RELEASES),
+    reason="нет собранных выпусков актов: make_demo_retro.py + cad scan-batch")
 
 
 def _summary(act: str) -> dict:
@@ -103,6 +109,7 @@ def test_acts_registry_marks_retro_acts_as_checked():
     assert acts["КС-2 №35"]["amount_rub"] == pytest.approx(4_168_000)
 
 
+@needs_releases
 def test_portfolio_coverage_is_complete_and_still_honest(pto):
     pf = assess_portfolio(load_acts(ACTS), pto, root=ROOT)
     t = pf["totals"]
@@ -116,6 +123,7 @@ def test_portfolio_coverage_is_complete_and_still_honest(pto):
     assert by_id["КС-2 №38"]["at_risk_rub"] == pytest.approx(1_850_000)
 
 
+@needs_releases
 def test_retro_positions_are_separate_rows(pto):
     pf = assess_portfolio(load_acts(ACTS), pto, root=ROOT)
     positions = {p["code"]: p for p in pf["positions"]}
@@ -127,6 +135,7 @@ def test_retro_positions_are_separate_rows(pto):
     assert positions["ФЕР 16-02-003-01"]["acts"] == ["КС-2 №37", "КС-2 №38"]
 
 
+@needs_releases
 def test_months_now_both_assessed(pto):
     pf = assess_portfolio(load_acts(ACTS), pto, root=ROOT)
     months = {m["month"]: m for m in pf["months"]}

@@ -169,9 +169,9 @@
 
 <section>
   <div class="strip">
-    <span class="strip-k">Сколько под вопросом (3 акта объекта)</span>
-    <span class="strip-v">2 091 000 ₽</span>
-    <span class="strip-d">это 5,43 % проверенной суммы и 5,43 % всех актов · проверено 100 % предъявленного</span>
+    <span class="strip-k">Сколько под вопросом (деньги под риском)</span>
+    <span class="strip-v">0 ₽</span>
+    <span class="strip-d">прогон выпуска ещё не выполнялся</span>
     <a class="btn-ghost" href="#risk">Раскрыть по позициям</a>
   </div>
 </section>
@@ -416,7 +416,7 @@
       <div class="kv"><span class="k">Оплачено заказчиком</span><span class="v" style="color:#2E7D5B">79 063 240 ₽</span></div>
       <div class="kv"><span class="k">Дебиторка (закрыто − оплачено)</span><span class="v" style="color:#C0502A">12 870 760 ₽</span></div>
       <div class="kv"><span class="k">НДС к уплате с закрытых</span><span class="v">18 386 800 ₽</span></div>
-      <div class="kv"><span class="k">Под риском по актам объекта</span><span class="v" style="color:#C0502A">2 091 000 ₽</span></div>
+      <div class="kv"><span class="k">Под риском по актам объекта</span><span class="v" style="color:#C0502A">0 ₽</span></div>
       <p class="hint" style="margin:12px 0 0">Риск: 6 050 000 ₽ выполнено, но не может быть предъявлено из-за неполной ИД — это прямая задержка выручки.
       Сколько именно стоит каждый спор с актом и по каким актам — в разделе <a href="#risk">«Деньги под риском»</a>.</p>
     </div>
@@ -427,133 +427,11 @@
 <section id="risk">
   <h2>Деньги под риском: чего стоит спор с актом</h2>
   <p class="hint">Выпуск распознан, каждая пометка инженера сверена с КС-2 и сметой, спор переведён в рубли
-  по цене позиции и разложен по актам объекта. Источник: <span class="mono">out/cad/portfolio/portfolio.json</span> · расчёт от 03.11.2026.</p>
+  по цене позиции и разложен по актам объекта. Источник: <span class="mono">—</span>.</p>
+  <div class="note">Раздел заполнится после первого прогона выпуска: <span class="mono">cad scan-batch … --summary out/summary.json</span>, затем <span class="mono">cad impact --acts data/demo/acts/acts.json</span>.</div>
   
-  <div class="cards four">
-    <div class="card alert-card">
-      <div class="k">Под риском по актам</div>
-      <div class="v">2 091 000 ₽</div>
-      <div class="d">5,43 % проверенной суммы ·
-      5,43 % всех актов<br>
-      позиций: <b>4</b> · листов: <b>55</b></div>
-    </div>
-    <div class="card">
-      <div class="k">Проверено выпуском</div>
-      <div class="v">100 %</div>
-      <div class="d">38 522 600 ₽ из 38 522 600 ₽<br>
-      актов проверено: <b>3 из 3</b></div>
-    </div>
-    <div class="card ok-card">
-      <div class="k">Без проверки не осталось</div>
-      <div class="v">0 ₽</div>
-      <div class="d">все 3 акта прошли выпуск, включая ретро<br>непроверенных актов на объекте не осталось</div>
-    </div>
-    <div class="card">
-      <div class="k">Фон ПТО (не из выпуска)</div>
-      <div class="v">9 349 600 ₽</div>
-      <div class="d">расхождения объекта, известные до сканов;<br>с выпуском <b>не складываются</b></div>
-    </div>
-  </div>
   
-  <div class="two" style="margin-top:16px">
-    <div class="panel">
-      <h3>Акты объекта: что проверено и что под вопросом</h3>
-      <table class="inner">
-        <thead><tr><th>Акт</th><th>Месяц</th><th class="num">Сумма, ₽</th>
-              <th class="num">Под риском</th><th class="num">Доля</th><th>Статус</th></tr></thead>
-        <tbody>
-    <tr class="row-risk">
-      <td class="mono nowrap">КС-2 №35</td>
-      <td class="small">сентябрь 2026</td>
-      <td class="num">4 168 000</td>
-      <td class="num strong">216 200</td>
-      <td class="num">5,19 %</td>
-      <td><span class="badge b-risk">споры</span></td>
-    </tr>
-    <tr class="row-risk">
-      <td class="mono nowrap">КС-2 №37</td>
-      <td class="small">сентябрь 2026</td>
-      <td class="num">248 000</td>
-      <td class="num strong">24 800</td>
-      <td class="num">10 %</td>
-      <td><span class="badge b-risk">споры</span></td>
-    </tr>
-    <tr class="row-risk">
-      <td class="mono nowrap">КС-2 №38</td>
-      <td class="small">октябрь 2026</td>
-      <td class="num">34 106 600</td>
-      <td class="num strong">1 850 000</td>
-      <td class="num">5,42 %</td>
-      <td><span class="badge b-risk">споры</span></td>
-    </tr></tbody>
-        <tfoot><tr><td colspan="2">Итого 3 акта</td>
-          <td class="num">38 522 600</td>
-          <td class="num">2 091 000</td>
-          <td class="num">5,43 %</td>
-          <td class="small mut">покрытие 100 %</td></tr></tfoot>
-      </table>
-      <p class="hint" style="margin:10px 0 0">Под риском считается только по проверенным актам:
-      у актов без распознанного выпуска стоит «не оценено», а не ноль.</p>
-    </div>
-    <div class="panel">
-      <h3>По месяцам: сколько предъявлено и сколько под вопросом</h3>
-      <table class="inner">
-        <thead><tr><th>Месяц</th><th class="num">Актов</th><th class="num">Сумма, ₽</th>
-              <th class="num">Под риском</th><th class="num">Доля</th></tr></thead>
-        <tbody>
-    <tr>
-      <td class="small nowrap">сентябрь 2026</td>
-      <td class="num">2</td>
-      <td class="num">4 416 000</td>
-      <td class="num strong">241 000</td>
-      <td class="num">5,46 %</td>
-    </tr>
-    <tr>
-      <td class="small nowrap">октябрь 2026</td>
-      <td class="num">1</td>
-      <td class="num">34 106 600</td>
-      <td class="num strong">1 850 000</td>
-      <td class="num">5,42 %</td>
-    </tr></tbody>
-      </table>
-      <p class="hint" style="margin:10px 0 0">График финансирования: деньги под риском
-      уменьшают то, что можно уверенно планировать к поступлению в этом месяце.</p>
-    </div>
-  </div>
-  <div class="two" style="margin-top:16px"><div class="panel"><h3>Где лежат деньги: сумма спора по позициям</h3><svg viewBox="0 0 770 170" style="width:100%;height:auto" role="img" aria-label="Суммы споров по позициям"><text x="200" y="23" font-size="12" fill="#1E2430" text-anchor="end">ФЕР 06-01-001-01</text><rect x="210" y="10" width="102.2" height="18" fill="#C0502A" rx="2"/><text x="261.1" y="23" font-size="11" fill="#fff" text-anchor="middle">2 035</text><rect x="312.2" y="10" width="37.2" height="18" fill="#C3C9D4" rx="2"/><text x="355.4" y="23" font-size="11" fill="#6B7688">740</text><text x="200" y="57" font-size="12" fill="#1E2430" text-anchor="end">ФЕР 08-02-001-01</text><rect x="210" y="44" width="1.6" height="18" fill="#C0502A" rx="2"/><text x="210.8" y="57" font-size="11" fill="#fff" text-anchor="middle">31</text><text x="200" y="91" font-size="12" fill="#1E2430" text-anchor="end">ФЕР 16-02-003-01</text><rect x="210" y="78" width="1.2" height="18" fill="#C0502A" rx="2"/><text x="210.6" y="91" font-size="11" fill="#fff" text-anchor="middle">25</text><rect x="211.2" y="78" width="2.5" height="18" fill="#C3C9D4" rx="2"/><text x="219.7" y="91" font-size="11" fill="#6B7688">50</text><text x="200" y="125" font-size="12" fill="#1E2430" text-anchor="end">ФЕР 06-01-001-02</text><rect x="210.0" y="112" width="430.0" height="18" fill="#C3C9D4" rx="2"/><text x="646.0" y="125" font-size="11" fill="#6B7688">8 560</text><text x="210" y="164" font-size="11" fill="#6B7688">тыс. ₽ спора · тёмное — пометки выпуска, серое — фон ПТО</text></svg></div><div class="panel"><h3>Что не удалось оценить в деньгах</h3><div class="kv"><span class="k">ФЕР 11-01-011-01 · UNIT_MISMATCH</span><span class="v small">сначала пересчёт единиц, потом деньги: смета м², журнал м³<span class="mut"> · повторов 1</span></span></div><div class="kv"><span class="k">— · NOT_IN_ESTIMATE</span><span class="v small">340 м² вне сметы: сумму нужно определять по дополнительному соглашению<span class="mut"> · повторов 1</span></span></div></div></div>
-  <table class="inner" style="margin-top:16px"><thead><tr><th style="width:170px">Позиция</th><th>Наименование и вид спора</th><th class="num" style="width:130px">По выпуску, ₽</th><th class="num" style="width:120px">Фон ПТО, ₽</th><th style="width:230px">Формула</th><th class="num" style="width:90px">Актов/листов</th></tr></thead><tbody>
-    <tr class="row-risk">
-      <td class="mono nowrap">ФЕР 06-01-001-01</td>
-      <td>Устройство фундаментной плиты железобетонной, бетон B25<div class="sub">Завышение против акта — риск отказа заказчика, Подпись «согласовано» под критичным расхождением</div></td>
-      <td class="num strong">2 035 000</td>
-      <td class="num">740 000</td>
-      <td class="small mut">(210 − 200) м³ × 18 500 ₽/м³; (1 300 − 1 240) м³ × 18 500 ₽/м³; 40 м³ × 18 500 ₽/м³</td>
-      <td class="num">2</td>
-    </tr>
-    <tr class="row-risk">
-      <td class="mono nowrap">ФЕР 08-02-001-01</td>
-      <td>Гидроизоляция фундаментной плиты обмазочная<div class="sub">Завышение против акта — риск отказа заказчика</div></td>
-      <td class="num strong">31 200</td>
-      <td class="num">—</td>
-      <td class="small mut">(640 − 600) м² × 780 ₽/м²</td>
-      <td class="num">1</td>
-    </tr>
-    <tr class="row-risk">
-      <td class="mono nowrap">ФЕР 16-02-003-01</td>
-      <td>Прокладка трубопроводов водоснабжения из стальных труб Д 50 мм<div class="sub">Недопредъявлено — деньги не получены, Объём сверх ранее закрытого</div></td>
-      <td class="num strong">24 800</td>
-      <td class="num">49 600</td>
-      <td class="small mut">(200 − 180) м × 1 240 ₽/м; 40 м сверх закрытого × 1 240 ₽/м</td>
-      <td class="num">2</td>
-    </tr>
-    <tr>
-      <td class="mono nowrap">ФЕР 06-01-001-02</td>
-      <td>Устройство фундаментных балок железобетонных<div class="sub">Подпись «согласовано» под критичным расхождением, Предъявлено без подтверждающих документов</div></td>
-      <td class="num strong">—</td>
-      <td class="num">8 560 000</td>
-      <td class="small mut">10 м³ × 21 400 ₽/м³; сумма предъявления без АОСР/схемы</td>
-      <td class="num">1</td>
-    </tr></tbody></table>
+  
   <div class="note" style="margin-top:16px">
     <b>Четыре правила, без которых цифра врёт.</b> (1) Один спор считается один раз: пометка «1 300 м³» стоит
     на каждой итерации листа, но деньги по ней — одни; повторы и листы показываются отдельно.
@@ -737,11 +615,6 @@
   <h2>Требует решения руководителя</h2>
   <p class="hint">Каждый пункт связан с конкретным видом работ, суммой и ответственным. Нажатие «Решить» открывает карточку с историей и вариантами.</p>
   
-    <div class="alert a-risk">
-      <span class="badge b-risk">Критично</span>
-      <div><div>Выпуск: споры с актом на 2 091 000 ₽ — ФЕР 06-01-001-01, акты: КС-2 №35, КС-2 №38</div><div class="sub">Деньги под риском · акты объекта</div></div>
-      <button class="btn-ghost" onclick="alert('Демонстрационный режим: карточка решения откроется в системе')">Решить</button>
-    </div>
     <div class="alert a-risk">
       <span class="badge b-risk">Критично</span>
       <div><div>Монолитные конструкции: остаток 1 130 м³ при отставании 11 дней</div><div class="sub">Монолитные конструкции (надземная часть)</div></div>
