@@ -1,6 +1,6 @@
 # ИИ-агент ПТО
 
-[![CI](https://github.com/USER/pto-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/USER/pto-agent/actions/workflows/ci.yml)
+[![CI](https://github.com/akoffice933-maker/pto-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/akoffice933-maker/pto-agent/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.10%20%7C%203.12-blue)
 ![MCP](https://img.shields.io/badge/MCP-2025--06--18-1F3864)
 ![Tests](https://img.shields.io/badge/tests-156%20passed-brightgreen)
@@ -26,7 +26,7 @@
 ## Быстрый старт
 
 ```bash
-git clone https://github.com/USER/pto-agent.git && cd pto-agent
+git clone https://github.com/akoffice933-maker/pto-agent.git && cd pto-agent
 pip install -r requirements-pto.txt
 
 # 1. демо-данные и чертежи
@@ -65,20 +65,18 @@ docker build -t pto-agent-mcp:0.6 . && docker run -p 8765:8765 pto-agent-mcp:0.6
 операций только с `confirm{by, role, comment}`, пакетная обработка выпуска, деньги по акту
 и по портфелю актов. Подробно — [`docs/10_MCP_обвязка.md`](docs/10_MCP_обвязка.md).
 
-## Публикация на GitHub
+## Репозиторий
 
-Репозиторий собран локально (ветка `main`, 7 коммитов) и готов к пушу:
+**https://github.com/akoffice933-maker/pto-agent** — публичный, MIT.
 
 ```bash
-./scripts/publish_github.sh git@github.com:USER/pto-agent.git   # свой remote
-# или, если установлен GitHub CLI:
-./scripts/publish_github.sh USER/pto-agent                       # создаст репозиторий и запушит
+git clone https://github.com/akoffice933-maker/pto-agent.git
 ```
 
-Что уже сделано в репозитории: `.gitignore` (артефакты прогонов и тяжёлые демо-сканы
-не в git — они генерируются скриптами), `LICENSE` (MIT), CI на GitHub Actions
-(`unit` на Python 3.10/3.12 → `e2e` со сквозным прогоном → сборка Docker-образа).
-После пуша замените `USER` в бейджах и ссылках на свой аккаунт.
+Что настроено: `.gitignore` (артефакты прогонов и тяжёлые демо-сканы в git не едут —
+генерируются скриптами), `LICENSE` (MIT), CI на GitHub Actions: `unit` на Python 3.10/3.12 →
+`e2e` со сквозным прогоном (выпуск → деньги → дашборд) → сборка Docker-образа.
+Чтобы запушить в свой форк: `./scripts/publish_github.sh git@github.com:ВАШ_АККАУНТ/pto-agent.git`.
 
 ---
 
