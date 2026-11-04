@@ -288,6 +288,28 @@ def cmd_sync_1c(args):
     return 0
 
 
+def cmd_review(args):
+    """Сводка проверки: что проверено, что осталось, где нужно решение человека."""
+    from .review import collect, write_review
+    review = collect(summary_path=args.summary, batch_path=args.batch, acts_path=args.acts,
+                     impact_path=args.impact, plan_path=args.plan, object_name=args.object_name)
+    paths = write_review(review, args.out)
+    v = review["verdict"]
+    print(f"Вердикт:   {v['status']} · подпись {'возможна' if v['can_sign'] else 'невозможна'}")
+    print(f"{v['headline']}")
+    print(f"Проверок:  {len([c for c in review['checked'] if c['status'] != 'skipped'])} "
+          f"выполнено, {len([c for c in review['checked'] if c['status'] == 'skipped'])} пропущено")
+    for c in review["checked"]:
+        mark = {"ok": "✓", "warning": "!", "fail": "✗", "skipped": "·"}.get(c["status"], "?")
+        print(f"  {mark} {c['name']}: {c.get('detail', '')}")
+    if review["decisions"]:
+        print(f"Решения человека ({len(review['decisions'])}):")
+        for d in review["decisions"][:5]:
+            print(f"  • [{d['priority']}] {d['question']}")
+    print(f"Отчёт:     {paths['markdown']} · {paths['json']}")
+    return 0
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     # подкоманды CAD и MCP живут в своих пакетах: делегируем до разбора argparse,
@@ -370,6 +392,16 @@ def main(argv=None):
     sy.add_argument("--object-name", default=None)
     sy.add_argument("--out", default="out/1c")
     sy.set_defaults(func=cmd_sync_1c)
+
+    rv = sub.add_parser("review", help="сводка проверки: что проверено, что осталось, где решение человека")
+    rv.add_argument("--summary", default="out/summary.json")
+    rv.add_argument("--batch", default="out/cad/batch/batch_summary.json")
+    rv.add_argument("--acts", default="data/demo/acts/acts.json")
+    rv.add_argument("--impact", default="out/cad/impact/impact.json")
+    rv.add_argument("--plan", default="out/cad/plan.json")
+    rv.add_argument("--object-name", default=None)
+    rv.add_argument("--out", default="out/review")
+    rv.set_defaults(func=cmd_review)
 
     args = p.parse_args(argv)
     result = args.func(args)

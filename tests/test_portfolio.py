@@ -247,7 +247,7 @@ def test_cli_portfolio(tmp_path):
 @needs_releases
 def test_mcp_portfolio(tmp_path):
     from pto_agent.cad.mcp_server import TOOLS, handle_rpc, make_ctx
-    assert len(TOOLS) == 15                                  # портфель — тот же инструмент
+    assert len(TOOLS) == 16                                  # портфель — тот же инструмент
     ctx = make_ctx(ROOT, ROOT / "out" / "cad" / "audit.jsonl")
     req = {"jsonrpc": "2.0", "id": 31, "method": "tools/call",
            "params": {"name": "assess_release_impact", "arguments": {

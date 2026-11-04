@@ -3,7 +3,7 @@
 [![CI](https://github.com/akoffice933-maker/pto-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/akoffice933-maker/pto-agent/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue)
 ![MCP](https://img.shields.io/badge/MCP-2025--06--18-1F3864)
-![Tests](https://img.shields.io/badge/tests-197%20passed-brightgreen)
+![Tests](https://img.shields.io/badge/tests-228%20passed-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 **Агент для ПТО в строительстве:** сверяет КС-2 с журналом и сметой, распознаёт выпуск
@@ -21,7 +21,7 @@
 | Фото с телефона → чертёж | гомография по 4 точкам, rms 0,0 мм, 5/5 пометок |
 | Деньги по выпуску | 1 850 000 ₽ под риском = 5,42 % акта, каждый рубль с формулой |
 | Портфель актов объекта | 3 акта, покрытие 100 %, 2 091 000 ₽ под риском (5,43 %) |
-| MCP | 15 инструментов, stdio + http, установка одной командой |
+| MCP | 16 инструментов, stdio + http, установка одной командой |
 
 ## Быстрый старт
 
@@ -61,7 +61,7 @@ python3 -m pto_agent.mcp_server --transport http --port 8765   # http + инсп
 docker build -t pto-agent-mcp:0.6 . && docker run -p 8765:8765 pto-agent-mcp:0.6
 ```
 
-15 инструментов: чтение DXF и takeoff, распознавание сканов и план правок, применение
+16 инструментов: чтение DXF и takeoff, распознавание сканов и план правок, применение
 операций только с `confirm{by, role, comment}`, пакетная обработка выпуска, деньги по акту
 и по портфелю актов. Подробно — [`docs/10_MCP_обвязка.md`](docs/10_MCP_обвязка.md).
 
@@ -101,6 +101,7 @@ python3 -m pytest tests -q
 
 | Файл | Что внутри |
 |---|---|
+| `13_Сводка_проверки_review.docx` (`docs/13_…md`) | **Итог проверки одним ответом:** что проверено (`ok` / `warning` / `fail` / `skipped`), что осталось, где нужно решение человека, сколько денег под риском и можно ли подписывать; правила вердикта, группировка 97 вопросов в 8 понятных, MCP-инструмент `review_summary` |
 | `12_Сравнение_с_БИТ_Строительство.docx` (`docs/12_…md`) | **1С/БИТ.Строительство vs pto-agent:** матрица из 26 задач инженера ПТО (кто закрывает), где мы честно слабее, три уровня стыковки (файловый обмен → HTTP-сервис 1С → программный робот), реализованный контракт обмена CSV |
 | `11_Смежные_проекты_и_лицензии.docx` (`docs/11_…md`) | **Смежные проекты:** 10 открытых сметных/обмерных проектов с проверенными звёздами и лицензиями, матрица «код можно / нельзя» (AGPL и «без лицензии» — только идеи), три сценария стыковки (внешний MCP-обмер, база ГЭСН/ФЕР, паттерны multi-agent), чего сознательно не делаем, дорожная карта |
 | `10_MCP_обвязка.docx` (`docs/10_…md`) | **MCP одной командой:** установщик конфигов для Claude Desktop / Cursor / VS Code, HTTP-транспорт и Docker, настройки из окружения, 15 тестов протокола, правила безопасности |
@@ -118,6 +119,8 @@ python3 -m pytest tests -q
 | `pto_agent/integrations/one_c_http.py` | **Обмен с 1С по HTTP (уровень 2):** акты и смета из HTTP-сервиса 1С, отправка проверенной КС-2 с `Idempotency-Key`, различимые ошибки (401/4xx/5xx), повторы только там, где безопасно |
 | `config/one_c.example.yaml` | Конфиг HTTP-обмена: адрес сервиса, учётные данные из `${VAR}` окружения, таймауты и повторы |
 | `tests/test_one_c_http.py` | 21 тест: фейковый HTTP-сервис 1С, аутентификация, 401/400/500, повторы, не-JSON, обе формы актов, идемпотентность, CLI |
+| `pto_agent/review.py` | **Сводка проверки:** собирает пять артефактов в один ответ — что проверено, что осталось, где нужен человек, деньги, вердикт; пропуск ≠ «ок», «не оценено» ≠ 0 ₽ |
+| `tests/test_review.py` | 18 тестов: вердикты `ready/needs_review/blocked/no_data`, блокировки, группировка вопросов выпуска, деньги, markdown, CLI и MCP |
 | `pto_agent/integrations/one_c.py` | **Обмен с 1С/БИТ.Строительство:** выгрузка проверенной КС-2 и реестра актов в CSV (`utf-8-sig`, `;`, десятичная запятая), терпимое чтение смет и актов из 1С (синонимы шапок, cp1251, пробелы тысяч), «не оценено» вместо нуля |
 | `tests/test_one_c.py` | 12 тестов обмена: формат для 1С, режимы объёма (claim/journal/estimate), импорт сметы и актов, кодировки и разделители, круг «экспорт → импорт» без потери сумм |
 | `pto_agent/cad/external_takeoff.py` | **Внешний обмер по MCP:** клиент (stdio/http, SSE), нормализация чужой схемы к нашей, сверка «чужой обмер ↔ наш DXF/смета», правило «не оценено ≠ 0», лицензионный режим «отдельный сервис» для AGPL |
@@ -254,6 +257,9 @@ python3 -m pto_agent cad impact --batch out/cad/batch/batch_summary.json \
         --summary out/summary.json --out out/cad/impact --with-background
 python3 -m pto_agent cad impact --acts data/demo/acts/acts.json \
         --summary out/summary.json --out out/cad/portfolio
+# итог проверки: что проверено, что осталось, где нужен человек (и можно ли подписывать)
+python3 -m pto_agent review --summary out/summary.json --batch out/cad/batch/batch_summary.json \
+        --impact out/cad/impact/impact.json --acts data/demo/acts/acts.json --out out/review
 # обмен с 1С/БИТ.Строительство: смета и акты из 1С → наши структуры
 python3 -m pto_agent import-1c --smeta выгрузка_сметы.csv --acts реестр_кс2.csv --out out/1c
 python3 -m pto_agent export-1c --summary out/summary.json --out out/1c/ks2_for_1c.csv

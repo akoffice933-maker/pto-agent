@@ -25,6 +25,8 @@ from .drawing import Drawing
 from .external_takeoff import (align, load_config, local_positions_from_dxf,
                               local_positions_from_summary, run_external_takeoff)
 from .ops import OPERATIONS, apply_operations, history_entry, validate_operations
+from ..review import collect as collect_review
+from ..review import review_to_markdown
 from .redline import plan_from_discrepancies
 from .render import render_png
 from .takeoff import compare_takeoff, takeoff
@@ -329,6 +331,38 @@ def t_takeoff(args, ctx):
         out["comparison"] = compare_takeoff(items, lines,
                                             pct=float(args.get("tolerance_pct") or 5))
     return out
+
+
+@tool("review_summary",
+      "Сводка проверки для инженера: что проверено и с каким итогом, что осталось открытым, "
+      "где нужно решение человека, сколько денег под риском и можно ли подписывать. "
+      "Собирает summary.json, сводку выпуска, план правок, деньги и реестр актов в один ответ; "
+      "отсутствующие артефакты помечаются как «не выполнялось», а не как «всё хорошо».",
+      {"type": "object", "properties": {
+          "summary_path": {"type": "string", "description": "out/summary.json (сверка КС-2)"},
+          "batch_path": {"type": "string", "description": "сводка выпуска batch_summary.json"},
+          "acts_path": {"type": "string", "description": "реестр актов acts.json"},
+          "impact_path": {"type": "string", "description": "impact.json (деньги под риском)"},
+          "plan_path": {"type": "string", "description": "план операций по чертежу"},
+          "object_name": {"type": "string"},
+          "format": {"type": "string", "enum": ["json", "markdown"], "default": "json",
+                     "description": "markdown — готовый текст для отчёта"}},
+       "required": []})
+def t_review_summary(args, ctx):
+    base = Path(ctx.get("base_dir") or ".")
+    def p(key, default):
+        value = args.get(key)
+        return Path(value) if value else base / default
+    review = collect_review(summary_path=p("summary_path", "out/summary.json"),
+                            batch_path=p("batch_path", "out/cad/batch/batch_summary.json"),
+                            acts_path=p("acts_path", "data/demo/acts/acts.json"),
+                            impact_path=p("impact_path", "out/cad/impact/impact.json"),
+                            plan_path=p("plan_path", "out/cad/plan.json"),
+                            object_name=args.get("object_name"))
+    if (args.get("format") or "json") == "markdown":
+        return {"ok": True, "format": "markdown", "markdown": review_to_markdown(review),
+                "verdict": review["verdict"]}
+    return {"ok": True, **review}
 
 
 @tool("external_takeoff",
