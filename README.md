@@ -3,7 +3,7 @@
 [![CI](https://github.com/akoffice933-maker/pto-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/akoffice933-maker/pto-agent/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue)
 ![MCP](https://img.shields.io/badge/MCP-2025--06--18-1F3864)
-![Tests](https://img.shields.io/badge/tests-310%20passed-brightgreen)
+![Tests](https://img.shields.io/badge/tests-311%20passed-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 **Агент для ПТО в строительстве:** сверяет КС-2 с журналом и сметой, распознаёт выпуск

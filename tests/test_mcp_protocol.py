@@ -250,3 +250,17 @@ def test_installer_http_variant(tmp_path):
     server = json.loads(res.stdout)["mcpServers"]["pto-cad"]
     assert server["type"] == "http"
     assert server["url"].endswith(":9001/mcp")
+
+
+def test_ci_tool_counter_matches_server():
+    """Счётчик в CI не должен расходиться с сервером: иначе шаг stdio падает после релиза."""
+    import re
+    from pathlib import Path
+    from pto_agent.cad.mcp_server import TOOLS
+
+    ci = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "ci.yml"
+    if not ci.exists():
+        pytest.skip("нет ci.yml в этой поставке")
+    counters = {int(m) for m in re.findall(r"n\s*==\s*(\d+)", ci.read_text(encoding="utf-8"))}
+    assert counters == {len(TOOLS)}, (
+        f"в ci.yml {sorted(counters)}, а сервер отдаёт {len(TOOLS)} инструментов")
