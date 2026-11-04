@@ -28,7 +28,11 @@ from .ops import OPERATIONS, apply_operations, history_entry, validate_operation
 from ..review import collect as collect_review
 from ..review import review_to_markdown
 from ..asbuilt import (aosr_to_markdown, build_aosr, build_registry, build_scheme,
-                       check_completeness, registry_to_markdown, scheme_to_markdown)
+                       check_completeness, matrix_summary, registry_to_markdown,
+                       scheme_to_markdown, spec_from_estimate, spec_to_markdown,
+                       validate_draft, work_type_requirements)
+from ..asbuilt.forms import forms_catalog
+from ..asbuilt.spec_from_estimate import load_positions
 from .redline import plan_from_discrepancies
 from .render import render_png
 from .takeoff import compare_takeoff, takeoff
@@ -377,14 +381,20 @@ def t_review_summary(args, ctx):
 
 
 @tool("asbuilt_docs",
-      "Исполнительная документация: собрать исполнительную схему из DXF, АОСР по форме "
-      "РД-11-02-2006 или реестр ИД, либо проверить комплектность комплекта. Поле, которого "
-      "нет в данных, печатается прочерком и попадает в missing_fields: акт с дырами не "
-      "считается готовым к подписи, а отсутствующий документ ломает verdict комплекта.",
+      "Исполнительная документация: черновик АОСР по действующей форме (приказ Минстроя "
+      "№ 344/пр), исполнительная схема из DXF, реестр ИД и комплектность по матрице видов "
+      "работ (электромонтаж: изоляция, петля «фаза-нуль», УЗО). Плюс проверки черновика: "
+      "хронология дат, нормы только с пунктами, ссылка на РД, подписи и НРС. Готовит ЧЕРНОВИК: "
+      "подписывает человек, формулировка «готов к подписанию» не используется.",
       {"type": "object", "properties": {
-          "kind": {"type": "string", "enum": ["scheme", "aosr", "registry", "check"],
-                   "description": "scheme — схема из DXF; aosr — акт скрытых работ; "
-                                  "registry — реестр ИД (XLSX); check — только комплектность"},
+          "kind": {"type": "string",
+                   "enum": ["scheme", "aosr", "registry", "check", "requirements",
+                            "validate", "spec", "forms"],
+                   "description": "scheme — схема из DXF; aosr — черновик акта скрытых работ; "
+                                  "registry — реестр ИД (XLSX); check — комплектность; "
+                                  "requirements — матрица требований по видам работ; "
+                                  "validate — проверки черновика (даты, пункты норм, подписи); "
+                                  "spec — спецификация АОСР из сметы/КС-2; forms — какие формы действуют"},
           "drawing_path": {"type": "string", "description": "DXF для схемы"},
           "spec_path": {"type": "string", "description": "JSON/YAML со данными акта или реестра"},
           "spec": {"type": "object", "description": "те же данные inline, вместо spec_path"},
@@ -398,6 +408,15 @@ def t_review_summary(args, ctx):
           "date": {"type": "string"},
           "require": {"type": "array", "items": {"type": "string"},
                       "description": "обязательные типы документов для check"},
+          "work_types": {"type": "array", "items": {"type": "string"},
+                         "description": "виды работ: concrete, electrical, roofing … "
+                                        "включают матрицу требований"},
+          "form": {"type": "string", "enum": ["344pr", "rd-11-02-2006"],
+                   "description": "форма акта; по умолчанию 344pr (действует с 01.09.2023)"},
+          "smeta_path": {"type": "string", "description": "смета XLSX для kind=spec"},
+          "summary_source": {"type": "string", "description": "out/summary.json для kind=spec"},
+          "act_number": {"type": "string"}, "start_date": {"type": "string"},
+          "end_date": {"type": "string"},
           "format": {"type": "string", "enum": ["json", "markdown"], "default": "json"}},
        "required": ["kind"]})
 def t_asbuilt_docs(args, ctx):
@@ -405,6 +424,29 @@ def t_asbuilt_docs(args, ctx):
     out = Path(args.get("out_dir") or base / "out/asbuilt")
     kind = (args.get("kind") or "").lower()
     markdown = (args.get("format") or "json") == "markdown"
+
+    work_types = args.get("work_types") or []
+
+    if kind == "forms":
+        return {"ok": True, **forms_catalog()}
+
+    if kind == "requirements":
+        if work_types:
+            return work_type_requirements(work_types[0])
+        return {"ok": True, "markdown": matrix_summary()}
+
+    if kind == "spec":
+        positions, source = load_positions(smeta=args.get("smeta_path"),
+                                           summary_path=args.get("summary_source"))
+        spec = spec_from_estimate(positions, object_name=args.get("object_name") or "",
+                                  act_number=args.get("act_number") or "",
+                                  act_date=args.get("date") or "",
+                                  start_date=args.get("start_date") or "",
+                                  end_date=args.get("end_date") or "",
+                                  work=args.get("work") or "",
+                                  work_types=work_types or None, source=source)
+        return {"ok": True, "spec": spec, "markdown": spec_to_markdown(spec),
+                "needs_input": spec["needs_input"]}
 
     if kind == "scheme":
         drawing = args.get("drawing_path")
@@ -431,11 +473,18 @@ def t_asbuilt_docs(args, ctx):
             raise ValueError("нужен spec или spec_path")
         spec = _load_doc_spec(Path(path))
 
+    if work_types and not spec.get("work_types"):
+        spec["work_types"] = list(work_types)
+
+    if kind == "validate":
+        draft = validate_draft(spec, work_types=spec.get("work_types") or None)
+        return {"ok": True, **draft}
+
     if kind == "aosr":
-        result = build_aosr(spec, out)
+        result = build_aosr(spec, out, form=args.get("form"))
         if markdown:
             return {"ok": True, "format": "markdown", "markdown": aosr_to_markdown(result),
-                    "ready_to_sign": result["ready_to_sign"]}
+                    "can_transfer": result["can_transfer"], "status": result["status"]}
         return {"ok": True, **result}
     if kind == "registry":
         result = build_registry(spec, out)
@@ -445,7 +494,8 @@ def t_asbuilt_docs(args, ctx):
         return {"ok": True, **result}
     if kind == "check":
         comp = check_completeness(spec, required=args.get("require") or None,
-                                  act_ref=args.get("act_ref") or None)
+                                  act_ref=args.get("act_ref") or None,
+                                  work_types=work_types or None)
         return {"ok": True, **comp}
     raise ValueError(f"неизвестный kind: {kind}")
 

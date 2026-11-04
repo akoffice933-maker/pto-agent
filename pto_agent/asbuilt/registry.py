@@ -17,6 +17,8 @@ from pathlib import Path
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font
 
+from .requirements import load_matrix, required_kinds
+
 # обязательный минимум по типу документа для типового комплекта СМР
 REQUIRED_KINDS = {
     "аоср": "акт освидетельствования скрытых работ",
@@ -103,7 +105,8 @@ def build_registry(spec: dict, out_dir: str | Path) -> dict:
     xlsx_path = out / "registry_id.xlsx"
     wb.save(xlsx_path)
 
-    completeness = check_completeness({"documents": rows})
+    work_types = list((spec or {}).get("work_types") or (spec or {}).get("work_kinds") or [])
+    completeness = check_completeness({"documents": rows}, work_types=work_types)
     return {
         "xlsx": str(xlsx_path),
         "object": object_name,
@@ -112,20 +115,50 @@ def build_registry(spec: dict, out_dir: str | Path) -> dict:
         "count": len(rows),
         "sheets": sum(r["sheets"] or 0 for r in rows),
         "by_kind": by_kind,
+        "work_types": work_types,
         "documents": rows,
         "completeness": completeness,
     }
 
 
 def check_completeness(spec: dict, *, required: list[str] | None = None,
-                       act_ref: str | None = None) -> dict:
-    """Проверить комплектность: обязательные типы, статусы, привязка к акту."""
+                       act_ref: str | None = None,
+                       work_types: list[str] | None = None,
+                       matrix: dict | None = None) -> dict:
+    """Проверить комплектность: обязательные типы, статусы, привязка к акту.
+
+    Обязательный состав берётся по матрице вида работ (`work_types`), если он задан:
+    у электромонтажа требуются протоколы изоляции и УЗО, у кровли — испытание на
+    водонепроницаемость, у сетей — акт освидетельствования участков сетей. Если вид работ
+    не задан — работает типовой минимум СМР, и это явно видно в `required_source`.
+    """
     documents = list((spec or {}).get("documents") or [])
     kinds_present = {_kind_of(doc) for doc in documents}
-    required_kinds = required or list(REQUIRED_KINDS)
+    matrix = matrix or load_matrix()
+    profile = {"name": "pto-agent/default", "version": "1.0"}
+    protocol_names: list[str] = []
+    norm_refs: list[dict] = []
 
-    missing = [{"kind": k, "what": REQUIRED_KINDS.get(k, k)}
-               for k in required_kinds if k not in kinds_present]
+    if work_types:
+        req = required_kinds(work_types, matrix)
+        required_kinds_list = req["required"]
+        profile = req.get("profile") or profile
+        protocol_names = req["protocols"]
+        norm_refs = req["norms"]
+        required_source = "матрица видов работ: " + ", ".join(work_types)
+        unknown_types = req["unknown"]
+    elif required:
+        required_kinds_list = list(required)
+        required_source = "заданный вручную список"
+        unknown_types = []
+    else:
+        required_kinds_list = list(REQUIRED_KINDS)
+        required_source = "типовой минимум СМР"
+        unknown_types = []
+
+    missing = [{"kind": k, "what": (REQUIRED_KINDS.get(k)
+                                    or matrix["document_kinds"].get(k) or k)}
+               for k in required_kinds_list if k not in kinds_present]
     bad_status = [{"name": doc.get("name"), "status": doc.get("status")}
                   for doc in documents
                   if str(doc.get("status") or "").strip().lower() in STATUS_BAD]
@@ -137,20 +170,57 @@ def check_completeness(spec: dict, *, required: list[str] | None = None,
                    for doc in documents
                    if act_ref and (doc.get("act_ref") or act_ref) != act_ref]
 
-    complete = not missing and not bad_status and not foreign_act
+    # протоколы из матрицы: ищем по названию среди документов комплекта
+    names_blob = " ".join(str(doc.get("name") or "").lower() for doc in documents)
+    missing_protocols = [p for p in protocol_names
+                         if not _protocol_present(p, names_blob)]
+
+    complete = not missing and not bad_status and not foreign_act and not missing_protocols
+    verdict_parts = []
+    if missing:
+        verdict_parts.append("не хватает: " + ", ".join(m["kind"] for m in missing))
+    if missing_protocols:
+        verdict_parts.append(f"нет протоколов: {len(missing_protocols)}")
+    if bad_status:
+        verdict_parts.append(f"статусы требуют внимания: {len(bad_status)}")
+    if foreign_act:
+        verdict_parts.append(f"документы другого акта: {len(foreign_act)}")
     return {
         "complete": complete,
+        "profile": profile,
+        "required_source": required_source,
+        "required": required_kinds_list,
         "missing": missing,
+        "missing_protocols": missing_protocols,
         "bad_status": bad_status,
         "not_checked": not_checked,
         "foreign_act": foreign_act,
         "documents": len(documents),
         "kinds": sorted(kinds_present),
-        "verdict": ("комплект полный" if complete else
-                    f"не хватает: {', '.join(m['kind'] for m in missing) or '—'}"
-                    + (f"; статусы требуют внимания: {len(bad_status)}" if bad_status else "")
-                    + (f"; документы другого акта: {len(foreign_act)}" if foreign_act else "")),
+        "work_types": list(work_types or []),
+        "unknown_work_types": unknown_types,
+        "norms": norm_refs,
+        "verdict": ("комплект полный" if complete else "; ".join(verdict_parts)),
     }
+
+
+def _protocol_present(protocol: str, names_blob: str) -> bool:
+    """Протокол считается приложенным, если в комплекте есть документ с его темой.
+
+    Сравниваем по значимым словам и требуем совпадения большей части: в реестре пишут
+    «Протокол проверки УЗО щита ЩР-1», а в матрице — «...УЗО / дифференциальных автоматов
+    (ток и время срабатывания)». Полное совпадение строк здесь дало бы ложное «нет документа».
+    """
+    STOP = {"при", "для", "или", "на", "по", "не", "из", "и", "в", "с", "о"}
+    words = [w.strip("«»().,/").lower().replace("ё", "е")
+             for w in str(protocol).split()]
+    key_words = [w for w in words
+                 if len(w) >= 3 and w not in STOP and not w.replace("-", "").isdigit()]
+    if not key_words:
+        return True
+    blob = names_blob.replace("ё", "е")
+    matched = [w for w in key_words if w in blob]
+    return len(matched) >= 2 and len(matched) / len(key_words) >= 0.5
 
 
 def registry_to_markdown(result: dict) -> str:
@@ -158,6 +228,8 @@ def registry_to_markdown(result: dict) -> str:
     lines = [f"# Реестр исполнительной документации: {result.get('object') or '—'}", "",
              f"- акт: {result.get('act_ref') or '—'} · дата реестра: {result.get('date')}",
              f"- документов: {result['count']} · листов: {result['sheets']}",
+             f"- профиль комплектности: {comp['profile']['name']}/v{comp['profile']['version']}"
+             f" · требования: {comp['required_source']}",
              f"- комплектность: **{comp['verdict']}**", "",
              "| № | Документ | Шифр | Тип | Листов | Статус |",
              "|---|---|---|---|---|---|"]
@@ -170,6 +242,9 @@ def registry_to_markdown(result: dict) -> str:
     if comp["foreign_act"]:
         lines += ["", "**Документы другого акта:** " +
                   ", ".join(f"{d['name']} ({d['act_ref']})" for d in comp["foreign_act"])]
+    if comp.get("missing_protocols"):
+        lines += ["", "**Не приложены протоколы, требуемые видом работ:**"]
+        lines += [f"- {p}" for p in comp["missing_protocols"]]
     if comp["not_checked"]:
         lines += ["", f"Не проверено выпуском: {len(comp['not_checked'])} документ(ов)"]
     return "\n".join(lines) + "\n"

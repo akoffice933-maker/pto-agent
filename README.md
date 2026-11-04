@@ -3,7 +3,7 @@
 [![CI](https://github.com/akoffice933-maker/pto-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/akoffice933-maker/pto-agent/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue)
 ![MCP](https://img.shields.io/badge/MCP-2025--06--18-1F3864)
-![Tests](https://img.shields.io/badge/tests-254%20passed-brightgreen)
+![Tests](https://img.shields.io/badge/tests-285%20passed-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 **Агент для ПТО в строительстве:** сверяет КС-2 с журналом и сметой, распознаёт выпуск
@@ -21,7 +21,7 @@
 | Фото с телефона → чертёж | гомография по 4 точкам, rms 0,0 мм, 5/5 пометок |
 | Деньги по выпуску | 1 850 000 ₽ под риском = 5,42 % акта, каждый рубль с формулой |
 | Портфель актов объекта | 3 акта, покрытие 100 %, 2 091 000 ₽ под риском (5,43 %) |
-| Исполнительная документация | схема из DXF + АОСР № 114 + реестр на 5 документов (56 листов), комплектность проверена |
+| Исполнительная документация | схема из DXF + черновик АОСР № 114 по форме № 344/пр + реестр на 5 документов (56 листов); 9 проверок черновика, матрица 15 видов работ |
 | MCP | 17 инструментов, stdio + http, установка одной командой |
 
 ## Быстрый старт
@@ -122,10 +122,12 @@ python3 -m pytest tests -q
 | `pto_agent/integrations/one_c_http.py` | **Обмен с 1С по HTTP (уровень 2):** акты и смета из HTTP-сервиса 1С, отправка проверенной КС-2 с `Idempotency-Key`, различимые ошибки (401/4xx/5xx), повторы только там, где безопасно |
 | `config/one_c.example.yaml` | Конфиг HTTP-обмена: адрес сервиса, учётные данные из `${VAR}` окружения, таймауты и повторы |
 | `tests/test_one_c_http.py` | 21 тест: фейковый HTTP-сервис 1С, аутентификация, 401/400/500, повторы, не-JSON, обе формы актов, идемпотентность, CLI |
-| `pto_agent/asbuilt/` | **Исполнительная документация:** `scheme` (лист DXF + титул + ведомость объёмов + подписи в DOCX/PNG), `aosr` (акт скрытых работ по РД-11-02-2006, три раздела и подписи), `registry` (реестр ИД в XLSX + комплектность), `cli` (`python3 -m pto_agent asbuilt …`); чего нет в данных — прочерк и `missing_fields`, а не выдуманное значение |
+| `pto_agent/asbuilt/` | **Исполнительная документация:** `scheme` (лист DXF + титул + ведомость объёмов + подписи, проверка оформления листа), `aosr` (ЧЕРНОВИК акта по действующей форме — приказ Минстроя № 344/пр, 7 пунктов; `forms` знает календарь форм), `validation` (хронология дат, нормы только с пунктами, РД, подписи и НРС), `registry` (реестр ИД в XLSX + комплектность по матрице видов работ), `spec_from_estimate` (спецификация акта из сметы/КС-2), `cli` (`python3 -m pto_agent asbuilt …`); чего нет в данных — прочерк и `needs_input`, а не выдуманное значение |
 | `data/reference/asbuilt_tools.json` | Реестр 14 GitHub-проектов для ИД и схем: лицензия, звёзды, что берём и чего не берём; проверяется `scripts/check_analogues.py --list` |
+| `data/reference/work_type_requirements.json` | Матрица комплектности на 15 видов работ (профиль `pto-agent/default@1.0`): обязательные документы, протоколы, нормы с пунктами; электромонтаж — изоляция, петля «фаза-нуль», УЗО, заземление, освещение |
 | `data/demo/asbuilt/` | Демо-спецификации: реестр ИД (5 документов, 56 листов) и АОСР № 114 на фундаментную плиту |
-| `tests/test_asbuilt.py` | 17 тестов: лист и ведомость в схеме, `missing_fields`, готовность АОСР к подписи, приложения ИД, реестр XLSX, четыре вида пробелов комплектности, коды возврата CLI |
+| `tests/test_asbuilt.py` | 20 тестов: лист и ведомость в схеме, `missing_fields`, статус черновика, приложения ИД, реестр XLSX, виды пробелов комплектности, CLI и MCP |
+| `tests/test_asbuilt_rules.py` | 31 тест правил: форма № 344/пр против legacy, wording черновика, матрица по видам работ и электромонтаж, хронология дат, нормы без пунктов, НРС, спецификация из сметы, CLI и MCP |
 | `pto_agent/review.py` | **Сводка проверки:** собирает пять артефактов в один ответ — что проверено, что осталось, где нужен человек, деньги, вердикт; пропуск ≠ «ок», «не оценено» ≠ 0 ₽ |
 | `tests/test_review.py` | 18 тестов: вердикты `ready/needs_review/blocked/no_data`, блокировки, группировка вопросов выпуска, деньги, markdown, CLI и MCP |
 | `pto_agent/integrations/one_c.py` | **Обмен с 1С/БИТ.Строительство:** выгрузка проверенной КС-2 и реестра актов в CSV (`utf-8-sig`, `;`, десятичная запятая), терпимое чтение смет и актов из 1С (синонимы шапок, cp1251, пробелы тысяч), «не оценено» вместо нуля |
@@ -267,13 +269,19 @@ python3 -m pto_agent cad impact --acts data/demo/acts/acts.json \
 # итог проверки: что проверено, что осталось, где нужен человек (и можно ли подписывать)
 python3 -m pto_agent review --summary out/summary.json --batch out/cad/batch/batch_summary.json \
         --impact out/cad/impact/impact.json --acts data/demo/acts/acts.json --out out/review
-# исполнительная документация: схема из DXF, АОСР, реестр ИД, комплектность
+# исполнительная документация: схема из DXF, черновик АОСР, реестр ИД, комплектность
 python3 -m pto_agent asbuilt scheme --file drawings/korpus2_plan_v1.dxf \
         --object-name "ЖК «Северный», корпус 2" --work "Фундаментная плита" \
         --code ИС-01-26 --act-ref "КС-2 №38" --executor "Иванов И.И." \
         --reviewer "Петров П.П." --out out/asbuilt
 python3 -m pto_agent asbuilt aosr --spec data/demo/asbuilt/aosr_ks38.json --out out/asbuilt
 python3 -m pto_agent asbuilt registry --spec data/demo/asbuilt/registry.json --out out/asbuilt
+# электромонтаж: матрица требует протоколы изоляции, «фаза-нуль», УЗО, заземления
+python3 -m pto_agent asbuilt registry --spec реестр_эл.json --work-type electrical
+# спецификация акта из сметы (работы, виды работ, нормы с пунктами) и матрица требований
+python3 -m pto_agent asbuilt spec --smeta data/demo/smeta_v1.xlsx --object-name "Объект"
+python3 -m pto_agent asbuilt requirements --work-type electrical
+python3 -m pto_agent asbuilt forms      # какая форма АОСР действует на дату
 # обмен с 1С/БИТ.Строительство: смета и акты из 1С → наши структуры
 python3 -m pto_agent import-1c --smeta выгрузка_сметы.csv --acts реестр_кс2.csv --out out/1c
 python3 -m pto_agent export-1c --summary out/summary.json --out out/1c/ks2_for_1c.csv

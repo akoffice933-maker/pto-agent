@@ -79,17 +79,24 @@ def test_scheme_reports_missing_fields(tmp_path):
 
 # ─────────────────────────────── АОСР ───────────────────────────────────
 @needs_specs
-def test_aosr_ready_to_sign_from_demo_spec(tmp_path):
+def test_aosr_draft_complete_from_demo_spec(tmp_path):
     spec = json.loads(AOSR_SPEC.read_text(encoding="utf-8"))
-    res = build_aosr(spec, tmp_path)
-    assert res["ready_to_sign"] is True
-    assert res["attachments"] == 4
-    assert res["missing_fields"] == []
+    res = build_aosr(spec, tmp_path, today=__import__("datetime").date(2026, 11, 4))
+    assert res["can_transfer"] is True
+    assert res["status"] == "draft_complete"
+    assert res["form"]["id"] == "344pr"
+    assert res["attachments"] == 5          # 4 документа + общий журнал работ
+    assert res["missing_fields"] == []      # блокеров нет (есть только замечания)
     text = _docx_text(res["docx"])
-    for needle in ("АКТ", "освидетельствования скрытых работ", "№ 114",
-                   "1. Представители сторон", "2. Исполнительная документация",
-                   "3. Работы, материалы и нормативные документы",
-                   "СП 70.13330.2012", "ИС-01-26", "Подписи сторон"):
+    for needle in ("ЧЕРНОВИК", "АКТ", "освидетельствования скрытых работ", "№ 114",
+                   "приказ Минстроя России от 16.05.2023 № 344/пр",
+                   "1. К освидетельствованию предъявлены следующие работы",
+                   "2. Работы выполнены по проектной документации",
+                   "3. При выполнении работ применены",
+                   "5. Работы выполнены в соответствии с",
+                   "6. Сроки выполнения работ",
+                   "7. Разрешается производство последующих работ",
+                   "СП 70.13330.2012 п. 5.3.3", "ИС-01-26", "Подписи представителей сторон"):
         assert needle in text, needle
 
 
@@ -98,9 +105,11 @@ def test_aosr_without_representatives_is_not_signable(tmp_path):
     spec = json.loads(AOSR_SPEC.read_text(encoding="utf-8"))
     spec["representatives"].pop("customer")
     res = build_aosr(spec, tmp_path)
-    assert res["ready_to_sign"] is False
-    assert any("представитель: customer" in m for m in res["missing_fields"])
-    assert "подписывать нельзя" in aosr_to_markdown(res)
+    assert res["can_transfer"] is False and res["status"] == "draft_incomplete"
+    assert any("не указан представитель" in m for m in res["missing_fields"])
+    md = aosr_to_markdown(res)
+    assert "ЧЕРНОВИК" in md and "передавать на подпись нельзя" in md
+    assert "готов к подписанию" not in md
 
 
 @needs_specs
@@ -108,15 +117,16 @@ def test_aosr_without_attachments_is_not_signable(tmp_path):
     spec = json.loads(AOSR_SPEC.read_text(encoding="utf-8"))
     spec["attachments"] = []
     res = build_aosr(spec, tmp_path)
-    assert res["ready_to_sign"] is False
-    assert any("перечень ИД" in m for m in res["missing_fields"])
+    assert res["can_transfer"] is False
+    assert any("перечень исполнительной документации пуст" in m for m in res["missing_fields"])
 
 
 def test_aosr_minimal_spec_reports_all_gaps(tmp_path):
     res = build_aosr({"act_number": "7"}, tmp_path)
-    assert res["ready_to_sign"] is False
+    assert res["can_transfer"] is False
     joined = " ".join(res["missing_fields"])
-    for field in ("object_name", "work", "start_date", "end_date", "перечень ИД"):
+    for field in ("наименование объекта", "наименование работ", "дата начала работ",
+                  "дата окончания работ", "перечень исполнительной документации пуст"):
         assert field in joined
 
 
@@ -187,7 +197,8 @@ def test_cli_aosr_and_registry_exit_codes(tmp_path):
     a = subprocess.run([sys.executable, "-m", "pto_agent", "asbuilt", "aosr",
                         "--spec", str(AOSR_SPEC), "--out", str(tmp_path)],
                        capture_output=True, text=True, timeout=180, cwd=ROOT)
-    assert a.returncode == 0 and "готов к подписанию" in a.stdout
+    assert a.returncode == 0 and "можно передавать на подпись" in a.stdout
+    assert "готов к подписанию" not in a.stdout
     r = subprocess.run([sys.executable, "-m", "pto_agent", "asbuilt", "registry",
                         "--spec", str(REGISTRY_SPEC), "--out", str(tmp_path)],
                        capture_output=True, text=True, timeout=180, cwd=ROOT)

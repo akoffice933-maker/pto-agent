@@ -14,9 +14,21 @@
 печатается как «—» с пометкой в отчёте, а не заполняется правдоподобным значением.
 """
 from .aosr import build_aosr, aosr_to_markdown               # noqa: F401
+from .forms import (FORMS, CURRENT_FORM, form_status,        # noqa: F401
+                    forms_catalog, get_form)
 from .registry import (build_registry, check_completeness,    # noqa: F401
                        registry_to_markdown)
+from .requirements import (classify_work, load_matrix,        # noqa: F401
+                           matrix_summary, required_kinds,
+                           work_type_requirements)
 from .scheme import build_scheme, scheme_to_markdown          # noqa: F401
+from .spec_from_estimate import (spec_from_estimate,          # noqa: F401
+                                 spec_to_markdown)
+from .validation import validate_draft                        # noqa: F401
 
 __all__ = ["build_scheme", "scheme_to_markdown", "build_aosr", "aosr_to_markdown",
-           "build_registry", "check_completeness", "registry_to_markdown"]
+           "build_registry", "check_completeness", "registry_to_markdown",
+           "validate_draft", "work_type_requirements", "required_kinds",
+           "classify_work", "load_matrix", "matrix_summary", "forms_catalog",
+           "form_status", "get_form", "FORMS", "CURRENT_FORM",
+           "spec_from_estimate", "spec_to_markdown"]

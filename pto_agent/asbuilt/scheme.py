@@ -26,6 +26,9 @@ from docx.shared import Cm, Pt
 from ..cad.drawing import Drawing
 from ..cad.render import render_png
 from ..cad.takeoff import takeoff
+from ..cad.template import load_template, validate_drawing
+
+DEFAULT_TEMPLATE = "config/cad_template_corp_A.yaml"
 
 
 def _cell_text(cell, text: str, bold: bool = False, size: int = 10):
@@ -41,7 +44,8 @@ def build_scheme(drawing_path: str | Path, out_dir: str | Path, *, object_name: 
                  work: str, code: str = "", act_ref: str = "", executor: str = "",
                  reviewer: str = "", organization: str = "", drawing_no: str = "",
                  scheme_date: str | None = None, notes: str = "",
-                 with_image: bool = True, dpi: int = 110) -> dict:
+                 with_image: bool = True, dpi: int = 110,
+                 template_path: str | Path | None = None) -> dict:
     """Собрать исполнительную схему: `out_dir/scheme_<code>.docx` + PNG листа."""
     drawing_path = Path(drawing_path)
     out = Path(out_dir)
@@ -51,6 +55,15 @@ def build_scheme(drawing_path: str | Path, out_dir: str | Path, *, object_name: 
 
     drawing = Drawing.open(drawing_path)
     positions = takeoff(drawing)
+
+    # Схема выпускается по чертежу, который должен быть оформлен: рамка, штамп, слои.
+    # Если шаблон нарушен — документ всё равно собираем (инженеру нужно видеть лист),
+    # но помечаем, что блокирующие замечания есть.
+    tpl_path = Path(template_path) if template_path else Path(DEFAULT_TEMPLATE)
+    try:
+        template_check = validate_drawing(drawing, load_template(tpl_path))
+    except Exception as exc:                       # шаблон может отсутствовать в поставке
+        template_check = {"issues": [], "blocking": [], "ok": None, "error": str(exc)}
     png_path = None
     if with_image:
         png_path = render_png(drawing, out / f"scheme_{stem}.png", dpi=dpi)
@@ -143,6 +156,7 @@ def build_scheme(drawing_path: str | Path, out_dir: str | Path, *, object_name: 
     missing = [k for k, v in (("шифр схемы", code), ("акт КС-2", act_ref),
                               ("исполнитель", executor), ("проверил", reviewer))
                if not v]
+    blocking_count = int(template_check.get("blocking") or 0)
     return {
         "docx": str(docx_path),
         "png": str(png_path) if png_path else None,
@@ -154,6 +168,13 @@ def build_scheme(drawing_path: str | Path, out_dir: str | Path, *, object_name: 
         "work": work,
         "act_ref": act_ref,
         "date": scheme_date,
+        "template_ok": template_check.get("ok"),
+        "template_blocking": blocking_count,
+        "template_warnings": int(template_check.get("warnings") or 0),
+        "template_issues": [(i.get("text") or i.get("code") or i.get("check"))
+                            for i in (template_check.get("issues") or [])][:10],
+        "note": "лист берётся из DXF: схема с нуля не чертится — агент готовит документ "
+                "по чертежу, который нарисовал человек",
     }
 
 
@@ -167,6 +188,10 @@ def scheme_to_markdown(result: dict) -> str:
              f"- DOCX: `{Path(result['docx']).name}`"]
     if result.get("png"):
         lines.append(f"- лист PNG: `{Path(result['png']).name}`")
+    if result.get("template_blocking") or result.get("template_warnings"):
+        lines += ["", f"**Оформление листа:** блокирующих {result.get('template_blocking', 0)}, "
+                      f"замечаний {result.get('template_warnings', 0)} — "
+                      + "; ".join(result.get("template_issues") or [])]
     if result.get("missing_fields"):
         lines += ["", "**Не заполнено:** " + ", ".join(result["missing_fields"]) +
                   " — печатается как «—», подписывать нельзя, пока не заполнено"]

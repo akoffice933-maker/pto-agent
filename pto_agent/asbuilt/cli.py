@@ -8,8 +8,11 @@ import sys
 from pathlib import Path
 
 from .aosr import aosr_to_markdown, build_aosr
+from .forms import forms_catalog
 from .registry import build_registry, check_completeness, registry_to_markdown
+from .requirements import matrix_summary, required_kinds, work_type_requirements
 from .scheme import build_scheme, scheme_to_markdown
+from .spec_from_estimate import (load_positions, spec_from_estimate, spec_to_markdown)
 
 
 def _load_spec(path: str | Path | None) -> dict:
@@ -35,11 +38,15 @@ def cmd_scheme(args) -> int:
                           code=args.code, act_ref=args.act_ref, executor=args.executor,
                           reviewer=args.reviewer, organization=args.organization,
                           drawing_no=args.drawing_no, scheme_date=args.date,
-                          notes=args.note, with_image=not args.no_image, dpi=args.dpi)
+                          notes=args.note, with_image=not args.no_image, dpi=args.dpi,
+                          template_path=args.template)
     _write_md(Path(args.out) / "scheme.md", scheme_to_markdown(result))
     print(f"Исполнительная схема: {result['docx']}")
     print(f"  лист: {Path(result['drawing']).name} · объёмов {result['positions']} "
           f"(с объёмом {result['volumes_estimated']})")
+    if result.get("template_blocking"):
+        print(f"  ✗ оформление листа: {result['template_blocking']} блокирующих замечаний",
+              file=sys.stderr)
     if result["missing_fields"]:
         print(f"  не заполнено: {', '.join(result['missing_fields'])} — подписывать нельзя",
               file=sys.stderr)
@@ -48,23 +55,36 @@ def cmd_scheme(args) -> int:
 
 def cmd_aosr(args) -> int:
     spec = _load_spec(args.spec)
-    result = build_aosr(spec, args.out)
+    if args.work_type:
+        spec["work_types"] = [w for w in args.work_type.split(",") if w]
+    result = build_aosr(spec, args.out, form=args.form)
     _write_md(Path(args.out) / "aosr.md", aosr_to_markdown(result))
-    print(f"АОСР № {result['act_number'] or '—'} от {result['act_date']}: {result['docx']}")
-    print(f"  приложений ИД: {result['attachments']} · "
-          f"{'готов к подписанию' if result['ready_to_sign'] else 'подписывать нельзя'}")
-    if result["missing_fields"]:
-        print(f"  не хватает: {', '.join(result['missing_fields'])}", file=sys.stderr)
-    return 0 if result["ready_to_sign"] else 1
+    print(f"ЧЕРНОВИК АОСР № {result['act_number'] or '—'} от {result['act_date']}: {result['docx']}")
+    print(f"  форма: {result['form']['short']}")
+    print(f"  приложений ИД: {result['attachments']} · статус: {result['status']} "
+          f"({'можно передавать на подпись' if result['can_transfer'] else 'есть блокеры'})")
+    if result["form"]["warning"]:
+        print(f"  ВНИМАНИЕ: {result['form']['warning']}", file=sys.stderr)
+    for issue in result["validation"]["blocking"]:
+        print(f"  ✗ {issue['text']}", file=sys.stderr)
+    for issue in result["validation"]["warnings"]:
+        print(f"  ! {issue['text']}", file=sys.stderr)
+    return 0 if result["can_transfer"] else 1
 
 
 def cmd_registry(args) -> int:
     spec = _load_spec(args.spec)
+    if args.work_type:
+        spec["work_types"] = [w for w in args.work_type.split(",") if w]
     result = build_registry(spec, args.out)
     _write_md(Path(args.out) / "registry.md", registry_to_markdown(result))
     comp = result["completeness"]
     print(f"Реестр ИД: {result['xlsx']}")
     print(f"  документов {result['count']} · листов {result['sheets']} · {comp['verdict']}")
+    print(f"  профиль: {comp['profile']['name']}/v{comp['profile']['version']} · "
+          f"требования: {comp['required_source']}")
+    for proto in comp.get("missing_protocols") or []:
+        print(f"  ✗ нет протокола: {proto}", file=sys.stderr)
     if comp["missing"]:
         for m in comp["missing"]:
             print(f"  ✗ нет документа: {m['kind']} — {m['what']}", file=sys.stderr)
@@ -77,9 +97,57 @@ def cmd_registry(args) -> int:
 def cmd_check(args) -> int:
     spec = _load_spec(args.spec)
     required = [r for r in (args.require or "").split(",") if r] or None
-    comp = check_completeness(spec, required=required, act_ref=args.act_ref)
+    work_types = [w for w in (args.work_type or "").split(",") if w] or None
+    comp = check_completeness(spec, required=required, act_ref=args.act_ref,
+                              work_types=work_types)
     print(json.dumps(comp, ensure_ascii=False, indent=2))
     return 0 if comp["complete"] else 1
+
+
+def cmd_requirements(args) -> int:
+    if args.work_type:
+        payload = work_type_requirements(args.work_type)
+    else:
+        payload = {"matrix": matrix_summary(), "profile": load_matrix_profile()}
+    if (args.format or "json") == "markdown":
+        print(payload.get("matrix") or matrix_summary(), end="")
+    else:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0 if payload.get("ok", True) else 1
+
+
+def load_matrix_profile() -> dict:
+    from .requirements import load_matrix
+    return load_matrix().get("profile")
+
+
+def cmd_forms(args) -> int:
+    print(json.dumps(forms_catalog(), ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_spec(args) -> int:
+    matrix = None
+    positions, source = load_positions(smeta=args.smeta, summary_path=args.summary)
+    spec = spec_from_estimate(positions, object_name=args.object_name,
+                              act_number=args.act_number or "", act_date=args.date or "",
+                              start_date=args.start or "", end_date=args.end or "",
+                              work=args.work or "",
+                              work_types=[w for w in (args.work_type or "").split(",") if w] or None,
+                              matrix=matrix, source=source)
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / (args.name or "aosr_spec.json")
+    path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
+    _write_md(out / (path.stem + ".md"), spec_to_markdown(spec))
+    print(f"Черновик спецификации АОСР: {path}")
+    print(f"  позиций: {spec['source']['positions_total']} "
+          f"(опознано {spec['source']['positions_classified']}) · "
+          f"виды работ: {', '.join(spec['work_types']) or '—'}")
+    print(f"  норм с пунктами: {len(spec['norms'])} · шаблон приложений: {len(spec['attachments'])}")
+    if spec["needs_input"]:
+        print(f"  заполнить вручную: {', '.join(spec['needs_input'])}", file=sys.stderr)
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -102,23 +170,56 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--note", default="")
     s.add_argument("--dpi", type=int, default=110)
     s.add_argument("--no-image", action="store_true", help="без растрового листа в DOCX")
+    s.add_argument("--template", default=None,
+                   help="шаблон оформления листа (по умолчанию корпоративный corp-A)")
     s.set_defaults(func=cmd_scheme)
 
     a = sub.add_parser("aosr", help="АОСР по форме РД-11-02-2006 из спецификации")
     a.add_argument("--spec", required=True, help="JSON/YAML с данными акта")
     a.add_argument("--out", default="out/asbuilt")
+    a.add_argument("--form", default=None,
+                   choices=["344pr", "rd-11-02-2006"],
+                   help="форма акта: 344pr (действует с 01.09.2023) или устаревшая РД-11-02-2006")
+    a.add_argument("--work-type", default="",
+                   help="виды работ через запятую (earthworks, concrete, electrical …)")
     a.set_defaults(func=cmd_aosr)
 
     r = sub.add_parser("registry", help="реестр ИД (XLSX) и проверка комплектности")
     r.add_argument("--spec", required=True)
     r.add_argument("--out", default="out/asbuilt")
+    r.add_argument("--work-type", default="",
+                   help="виды работ через запятую — включает матрицу требований")
     r.set_defaults(func=cmd_registry)
 
     c = sub.add_parser("check", help="только проверка комплектности (JSON в stdout)")
     c.add_argument("--spec", required=True)
     c.add_argument("--require", default="", help="обязательные типы через запятую")
     c.add_argument("--act-ref", default="")
+    c.add_argument("--work-type", default="")
     c.set_defaults(func=cmd_check)
+
+    q = sub.add_parser("requirements", help="матрица требований по видам работ")
+    q.add_argument("--work-type", default="", help="один вид работ; без него — вся матрица")
+    q.add_argument("--format", default="json", choices=["json", "markdown"])
+    q.set_defaults(func=cmd_requirements)
+
+    f = sub.add_parser("forms", help="какие формы актов действуют и какие устарели")
+    f.set_defaults(func=cmd_forms)
+
+    sp = sub.add_parser("spec", help="черновик спецификации АОСР из сметы или КС-2")
+    src = sp.add_mutually_exclusive_group(required=True)
+    src.add_argument("--smeta", help="смета XLSX")
+    src.add_argument("--summary", help="out/summary.json (сверка КС-2)")
+    sp.add_argument("--object-name", default="")
+    sp.add_argument("--act-number", default="")
+    sp.add_argument("--date", default="", help="дата акта")
+    sp.add_argument("--start", default="")
+    sp.add_argument("--end", default="")
+    sp.add_argument("--work", default="", help="наименование работ (иначе — из позиций)")
+    sp.add_argument("--work-type", default="")
+    sp.add_argument("--name", default="aosr_spec.json")
+    sp.add_argument("--out", default="out/asbuilt")
+    sp.set_defaults(func=cmd_spec)
     return p
 
 
