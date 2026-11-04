@@ -230,7 +230,7 @@ def test_cli_review_writes_report(tmp_path):
 
 def test_mcp_tool_review_summary(tmp_path):
     from pto_agent.cad.mcp_server import TOOLS, handle_rpc, make_ctx
-    assert len(TOOLS) == 16
+    assert len(TOOLS) == 17
     ctx = make_ctx(ROOT, ROOT / "out" / "cad" / "audit.jsonl")
     req = {"jsonrpc": "2.0", "id": 31, "method": "tools/call",
            "params": {"name": "review_summary", "arguments": {}}}

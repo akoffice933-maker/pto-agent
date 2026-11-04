@@ -27,6 +27,8 @@ from .external_takeoff import (align, load_config, local_positions_from_dxf,
 from .ops import OPERATIONS, apply_operations, history_entry, validate_operations
 from ..review import collect as collect_review
 from ..review import review_to_markdown
+from ..asbuilt import (aosr_to_markdown, build_aosr, build_registry, build_scheme,
+                       check_completeness, registry_to_markdown, scheme_to_markdown)
 from .redline import plan_from_discrepancies
 from .render import render_png
 from .takeoff import compare_takeoff, takeoff
@@ -55,6 +57,15 @@ def _p(args, key, required=True, default=None):
     if v in (None, "") and required:
         raise ValueError(f"не передан обязательный параметр {key}")
     return v
+
+
+def _load_doc_spec(path: Path) -> dict:
+    """Спецификация ИД из JSON/YAML: одинаково для CLI и MCP."""
+    raw = Path(path).read_text(encoding="utf-8")
+    if Path(path).suffix.lower() in (".yaml", ".yml"):
+        import yaml
+        return yaml.safe_load(raw) or {}
+    return json.loads(raw)
 
 
 @tool("get_drawing_info",
@@ -363,6 +374,80 @@ def t_review_summary(args, ctx):
         return {"ok": True, "format": "markdown", "markdown": review_to_markdown(review),
                 "verdict": review["verdict"]}
     return {"ok": True, **review}
+
+
+@tool("asbuilt_docs",
+      "Исполнительная документация: собрать исполнительную схему из DXF, АОСР по форме "
+      "РД-11-02-2006 или реестр ИД, либо проверить комплектность комплекта. Поле, которого "
+      "нет в данных, печатается прочерком и попадает в missing_fields: акт с дырами не "
+      "считается готовым к подписи, а отсутствующий документ ломает verdict комплекта.",
+      {"type": "object", "properties": {
+          "kind": {"type": "string", "enum": ["scheme", "aosr", "registry", "check"],
+                   "description": "scheme — схема из DXF; aosr — акт скрытых работ; "
+                                  "registry — реестр ИД (XLSX); check — только комплектность"},
+          "drawing_path": {"type": "string", "description": "DXF для схемы"},
+          "spec_path": {"type": "string", "description": "JSON/YAML со данными акта или реестра"},
+          "spec": {"type": "object", "description": "те же данные inline, вместо spec_path"},
+          "out_dir": {"type": "string", "description": "куда класть документы (по умолчанию out/asbuilt)"},
+          "object_name": {"type": "string"},
+          "work": {"type": "string", "description": "вид работ на схеме"},
+          "code": {"type": "string", "description": "шифр схемы"},
+          "act_ref": {"type": "string", "description": "акт КС-2"},
+          "executor": {"type": "string"}, "reviewer": {"type": "string"},
+          "organization": {"type": "string"}, "drawing_no": {"type": "string"},
+          "date": {"type": "string"},
+          "require": {"type": "array", "items": {"type": "string"},
+                      "description": "обязательные типы документов для check"},
+          "format": {"type": "string", "enum": ["json", "markdown"], "default": "json"}},
+       "required": ["kind"]})
+def t_asbuilt_docs(args, ctx):
+    base = Path(ctx.get("base_dir") or ".")
+    out = Path(args.get("out_dir") or base / "out/asbuilt")
+    kind = (args.get("kind") or "").lower()
+    markdown = (args.get("format") or "json") == "markdown"
+
+    if kind == "scheme":
+        drawing = args.get("drawing_path")
+        if not drawing:
+            raise ValueError("для kind=scheme нужен drawing_path")
+        result = build_scheme(Path(drawing), out,
+                              object_name=args.get("object_name") or "",
+                              work=args.get("work") or "",
+                              code=args.get("code") or "",
+                              act_ref=args.get("act_ref") or "",
+                              executor=args.get("executor") or "",
+                              reviewer=args.get("reviewer") or "",
+                              organization=args.get("organization") or "",
+                              drawing_no=args.get("drawing_no") or "",
+                              scheme_date=args.get("date"))
+        if markdown:
+            return {"ok": True, "format": "markdown", "markdown": scheme_to_markdown(result)}
+        return {"ok": True, **result}
+
+    spec = args.get("spec")
+    if spec is None:
+        path = args.get("spec_path")
+        if not path:
+            raise ValueError("нужен spec или spec_path")
+        spec = _load_doc_spec(Path(path))
+
+    if kind == "aosr":
+        result = build_aosr(spec, out)
+        if markdown:
+            return {"ok": True, "format": "markdown", "markdown": aosr_to_markdown(result),
+                    "ready_to_sign": result["ready_to_sign"]}
+        return {"ok": True, **result}
+    if kind == "registry":
+        result = build_registry(spec, out)
+        if markdown:
+            return {"ok": True, "format": "markdown", "markdown": registry_to_markdown(result),
+                    "complete": result["completeness"]["complete"]}
+        return {"ok": True, **result}
+    if kind == "check":
+        comp = check_completeness(spec, required=args.get("require") or None,
+                                  act_ref=args.get("act_ref") or None)
+        return {"ok": True, **comp}
+    raise ValueError(f"неизвестный kind: {kind}")
 
 
 @tool("external_takeoff",

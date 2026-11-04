@@ -1,0 +1,265 @@
+{
+  "schema": "pto-agent/analogues@1",
+  "checked_at": "2026-11-04",
+  "checked_via": "GitHub REST API /repos/{owner}/{repo} и /search/repositories",
+  "our_license": "MIT",
+  "rules": {
+    "copy_code": "код берём только при MIT / Apache-2.0 / BSD / ISC и с сохранением уведомления об авторстве",
+    "copy_data": "данные проверяются отдельно: у баз и справочников своя лицензия",
+    "agpl": "AGPL-3.0: только как отдельный сервис по сети, код в MIT-поставку не попадает",
+    "no_license": "без лицензии = все права защищены: читаем как идею, копировать нельзя",
+    "weak_copyleft": "LGPL-2.1/3.0 и MPL-2.0: можно как зависимость (библиотека ставится отдельно), код внутрь пакета не копируем"
+  },
+  "projects": [
+    {
+      "repo": "mozman/ezdxf",
+      "url": "https://github.com/mozman/ezdxf",
+      "license": "MIT",
+      "stars": 1517,
+      "language": "Python",
+      "category": "cad",
+      "role": "Чтение и запись DXF, рендер листа в PNG/PDF — основа исполнительной схемы",
+      "we_take": [
+        "рендер схемы в PNG для вставки в DOCX исполнительной схемы (уже используем)",
+        "извлечение объёмов и блоков со штампами из DXF"
+      ],
+      "we_do_not_take": [
+        "рендер в PDF как основной путь — ставит тяжёлые зависимости в поставку"
+      ],
+      "integration": "library",
+      "copy_allowed": true
+    },
+    {
+      "repo": "elapouya/python-docx-template",
+      "url": "https://github.com/elapouya/python-docx-template",
+      "license": "LGPL-2.1",
+      "stars": 2727,
+      "language": "Python",
+      "category": "documents",
+      "role": "DOCX как шаблон с jinja2: подстановка полей в формы актов (АОСР, реестры) без вёрстки в коде",
+      "we_take": [
+        "идею «шаблон документа отдельно от кода» — так формы меняет ПТО, а не разработчик",
+        "структуру подстановок для табличных разделов акта"
+      ],
+      "we_do_not_take": [
+        "копирование кода в пакет (LGPL-2.1): при необходимости — только установка как отдельной библиотеки"
+      ],
+      "integration": "dependency",
+      "copy_allowed": false
+    },
+    {
+      "repo": "IfcOpenShell/IfcOpenShell",
+      "url": "https://github.com/IfcOpenShell/IfcOpenShell",
+      "license": "LGPL-3.0",
+      "stars": 2924,
+      "language": "C++",
+      "category": "bim",
+      "role": "Чтение и запись IFC: исполнительная модель LOD 500, объёмы из BIM",
+      "we_take": [
+        "маршрут «IFC → объёмы» для сверки с нашей исполнительной схемой (второй источник, как PDF-обмер)",
+        "разделение «модель как источник» и «лист как документ»"
+      ],
+      "we_do_not_take": [
+        "копирование кода — LGPL; только как внешняя библиотека/утилита"
+      ],
+      "integration": "dependency",
+      "copy_allowed": false
+    },
+    {
+      "repo": "ThatOpen/engine_web-ifc",
+      "url": "https://github.com/ThatOpen/engine_web-ifc",
+      "license": "MPL-2.0",
+      "stars": 1087,
+      "language": "TypeScript",
+      "category": "bim",
+      "role": "Быстрое чтение IFC в браузере (WASM): просмотр модели заказчиком без установки",
+      "we_take": [
+        "идею просмотра модели в браузере рядом с реестром ИД"
+      ],
+      "we_do_not_take": [
+        "включение WASM-сборки в поставку — MPL и вес образа"
+      ],
+      "integration": "reference-only",
+      "copy_allowed": false
+    },
+    {
+      "repo": "LibreDWG/libredwg",
+      "url": "https://github.com/LibreDWG/libredwg",
+      "license": "GPL-3.0",
+      "stars": 1656,
+      "language": "C",
+      "category": "cad",
+      "role": "Чтение DWG напрямую (наш CAD-модуль DWG честно отклоняет)",
+      "we_take": [
+        "понимание, что DWG-путь возможен, но только как отдельная утилита вне поставки"
+      ],
+      "we_do_not_take": [
+        "код и линковку — GPL-3.0 несовместима с MIT-поставкой"
+      ],
+      "integration": "reference-only",
+      "copy_allowed": false
+    },
+    {
+      "repo": "unitedrhino/go-cad",
+      "url": "https://github.com/unitedrhino/go-cad",
+      "license": "Apache-2.0",
+      "stars": 73,
+      "language": "Go",
+      "category": "cad",
+      "role": "Разбор DWG R9–R2018 и DXF с записью обратно: альтернатива GPL-стеку для DWG",
+      "we_take": [
+        "идею отдельного конвертера DWG→DXF как микросервиса с разрешающей лицензией",
+        "схему «конвертер отдельно, наш пакет остаётся MIT»"
+      ],
+      "we_do_not_take": [
+        "Go-зависимость в Python-пакет сейчас: держим в уме на этап приёма DWG от подрядчиков"
+      ],
+      "integration": "reference-only",
+      "copy_allowed": true
+    },
+    {
+      "repo": "WorkHaH/SheetWeave",
+      "url": "https://github.com/WorkHaH/SheetWeave",
+      "license": "MIT",
+      "stars": 4,
+      "language": "Python",
+      "category": "documents",
+      "role": "Склейка тайловых PDF-листов в один векторный PDF: выпуск, сшитый из кусков",
+      "we_take": [
+        "приём «лист пришёл кусками — собрать до распознавания пометок»",
+        "проверку, что склейка не потеряла штамп"
+      ],
+      "we_do_not_take": [
+        "их пайплайн целиком: у нас DXF первичен, PDF — вход для пометок"
+      ],
+      "integration": "pattern-and-code",
+      "copy_allowed": true
+    },
+    {
+      "repo": "hwdemtv/tianzheng-dwg-parse",
+      "url": "https://github.com/hwdemtv/tianzheng-dwg-parse",
+      "license": "MIT",
+      "stars": 2,
+      "language": "Python",
+      "category": "cad",
+      "role": "Перевод проектных DWG (T20/T8) в DXF и инвентаризация через ezdxf — тот же приём, что у нас",
+      "we_take": [
+        "подтверждение подхода: конвертация во внешнем инструменте, разбор — через ezdxf",
+        "перечень того, что стоит проверять в чужом DWG (слои, блоки, штамп)"
+      ],
+      "we_do_not_take": [
+        "привязку к accoreconsole (нужен AutoCAD) — у нас headless-путь"
+      ],
+      "integration": "pattern-and-code",
+      "copy_allowed": true
+    },
+    {
+      "repo": "MatthiasValvekens/pyHanko",
+      "url": "https://github.com/MatthiasValvekens/pyHanko",
+      "license": "MIT",
+      "stars": 796,
+      "language": "Python",
+      "category": "signature",
+      "role": "Электронная подпись PDF: PAdES-подпись и штамп времени для комплекта ИД",
+      "we_take": [
+        "маршрут «DOCX → PDF → PAdES-подпись» для юридически значимого комплекта",
+        "проверку подписи и отметку в реестре ИД"
+      ],
+      "we_do_not_take": [
+        "включение в базовую поставку: подпись — отдельный контур с ключами заказчика"
+      ],
+      "integration": "dependency",
+      "copy_allowed": true
+    },
+    {
+      "repo": "Kozea/WeasyPrint",
+      "url": "https://github.com/Kozea/WeasyPrint",
+      "license": "BSD-3-Clause",
+      "stars": 9755,
+      "language": "Python",
+      "category": "documents",
+      "role": "HTML/CSS → PDF: печатные формы и реестры с точной вёрсткой, без Word",
+      "we_take": [
+        "путь «отчёт агента → PDF» вместо DOCX там, где нужна воспроизводимая вёрстка",
+        "CSS-страничные правила для рамок и штампов"
+      ],
+      "we_do_not_take": [
+        "замену DOCX: ПТО правит акты в Word, DOCX остаётся основным форматом"
+      ],
+      "integration": "dependency",
+      "copy_allowed": true
+    },
+    {
+      "repo": "PaddlePaddle/PaddleOCR",
+      "url": "https://github.com/PaddlePaddle/PaddleOCR",
+      "license": "Apache-2.0",
+      "stars": 92237,
+      "language": "Python",
+      "category": "ocr",
+      "role": "OCR печатного текста: штампы, сертификаты, протоколы лабораторий в комплекте ИД",
+      "we_take": [
+        "извлечение реквизитов сертификатов и протоколов для реестра ИД",
+        "проверку «документ есть, но реквизиты не распознаны» как отдельный статус"
+      ],
+      "we_do_not_take": [
+        "OCR рукописных пометок на чертежах — у нас для этого VL-модель и офлайн-CV"
+      ],
+      "integration": "dependency",
+      "copy_allowed": true
+    },
+    {
+      "repo": "datadrivenconstruction/OpenConstructionERP",
+      "url": "https://github.com/datadrivenconstruction/OpenConstructionERP",
+      "license": "AGPL-3.0",
+      "stars": 1159,
+      "language": "Python",
+      "category": "erp",
+      "role": "Открытая строительная ERP: BOQ, обмер по PDF/CAD/BIM, сопоставление цен",
+      "we_take": [
+        "как выглядит полный контур «смета → КС → ИД» в одной системе — для сверки нашей терминологии",
+        "перечень сущностей, которые обычно живут в учёте, а не в документе"
+      ],
+      "we_do_not_take": [
+        "код (AGPL-3.0), встраивание и форки"
+      ],
+      "integration": "reference-only",
+      "copy_allowed": false
+    },
+    {
+      "repo": "nick-furr/redlineiq",
+      "url": "https://github.com/nick-furr/redlineiq",
+      "license": "NO-LICENSE",
+      "stars": 1,
+      "language": "Python",
+      "category": "redline",
+      "role": "Пометки на строительных чертежах → структурированный чек-лист замечаний",
+      "we_take": [
+        "формат выдачи «пометка → пункт чек-листа → ответственный»",
+        "идею сверки повторных выпусков по чек-листу замечаний"
+      ],
+      "we_do_not_take": [
+        "код (лицензии нет)"
+      ],
+      "integration": "reference-only",
+      "copy_allowed": false
+    },
+    {
+      "repo": "jack20040828/kangmaojian-skills",
+      "url": "https://github.com/jack20040828/kangmaojian-skills",
+      "license": "MIT",
+      "stars": 10,
+      "language": "Python",
+      "category": "agent-skills",
+      "role": "Навыки агента для нормоконтроля строительных чертежей и сбор замечаний",
+      "we_take": [
+        "структуру навыка «проверить лист → собрать замечания → отчёт»",
+        "перечень типовых замечаний нормоконтроля для нашего чек-листа ИД"
+      ],
+      "we_do_not_take": [
+        "привязку к китайским нормам (GB) как основной"
+      ],
+      "integration": "pattern-and-code",
+      "copy_allowed": true
+    }
+  ]
+}

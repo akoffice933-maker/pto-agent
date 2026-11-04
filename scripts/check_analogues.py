@@ -33,11 +33,19 @@ LIST = ROOT / "data" / "reference" / "analogue_projects.json"
 REQUIRED = ("repo", "url", "license", "stars", "role", "we_take", "we_do_not_take",
             "integration", "copy_allowed")
 INTEGRATIONS = {"reference-only", "external-mcp-server", "pattern-and-code",
-                "schema-reference", "data-source", "terminology-reference"}
+                "schema-reference", "data-source", "terminology-reference",
+                "library", "dependency"}
+CATEGORIES = {"cad", "bim", "documents", "signature", "ocr", "erp", "redline",
+              "agent-skills", "estimating"}
+# слабый копилефт: можно как зависимость, но не копированием кода
+WEAK_COPYLEFT = {"LGPL-2.1", "LGPL-3.0", "MPL-2.0"}
 # лицензии, код которых можно брать в MIT-репозиторий (с уведомлением об авторстве)
 COPY_OK = {"MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC"}
 # лицензии, код которых брать нельзя ни при каких условиях
 COPY_FORBIDDEN = {"AGPL-3.0", "GPL-3.0", "GPL-2.0", "NO-LICENSE", "NOASSERTION", "UNLICENSED"}
+COPY_OK_U = {x.upper() for x in COPY_OK}                 # сравнение без учёта регистра
+COPY_FORBIDDEN_U = {x.upper() for x in COPY_FORBIDDEN}
+WEAK_COPYLEFT_U = {"LGPL-2.1", "LGPL-3.0", "MPL-2.0"}
 
 
 def load(path: Path = LIST) -> dict:
@@ -74,6 +82,8 @@ def check_structure(doc: dict) -> list[str]:
         if p.get("repo") and url and url.rstrip("/").lower() != \
                 f"https://github.com/{p['repo']}".lower():
             errors.append(f"{name}: url не совпадает с repo")
+        if p.get("category") and p["category"] not in CATEGORIES:
+            errors.append(f"{name}: неизвестная категория {p['category']!r}")
         if p.get("integration") not in INTEGRATIONS:
             errors.append(f"{name}: неизвестный integration {p.get('integration')!r}")
         if not isinstance(p.get("stars"), int) or p["stars"] < 0:
@@ -82,10 +92,13 @@ def check_structure(doc: dict) -> list[str]:
             errors.append(f"{name}: we_take должен быть непустым списком")
         # главное: политика копирования обязана совпадать с лицензией
         lic = str(p.get("license") or "").upper()
-        if p.get("copy_allowed") and lic not in COPY_OK:
+        if p.get("copy_allowed") and lic not in COPY_OK_U:
             errors.append(f"{name}: copy_allowed=true при лицензии {p.get('license')} — "
                           f"так нельзя, код попадёт в MIT-поставку")
-        if not p.get("copy_allowed") and lic in COPY_FORBIDDEN and \
+        if lic in WEAK_COPYLEFT_U and p.get("copy_allowed"):
+            errors.append(f"{name}: {p.get('license')} — можно как зависимость, "
+                          f"но не копированием кода в поставку")
+        if not p.get("copy_allowed") and lic in COPY_FORBIDDEN_U and \
                 p.get("integration") in {"pattern-and-code"}:
             errors.append(f"{name}: integration=pattern-and-code требует права копирования")
     if not doc.get("projects"):
@@ -97,7 +110,7 @@ def license_notes(doc: dict) -> list[str]:
     notes = []
     for p in doc.get("projects") or []:
         lic = str(p.get("license") or "")
-        if lic in {"AGPL-3.0", "NO-LICENSE", "NOASSERTION"}:
+        if lic in {"AGPL-3.0", "NO-LICENSE", "NOASSERTION", "GPL-3.0", "GPL-2.0"}:
             notes.append(f"{p['repo']}: {lic} → только чтение как идеи, код не копируем")
     return notes
 

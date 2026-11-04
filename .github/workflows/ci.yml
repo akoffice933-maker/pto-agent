@@ -42,7 +42,7 @@ jobs:
         run: |
           echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
             | python -m pto_agent.mcp_server --base-dir . \
-            | python -c "import json,sys; d=json.load(sys.stdin); n=len(d['result']['tools']); print('инструментов:', n); sys.exit(0 if n==16 else 1)"
+            | python -c "import json,sys; d=json.load(sys.stdin); n=len(d['result']['tools']); print('инструментов:', n); sys.exit(0 if n==17 else 1)"
 
   # Полный прогон: выпуск, деньги, портфель актов, дашборд — и все тесты на реальных артефактах.
   e2e:

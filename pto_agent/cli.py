@@ -317,6 +317,9 @@ def main(argv=None):
     if argv and argv[0] == "cad":
         from .cad.cli import main as cad_main
         return cad_main(argv[1:])
+    if argv and argv[0] == "asbuilt":
+        from .asbuilt.cli import main as asbuilt_main
+        return asbuilt_main(argv[1:])
     if argv and argv[0] == "mcp":
         from .cad.mcp_server import main as mcp_main
         return mcp_main(argv[1:])

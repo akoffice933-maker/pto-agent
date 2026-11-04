@@ -53,7 +53,7 @@ def test_stdio_handshake_and_tools():
     assert init["protocolVersion"] == PROTOCOL_VERSION
     assert init["serverInfo"]["name"] == "pto-cad-agent"
     assert init["capabilities"]["tools"]["listChanged"] is False
-    assert len(out[1]["result"]["tools"]) == 16
+    assert len(out[1]["result"]["tools"]) == 17
     assert out[2]["result"] == {}
     # stdout — только JSON-RPC, никаких print
     for line in proc.stdout.splitlines():
@@ -113,7 +113,7 @@ def test_resources_and_prompts_lists_are_empty_not_missing():
 # ── схемы инструментов ──────────────────────────────────────────────────
 def test_tool_schemas_are_valid():
     public = _tools_public()
-    assert len(public) == len(TOOLS) == 16
+    assert len(public) == len(TOOLS) == 17
     for tool in public:
         assert tool["name"] and tool["description"]
         schema = tool["inputSchema"]
@@ -174,11 +174,11 @@ def _post(url: str, payload: dict) -> dict:
 def test_http_health_and_tools(http_server):
     with urllib.request.urlopen(f"{http_server}/health", timeout=10) as resp:
         health = json.loads(resp.read())
-    assert health == {"status": "ok", "tools": 16}
+    assert health == {"status": "ok", "tools": 17}
 
     with urllib.request.urlopen(f"{http_server}/tools", timeout=10) as resp:
         tools = json.loads(resp.read())["tools"]
-    assert len(tools) == 16
+    assert len(tools) == 17
 
 
 def test_http_rpc(http_server):

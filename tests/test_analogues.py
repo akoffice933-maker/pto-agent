@@ -98,3 +98,57 @@ def test_cli_offline_exit_code():
     assert res.returncode == 0, res.stdout + res.stderr
     assert "смежных проектов" in res.stdout
     assert "ok:" in res.stdout or "ок:" in res.stdout
+
+
+# ─────────────── реестр инструментов для ИД и исполнительных схем ───────────────
+ASBUILT_LIST = ROOT / "data" / "reference" / "asbuilt_tools.json"
+
+
+@pytest.fixture(scope="module")
+def ab_doc():
+    return json.loads(ASBUILT_LIST.read_text(encoding="utf-8"))
+
+
+def test_asbuilt_list_is_valid(ab_doc):
+    assert ca.check_structure(ab_doc) == []
+    assert ab_doc["our_license"] == "MIT"
+    assert len({p["repo"] for p in ab_doc["projects"]}) == len(ab_doc["projects"])
+
+
+def test_asbuilt_list_covers_the_pipeline(ab_doc):
+    """В списке должны быть все звенья: чертёж, документ, подпись, OCR, BIM, идеи."""
+    cats = {p["category"] for p in ab_doc["projects"]}
+    assert {"cad", "documents", "signature", "ocr", "bim"} <= cats
+    repos = {p["repo"] for p in ab_doc["projects"]}
+    assert {"mozman/ezdxf", "MatthiasValvekens/pyHanko"} <= repos
+
+
+def test_asbuilt_weak_copyleft_is_dependency_only(ab_doc):
+    """LGPL/MPL — можно ставить как зависимость, но не копировать код в MIT-поставку."""
+    for p in ab_doc["projects"]:
+        if p["license"] in {"LGPL-2.1", "LGPL-3.0", "MPL-2.0"}:
+            assert p["copy_allowed"] is False, p["repo"]
+            assert p["integration"] in {"dependency", "reference-only"}, p["repo"]
+
+
+def test_asbuilt_gpl_and_agpl_are_ideas_only(ab_doc):
+    for p in ab_doc["projects"]:
+        if p["license"] in {"GPL-3.0", "AGPL-3.0", "NO-LICENSE"}:
+            assert p["copy_allowed"] is False, p["repo"]
+            assert p["integration"] == "reference-only", p["repo"]
+            assert p["we_do_not_take"], p["repo"]
+
+
+def test_asbuilt_mit_projects_name_what_we_take(ab_doc):
+    for p in ab_doc["projects"]:
+        if p["copy_allowed"]:
+            assert p["we_take"], p["repo"]
+            assert p["url"].startswith("https://github.com/"), p["repo"]
+
+
+def test_asbuilt_cli_validates_separate_list():
+    res = subprocess.run([sys.executable, str(ROOT / "scripts" / "check_analogues.py"),
+                          "--offline", "--list", str(ASBUILT_LIST)],
+                         capture_output=True, text=True, timeout=120)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "код можно брать у" in res.stdout
