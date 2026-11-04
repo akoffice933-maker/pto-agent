@@ -243,6 +243,51 @@ def cmd_import_1c(args):
     return code
 
 
+def cmd_sync_1c(args):
+    """Синхронизация с 1С по HTTP: акты из 1С → портфель, проверенная КС-2 → обратно."""
+    from .integrations.one_c_http import (OneCHttpError, OneCHttpClient, ks2_payload,
+                                          load_config, sync)
+    try:
+        cfg = load_config(args.config)
+        client = OneCHttpClient.from_config(cfg)
+        summary = None
+        if args.summary and Path(args.summary).exists():
+            summary = json.loads(Path(args.summary).read_text(encoding="utf-8"))
+        elif args.push:
+            print("Для --push нужна сводка: укажите --summary", file=sys.stderr)
+            return 2
+        result = sync(client, period=args.period, act_id=args.act_id, summary=summary,
+                      quantity=args.quantity, push=args.push, object_name=args.object_name)
+    except OneCHttpError as e:
+        print(f"Обмен с 1С не выполнен: {e}", file=sys.stderr)
+        return 2
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "acts_from_1c.json").write_text(
+        json.dumps(result["acts_document"], ensure_ascii=False, indent=2), encoding="utf-8")
+    if result.get("pushed"):
+        payload = ks2_payload(summary, quantity=args.quantity, object_name=args.object_name)
+        (out / "ks2_payload.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    (out / "sync_log.json").write_text(
+        json.dumps({k: v for k, v in result.items() if k != "acts_document"},
+                   ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+
+    print(f"Из 1С:    актов {result['acts']['count']} · "
+          f"сумма {result['acts']['amount']:,.2f} ₽ · предупреждений "
+          f"{len(result['acts']['warnings'])}".replace(",", " "))
+    if result.get("pushed"):
+        p = result["pushed"]
+        print(f"В 1С:     отправлено позиций {p['positions']} · сумма {p['amount']:,.2f} ₽ · "
+              f"не оценено {p['not_estimated']}".replace(",", " "))
+        print(f"Ключ повтора: {p['idempotency_key']}")
+    else:
+        print("В 1С:     только чтение (для отправки добавьте --push)")
+    print(f"Вызовов:  {len(result['calls'])} · результат в {out}")
+    return 0
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     # подкоманды CAD и MCP живут в своих пакетах: делегируем до разбора argparse,
@@ -313,6 +358,18 @@ def main(argv=None):
     im1.add_argument("--object-name", default="из 1С")
     im1.add_argument("--out", default="out/1c")
     im1.set_defaults(func=cmd_import_1c)
+
+    sy = sub.add_parser("sync-1c", help="обмен с 1С по HTTP: акты из 1С, проверенная КС-2 обратно")
+    sy.add_argument("--config", default="config/one_c.example.yaml",
+                    help="конфиг HTTP-сервиса 1С (значения ${VAR} берутся из окружения)")
+    sy.add_argument("--period", help="период актов, YYYY-MM")
+    sy.add_argument("--act-id", help="конкретный акт")
+    sy.add_argument("--summary", default="out/summary.json")
+    sy.add_argument("--push", action="store_true", help="отправить проверенную КС-2 в 1С")
+    sy.add_argument("--quantity", default="claim", choices=["claim", "journal", "estimate"])
+    sy.add_argument("--object-name", default=None)
+    sy.add_argument("--out", default="out/1c")
+    sy.set_defaults(func=cmd_sync_1c)
 
     args = p.parse_args(argv)
     result = args.func(args)

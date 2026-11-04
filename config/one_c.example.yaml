@@ -1,0 +1,25 @@
+# Обмен с 1С/БИТ.Строительство по HTTP (уровень 2): тот же контракт полей, что в CSV.
+#
+# На стороне 1С публикуется HTTP-сервис (Расширение → HTTP-сервисы) с тремя методами:
+#   GET  /acts?period=YYYY-MM      → акты КС-2 с позициями
+#   GET  /estimates/{id}/lines     → строки сметы
+#   POST /validated-ks2            → приём проверенной КС-2 (идемпотентно по Idempotency-Key)
+# Учётные данные берутся из переменных окружения, не из файла:
+#   ONEC_USER / ONEC_PASSWORD  либо  ONEC_TOKEN
+#
+# Запуск:
+#   python3 -m pto_agent sync-1c --config config/one_c.example.yaml --period 2026-10 \
+#           --summary out/summary.json --push --out out/1c
+
+one_c:
+  url: "${ONEC_URL}"                 # например http://1c.local/pto/hs/pto
+  user: "${ONEC_USER}"
+  password: "${ONEC_PASSWORD}"
+  # token: "${ONEC_TOKEN}"           # альтернатива basic-аутентификации
+  # token_header: Authorization     # или, например, X-1C-Token
+  # token_prefix: "Bearer "
+  timeout_s: 30
+  retries: 2
+  retry_delay_s: 0.5
+  headers:
+    X-Application: pto-agent

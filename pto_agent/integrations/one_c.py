@@ -207,12 +207,11 @@ def _write_csv(path: Path, columns, rows: list[dict]) -> None:
 
 
 # ─────────────────────────── чтение из 1С ────────────────────────────────
-def import_smeta_csv(path: str | Path) -> dict:
-    """Смета из 1С/Гранд-Сметы → строки в форме `summary["lines"]`."""
-    rows, meta = read_csv(path)
-    _require(rows, "name", meta["file"])
+def normalize_smeta_rows(rows: list[dict], start_row: int = 2) -> dict:
+    """Строки сметы (из CSV или JSON 1С) → `summary["lines"]`-совместимые позиции."""
+    _require(rows, "name", "смета")
     lines, warnings = [], []
-    for i, row in enumerate(rows, start=2):     # 2 — первая строка данных после шапки
+    for i, row in enumerate(rows, start=start_row):
         code = _pick(row, "code")
         name = _pick(row, "name")
         qty = _num(_pick(row, "qty"))
@@ -220,6 +219,10 @@ def import_smeta_csv(path: str | Path) -> dict:
         amount = _num(_pick(row, "amount"))
         if price is None and amount is not None and qty:
             price = round(amount / qty, 2)
+        if qty is not None and qty <= 0:      # «0» в выгрузке 1С — пустая строка, не факт
+            warnings.append({"row": i, "code": code,
+                             "message": f"объём {qty:g} — считается не оценённым"})
+            qty = None
         if qty is None:
             warnings.append({"row": i, "code": code, "message": "нет количества — "
                                                                "позиция остаётся не оценённой"})
@@ -235,16 +238,23 @@ def import_smeta_csv(path: str | Path) -> dict:
             "amount_estimate": amount if amount is not None else
             (round(qty * price, 2) if qty and price else None),
         })
-    return {"lines": lines, "count": len(lines), "warnings": warnings, "meta": meta}
+    return {"lines": lines, "count": len(lines), "warnings": warnings}
 
 
-def import_acts_csv(path: str | Path) -> dict:
-    """Реестр актов из 1С → структура `acts.json` для портфеля."""
+def import_smeta_csv(path: str | Path) -> dict:
+    """Смета из 1С/Гранд-Сметы → строки в форме `summary["lines"]`."""
     rows, meta = read_csv(path)
-    _require(rows, "code", meta["file"])
+    result = normalize_smeta_rows(rows)
+    result["meta"] = meta
+    return result
+
+
+def group_acts(rows: list[dict], start_row: int = 2) -> dict:
+    """Плоские строки акта (CSV или JSON 1С) → реестр `{"acts": [...]}`."""
+    _require(rows, "code", "акты")
     acts: dict[str, dict] = {}
     warnings = []
-    for i, row in enumerate(rows, start=2):
+    for i, row in enumerate(rows, start=start_row):
         act_id = (_pick(row, "act_id") or "КС-2 (без номера)")
         act_id = str(act_id).strip()
         qty = _num(_pick(row, "qty"))
@@ -252,6 +262,10 @@ def import_acts_csv(path: str | Path) -> dict:
         amount = _num(_pick(row, "amount"))
         if amount is None and qty is not None and price is not None:
             amount = round(qty * price, 2)
+        if qty is not None and qty <= 0:      # нулевой объём в акте — пустая строка
+            warnings.append({"row": i, "act": act_id,
+                             "message": f"объём {qty:g} — позиция не оценена, в сумму акта не входит"})
+            qty = None
         if qty is None:
             warnings.append({"row": i, "act": act_id,
                              "message": "нет объёма — позиция не оценена, в сумму акта не входит"})
@@ -277,7 +291,15 @@ def import_acts_csv(path: str | Path) -> dict:
         act["positions_count"] = len(act["positions"])
         if not act["period"]:
             warnings.append({"act": act["act_id"], "message": "не указан период акта"})
-    return {"acts": ordered, "count": len(ordered), "warnings": warnings, "meta": meta}
+    return {"acts": ordered, "count": len(ordered), "warnings": warnings}
+
+
+def import_acts_csv(path: str | Path) -> dict:
+    """Реестр актов из 1С → структура `acts.json` для портфеля."""
+    rows, meta = read_csv(path)
+    result = group_acts(rows)
+    result["meta"] = meta
+    return result
 
 
 def acts_document(imported: dict, object_name: str = "из 1С") -> dict:
@@ -286,6 +308,6 @@ def acts_document(imported: dict, object_name: str = "из 1С") -> dict:
         "object": object_name,
         "contract": None,
         "generated": None,
-        "note": "реестр актов импортирован из 1С/БИТ по CSV",
+        "note": "реестр актов импортирован из 1С/БИТ (CSV или HTTP-сервис)",
         "acts": imported.get("acts") or [],
     }
