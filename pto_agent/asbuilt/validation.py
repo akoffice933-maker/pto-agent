@@ -17,8 +17,8 @@ from datetime import date, datetime
 # пункт нормы: «п. 5.3.3», «5.3.3», «п. 6.1.2.1», «прил. А»
 CLAUSE_RE = re.compile(r"(?:п\.?|пункт|пп\.?|табл\.?|прил\.?)?\s*\d+(?:\.\d+)+", re.I)
 # обозначение документа с годом: СП 70.13330.2012, ГОСТ Р 50571.16-2019, ПУЭ
-DOC_RE = re.compile(r"(СП|ГОСТ(?:\s+Р)?|СНиП|ПУЭ|СО|ВСН|РД)\s*[\d.\-]+(?:\s*-\s*\d{2,4})?",
-                    re.I)
+DOC_RE = re.compile(r"(СП|ГОСТ(?:\s+Р)?|СНиП|ПУЭ|СО|ВСН|РД)\b(?:\s*[\d.\-]+)*", re.I)
+EDITION_RE = re.compile(r"(изд\.|издани|с\s+изм|ред\.|редакци|(19|20)\d{2})", re.I)
 FUTURE_TOLERANCE_DAYS = 0
 
 
@@ -77,6 +77,14 @@ def validate_dates(spec: dict, today: date | None = None) -> list[dict]:
     return issues
 
 
+def split_norm_string(text: str) -> tuple[str, str]:
+    """«ПУЭ, 7-е изд. п. 1.8.37» → (документ, пункт). Строковая форма не должна терять пункт."""
+    m = re.match(r"^(.*?)[,\s]*(?:п\.?|пункт|пп\.?)\s*([\d.]+)\s*$", str(text).strip())
+    if m:
+        return m.group(1).strip(" ,;"), m.group(2).strip()
+    return str(text).strip(), ""
+
+
 def validate_norms(norms, materials=None) -> list[dict]:
     """Нормы: ссылка без пункта недопустима; обозначение без года/редакции — замечание."""
     issues: list[dict] = []
@@ -85,7 +93,8 @@ def validate_norms(norms, materials=None) -> list[dict]:
                                         "выполнены работы")]
     for norm in norms:
         if isinstance(norm, str):
-            doc, clause, edition = norm, "", ""
+            doc, clause = split_norm_string(norm)
+            edition = ""
         else:
             doc = str(norm.get("doc") or norm.get("document") or "").strip()
             clause = str(norm.get("clause") or norm.get("item") or "").strip()
@@ -105,7 +114,7 @@ def validate_norms(norms, materials=None) -> list[dict]:
             issues.append(_issue("norm_unrecognized",
                                  f"{doc}: не распознано обозначение документа (ожидается СП/ГОСТ/"
                                  f"СНиП/ПУЭ с номером)", "warning", doc=doc))
-        elif not edition and not re.search(r"(19|20)\d{2}", doc):
+        elif not EDITION_RE.search(f"{doc} {edition}"):
             issues.append(_issue("norm_without_edition",
                                  f"{doc}: не указана редакция (год или «с изм. N»)", "warning",
                                  doc=doc))
@@ -113,6 +122,27 @@ def validate_norms(norms, materials=None) -> list[dict]:
         if actual and _parse_date(actual) is None:
             issues.append(_issue("norm_actual_unparsed",
                                  f"{doc}: дата актуальности не читается: {actual!r}", "warning"))
+    return issues
+
+
+def validate_norms_against_base(norms, norms_dir=None, base: dict | None = None) -> list[dict]:
+    """Ссылки, которые база не подтверждает: это не «неверно», это «не проверено»."""
+    from .norms_check import verify_norms
+    report = verify_norms(norms, norms_dir, base=base)
+    issues: list[dict] = []
+    if not report["base"]["exists"]:
+        return [_issue("norm_base_absent",
+                       f"нормативная база не найдена ({report['base']['dir']}): ссылки не проверены",
+                       "warning")]
+    for r in report["results"]:
+        if r["status"] == "doc_missing":
+            issues.append(_issue("norm_not_in_base",
+                                 f"{r['doc']} п. {r['clause']}: документа нет в нормативной базе "
+                                 f"агента — ссылка не подтверждена", "warning", doc=r["doc"]))
+        elif r["status"] == "clause_missing":
+            issues.append(_issue("norm_clause_not_in_base",
+                                 f"{r['doc']}: пункта {r['clause']} нет в базе — {r['note']}",
+                                 "warning", doc=r["doc"], clause=r["clause"]))
     return issues
 
 
@@ -210,7 +240,8 @@ def _kind_of_scheme(doc: dict) -> bool:
 
 
 def validate_draft(spec: dict, *, work_types: list[str] | None = None,
-                   matrix: dict | None = None, today: date | None = None) -> dict:
+                   matrix: dict | None = None, today: date | None = None,
+                   norms_dir=None) -> dict:
     """Полный набор проверок черновика. Возвращает находки, блокеры и вердикт."""
     issues: list[dict] = []
     issues += validate_project_docs(spec)
@@ -218,6 +249,11 @@ def validate_draft(spec: dict, *, work_types: list[str] | None = None,
     issues += validate_attachments(spec, work_types, matrix)
     issues += validate_dates(spec, today)
     issues += validate_norms(spec.get("norms"))
+    norms_report = None
+    if norms_dir is not False:
+        from .norms_check import verify_norms
+        norms_report = verify_norms(spec.get("norms"), norms_dir or None)
+        issues += validate_norms_against_base(spec.get("norms"), norms_dir, base=None)
     issues += validate_materials(spec)
 
     # обязательные текстовые поля формы
@@ -233,6 +269,7 @@ def validate_draft(spec: dict, *, work_types: list[str] | None = None,
         "blocking": blocking,
         "warnings": warnings,
         "counts": {"blocking": len(blocking), "warning": len(warnings)},
+        "norms_report": norms_report,
         "can_transfer": not blocking,
         "verdict": ("черновик заполнен, блокеров нет — можно передавать на подпись человеку"
                     if not blocking else

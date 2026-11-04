@@ -53,24 +53,42 @@ def spec_from_estimate(positions: list[dict], *, object_name: str = "",
                        project_docs: list | None = None) -> dict:
     """Собрать черновик спецификации АОСР из позиций сметы/КС-2."""
     matrix = matrix or load_matrix()
-    classified = classify_positions(positions, matrix)
+    classified = classify_positions(positions, matrix, dominant=work_types)
 
     if work_types:
         chosen = list(work_types)
     else:
-        chosen = [w["work_type"] for w in classified["work_types"]]
+        chosen = [w["work_type"] for w in classified["work_types"] if w["hidden_work"]]
+
+    # в акт идут только скрытые работы: демонтаж и вывоз мусора в черновике не участвуют,
+    # но перечислены в excluded с причиной — чтобы их не искали в акте
+    hidden_positions: list[dict] = []
+    excluded: list[dict] = []
+    for slot in classified["work_types"]:
+        if slot["hidden_work"]:
+            hidden_positions += slot["positions"]
+        else:
+            for pos in slot["positions"]:
+                excluded.append({**pos, "reason": f"не скрытые работы: {slot['name']}",
+                                 "work_type": slot["work_type"]})
+    for pos in classified["unknown"]:
+        excluded.append({**pos, "reason": "вид работ не распознан"})
+    for pos in classified["inherited"]:
+        hidden_positions.append(pos)
 
     req = required_kinds(chosen, matrix) if chosen else {"required": [], "protocols": [],
-                                                         "norms": [], "profile": None}
+                                                         "norms": [], "profile": None,
+                                                         "protocols_conditional": []}
     if not work:
         seen: list[str] = []
-        for pos in positions:
+        for pos in hidden_positions or positions:
             name = str(pos.get("name") or "").strip()
             if name and name not in seen:
                 seen.append(name)
         work = "; ".join(seen)
 
-    norms = [dict(n) for n in req["norms"]]
+    # нормы из матрицы — это профиль, а не нормативная база: помечаем источник честно
+    norms = [dict(n, source="matrix") for n in req["norms"]]
     attachments = [{"name": proto, "code": "", "date": "", "sheets": None}
                    for proto in req["protocols"]]
     attachments += [{"name": what, "code": "", "date": "", "sheets": None}
@@ -93,11 +111,20 @@ def spec_from_estimate(positions: list[dict], *, object_name: str = "",
         "norms": norms,
         "attachments": attachments,
         "next_works": "",
+        "excluded": excluded,
         "source": {"positions_from": source,
                    "positions_total": len(positions),
                    "positions_classified": classified["classified"],
+                   "positions_in_act": len(hidden_positions),
+                   "positions_excluded": len(excluded),
                    "unclassified": classified["unknown"],
+                   "inherited": classified["inherited"],
+                   "merged": classified.get("merged") or [],
+                   "candidates": [{"work_type": w["work_type"], "positions": len(w["positions"])}
+                                  for w in classified["candidates"]],
                    "profile": matrix.get("profile")},
+        "norms_source": "матрица видов работ (профиль, не нормативная база)",
+        "norms_unverified": sorted({n.get("doc") for n in norms if n.get("doc")}),
         "work_type_details": [{"work_type": w["work_type"], "name": w["name"],
                                "positions": len(w["positions"])}
                               for w in classified["work_types"]],
@@ -106,7 +133,8 @@ def spec_from_estimate(positions: list[dict], *, object_name: str = "",
     fields = [
         {"field": "work", "source": "смета" if work else "нет", "auto": bool(work)},
         {"field": "work_types", "source": "матрица" if chosen else "нет", "auto": bool(chosen)},
-        {"field": "norms", "source": "матрица" if norms else "нет", "auto": bool(norms)},
+        {"field": "norms", "source": "матрица (проверить по базе)" if norms else "нет",
+         "auto": bool(norms)},
         {"field": "attachments", "source": "матрица" if attachments else "нет",
          "auto": bool(attachments)},
         {"field": "object_name", "source": "задано" if object_name else "нет",
@@ -129,6 +157,9 @@ def spec_from_estimate(positions: list[dict], *, object_name: str = "",
     if classified["unknown"]:
         spec["notes"].append(f"Часть позиций не классифицирована ({len(classified['unknown'])}): "
                              f"указать вид работ вручную (work_types).")
+    if excluded:
+        spec["notes"].append(f"Вне акта {len(excluded)} позиций (демонтаж, вывоз мусора, "
+                             f"нераспознанные) — см. excluded.")
     return spec
 
 
@@ -141,7 +172,10 @@ def spec_to_markdown(spec: dict) -> str:
              f"- виды работ: {', '.join(spec.get('work_types') or []) or '—'}",
              f"- источник позиций: {src.get('positions_from') or '—'} "
              f"({src.get('positions_classified')} из {src.get('positions_total')} опознано)",
-             f"- норм с пунктами: {len(spec.get('norms') or [])}",
+             f"- норм с пунктами: {len(spec.get('norms') or [])} "
+             f"(источник: {spec.get('norms_source') or '—'})",
+             f"- позиций в акте: {src.get('positions_in_act')} · вне акта: "
+             f"{src.get('positions_excluded')}",
              f"- шаблон приложений: {len(spec.get('attachments') or [])}", "",
              "| Поле | Источник |", "|---|---|"]
     for f in spec.get("fields") or []:

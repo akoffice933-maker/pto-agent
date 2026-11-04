@@ -95,7 +95,8 @@ def _project_doc_line(doc) -> str:
 
 
 def build_aosr(spec: dict, out_dir: str | Path, *, form: str | None = None,
-               matrix: dict | None = None, today: date | None = None) -> dict:
+               matrix: dict | None = None, today: date | None = None,
+               norms_dir=None) -> dict:
     """Собрать черновик АОСР → `out_dir/aosr_<номер>.docx`."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -108,7 +109,8 @@ def build_aosr(spec: dict, out_dir: str | Path, *, form: str | None = None,
     date_str = spec.get("act_date") or (today or date.today()).isoformat()
 
     work_types = spec.get("work_types") or []
-    validation = validate_draft(spec, work_types=work_types, matrix=matrix, today=today)
+    validation = validate_draft(spec, work_types=work_types, matrix=matrix, today=today,
+                                norms_dir=norms_dir)
 
     doc = Document()
     section = doc.sections[0]
@@ -226,6 +228,7 @@ def build_aosr(spec: dict, out_dir: str | Path, *, form: str | None = None,
         "can_transfer": validation["can_transfer"],
         "validation": validation,
         "missing_fields": missing,
+        "norms_report": validation.get("norms_report"),
         "note": "черновик: подпись, штампы и регистрация — только человеком",
     }
 
@@ -257,6 +260,11 @@ def aosr_to_markdown(result: dict) -> str:
         lines.append(f"- вид работ: {', '.join(result['work_types'])}")
     blocking = result["validation"]["blocking"]
     warnings = result["validation"]["warnings"]
+    report = (result["validation"] or {}).get("norms_report") or {}
+    if report.get("total"):
+        lines.append(f"- нормы: подтверждено базой {report['verified']} из {report['total']}"
+                     + (f" · нет в базе: {', '.join(report['doc_missing'])}"
+                        if report.get("doc_missing") else ""))
     if blocking:
         lines += ["", f"**Блокеры ({len(blocking)}):**"]
         lines += [f"- {i['text']}" for i in blocking]

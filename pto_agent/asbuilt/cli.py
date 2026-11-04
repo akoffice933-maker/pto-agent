@@ -7,7 +7,9 @@ import json
 import sys
 from pathlib import Path
 
+from .acts_plan import plan_acts, plan_to_markdown, plan_to_specs
 from .aosr import aosr_to_markdown, build_aosr
+from .norms_check import DEFAULT_NORMS_DIR, norms_to_markdown, verify_norms, verify_quote
 from .forms import forms_catalog
 from .registry import build_registry, check_completeness, registry_to_markdown
 from .requirements import matrix_summary, required_kinds, work_type_requirements
@@ -57,7 +59,7 @@ def cmd_aosr(args) -> int:
     spec = _load_spec(args.spec)
     if args.work_type:
         spec["work_types"] = [w for w in args.work_type.split(",") if w]
-    result = build_aosr(spec, args.out, form=args.form)
+    result = build_aosr(spec, args.out, form=args.form, norms_dir=args.norms_dir)
     _write_md(Path(args.out) / "aosr.md", aosr_to_markdown(result))
     print(f"ЧЕРНОВИК АОСР № {result['act_number'] or '—'} от {result['act_date']}: {result['docx']}")
     print(f"  форма: {result['form']['short']}")
@@ -65,6 +67,10 @@ def cmd_aosr(args) -> int:
           f"({'можно передавать на подпись' if result['can_transfer'] else 'есть блокеры'})")
     if result["form"]["warning"]:
         print(f"  ВНИМАНИЕ: {result['form']['warning']}", file=sys.stderr)
+    report = (result["validation"] or {}).get("norms_report")
+    if report and report.get("unverified"):
+        print(f"  нормы: подтверждено базой {report['verified']} из {report['total']} "
+              f"(нет в базе: {', '.join(report['doc_missing']) or '—'})", file=sys.stderr)
     for issue in result["validation"]["blocking"]:
         print(f"  ✗ {issue['text']}", file=sys.stderr)
     for issue in result["validation"]["warnings"]:
@@ -150,6 +156,55 @@ def cmd_spec(args) -> int:
     return 0
 
 
+def cmd_acts(args) -> int:
+    positions, source = load_positions(smeta=args.smeta, summary_path=args.summary)
+    plan = plan_acts(positions,
+                     work_types=[w for w in (args.work_type or "").split(",") if w] or None,
+                     act_prefix=args.act_prefix, object_name=args.object_name or "",
+                     source=source, act_date=args.date)
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "acts_plan.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2),
+                                        encoding="utf-8")
+    _write_md(out / "acts_plan.md", plan_to_markdown(plan))
+    print(f"План актов: {out / 'acts_plan.json'}")
+    print(f"  позиций {plan['positions_total']}: в актах {plan['positions_in_acts']}, "
+          f"вне актов {plan['positions_excluded']} · актов {len(plan['acts'])}")
+    for act in plan["acts"]:
+        print(f"  {act['code']}: {act['group_name']} — позиций {act['positions_count']}")
+    if args.write_specs:
+        specs_dir = out / "specs"
+        specs_dir.mkdir(parents=True, exist_ok=True)
+        for spec in plan_to_specs(plan):
+            name = str(spec["act_number"]).replace("/", "-") or "act"
+            (specs_dir / f"aosr_{name}.json").write_text(
+                json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"  спецификации актов: {specs_dir}")
+    if plan.get("warning"):
+        print(f"  вне актов: {plan['warning']}", file=sys.stderr)
+    return 0
+
+
+def cmd_verify_norms(args) -> int:
+    norms_dir = args.norms_dir or (DEFAULT_NORMS_DIR if DEFAULT_NORMS_DIR.exists() else None)
+    if args.quote:
+        result = verify_quote(args.quote, args.doc or "", args.clause or "", norms_dir)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["ok"] else 1
+    spec = _load_spec(args.spec) if args.spec else {}
+    norms = spec.get("norms") or []
+    report = verify_norms(norms, norms_dir)
+    out = Path(args.out) if args.out else None
+    if out:
+        out.mkdir(parents=True, exist_ok=True)
+        _write_md(out / "norms_check.md", norms_to_markdown(report))
+    if (args.format or "json") == "markdown":
+        print(norms_to_markdown(report), end="")
+    else:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0 if report["unverified"] == 0 else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="pto_agent asbuilt",
                                 description="Исполнительная документация и схемы")
@@ -182,6 +237,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="форма акта: 344pr (действует с 01.09.2023) или устаревшая РД-11-02-2006")
     a.add_argument("--work-type", default="",
                    help="виды работ через запятую (earthworks, concrete, electrical …)")
+    a.add_argument("--norms-dir", default=None,
+                   help="нормативная база для сверки ссылок (по умолчанию data/demo/norms)")
     a.set_defaults(func=cmd_aosr)
 
     r = sub.add_parser("registry", help="реестр ИД (XLSX) и проверка комплектности")
@@ -205,6 +262,29 @@ def build_parser() -> argparse.ArgumentParser:
 
     f = sub.add_parser("forms", help="какие формы актов действуют и какие устарели")
     f.set_defaults(func=cmd_forms)
+
+    ac = sub.add_parser("acts", help="план отдельных АОСР по скрытым работам из сметы/КС-2")
+    acsrc = ac.add_mutually_exclusive_group(required=True)
+    acsrc.add_argument("--smeta", help="смета XLSX")
+    acsrc.add_argument("--summary", help="out/summary.json")
+    ac.add_argument("--work-type", default="", help="виды работ через запятую")
+    ac.add_argument("--act-prefix", default="АОСР", help="префикс нумерации актов")
+    ac.add_argument("--object-name", default="")
+    ac.add_argument("--date", default=None)
+    ac.add_argument("--write-specs", action="store_true",
+                    help="дописать по спецификации на каждый акт (для asbuilt aosr)")
+    ac.add_argument("--out", default="out/asbuilt/acts")
+    ac.set_defaults(func=cmd_acts)
+
+    vn = sub.add_parser("verify-norms", help="сверить нормативные ссылки с нормативной базой")
+    vn.add_argument("--spec", default=None, help="спецификация АОСР с перечнем norms")
+    vn.add_argument("--norms-dir", default=None)
+    vn.add_argument("--quote", default=None, help="дословная цитата для cite_verify")
+    vn.add_argument("--doc", default=None)
+    vn.add_argument("--clause", default=None)
+    vn.add_argument("--format", default="json", choices=["json", "markdown"])
+    vn.add_argument("--out", default=None)
+    vn.set_defaults(func=cmd_verify_norms)
 
     sp = sub.add_parser("spec", help="черновик спецификации АОСР из сметы или КС-2")
     src = sp.add_mutually_exclusive_group(required=True)

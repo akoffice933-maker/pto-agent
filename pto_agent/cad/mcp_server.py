@@ -31,7 +31,9 @@ from ..asbuilt import (aosr_to_markdown, build_aosr, build_registry, build_schem
                        check_completeness, matrix_summary, registry_to_markdown,
                        scheme_to_markdown, spec_from_estimate, spec_to_markdown,
                        validate_draft, work_type_requirements)
+from ..asbuilt.acts_plan import plan_acts, plan_to_markdown, plan_to_specs
 from ..asbuilt.forms import forms_catalog
+from ..asbuilt.norms_check import norms_to_markdown, verify_norms
 from ..asbuilt.spec_from_estimate import load_positions
 from .redline import plan_from_discrepancies
 from .render import render_png
@@ -383,18 +385,22 @@ def t_review_summary(args, ctx):
 @tool("asbuilt_docs",
       "Исполнительная документация: черновик АОСР по действующей форме (приказ Минстроя "
       "№ 344/пр), исполнительная схема из DXF, реестр ИД и комплектность по матрице видов "
-      "работ (электромонтаж: изоляция, петля «фаза-нуль», УЗО). Плюс проверки черновика: "
+      "работ (электромонтаж: изоляция, петля «фаза-нуль», УЗО), план отдельных актов по "
+      "скрытым работам (демонтаж и вывоз мусора в акты не попадают) и сверка норм с "
+      "нормативной базой (непроверенная ссылка так и называется). Плюс проверки черновика: "
       "хронология дат, нормы только с пунктами, ссылка на РД, подписи и НРС. Готовит ЧЕРНОВИК: "
       "подписывает человек, формулировка «готов к подписанию» не используется.",
       {"type": "object", "properties": {
           "kind": {"type": "string",
                    "enum": ["scheme", "aosr", "registry", "check", "requirements",
-                            "validate", "spec", "forms"],
+                            "validate", "spec", "forms", "acts", "verify-norms"],
                    "description": "scheme — схема из DXF; aosr — черновик акта скрытых работ; "
                                   "registry — реестр ИД (XLSX); check — комплектность; "
                                   "requirements — матрица требований по видам работ; "
                                   "validate — проверки черновика (даты, пункты норм, подписи); "
-                                  "spec — спецификация АОСР из сметы/КС-2; forms — какие формы действуют"},
+                                  "spec — спецификация АОСР из сметы/КС-2; forms — какие формы действуют; "
+                                  "acts — план отдельных актов по скрытым работам; "
+                                  "verify-norms — сверка норм с нормативной базой"},
           "drawing_path": {"type": "string", "description": "DXF для схемы"},
           "spec_path": {"type": "string", "description": "JSON/YAML со данными акта или реестра"},
           "spec": {"type": "object", "description": "те же данные inline, вместо spec_path"},
@@ -417,6 +423,10 @@ def t_review_summary(args, ctx):
           "summary_source": {"type": "string", "description": "out/summary.json для kind=spec"},
           "act_number": {"type": "string"}, "start_date": {"type": "string"},
           "end_date": {"type": "string"},
+          "act_prefix": {"type": "string", "description": "префикс нумерации актов для kind=acts"},
+          "write_specs": {"type": "boolean", "default": False,
+                          "description": "для kind=acts: вернуть спецификации по каждому акту"},
+          "norms_dir": {"type": "string", "description": "нормативная база для verify-norms"},
           "format": {"type": "string", "enum": ["json", "markdown"], "default": "json"}},
        "required": ["kind"]})
 def t_asbuilt_docs(args, ctx):
@@ -447,6 +457,26 @@ def t_asbuilt_docs(args, ctx):
                                   work_types=work_types or None, source=source)
         return {"ok": True, "spec": spec, "markdown": spec_to_markdown(spec),
                 "needs_input": spec["needs_input"]}
+
+    if kind == "acts":
+        positions, source = load_positions(smeta=args.get("smeta_path"),
+                                           summary_path=args.get("summary_source"))
+        plan = plan_acts(positions, work_types=work_types or None,
+                         act_prefix=args.get("act_prefix") or "АОСР",
+                         object_name=args.get("object_name") or "", source=source,
+                         act_date=args.get("date"))
+        payload = {"ok": True, "plan": plan, "markdown": plan_to_markdown(plan)}
+        if args.get("write_specs"):
+            payload["specs"] = plan_to_specs(plan)
+        return payload
+
+    if kind == "verify-norms":
+        spec = args.get("spec") or {}
+        if args.get("spec_path"):
+            spec = _load_doc_spec(Path(args["spec_path"]))
+        report = verify_norms(spec.get("norms") or [], args.get("norms_dir"))
+        return {"ok": True, "report": report, "markdown": norms_to_markdown(report),
+                "verdict": report["verdict"]}
 
     if kind == "scheme":
         drawing = args.get("drawing_path")

@@ -44,45 +44,160 @@ def get_work_type(work_type_id: str, matrix: dict | None = None) -> dict | None:
     return next((w for w in work_types(matrix) if w["id"] == work_type_id), None)
 
 
-def classify_work(text: str, matrix: dict | None = None) -> list[dict]:
-    """Определить виды работ по тексту (наименование работ, позиция КС-2/сметы).
+def _prep(text: str) -> str:
+    return (text or "").lower().replace("ё", "е")
 
-    Возвращает список совпадений с числом ключевых слов — без «победителя по умолчанию»:
-    пустой список означает «не опознано», и это честнее любой догадки.
+
+# Шифр расценки («ФЕРм 21-02-012-01») — это не текст работ: «ФЕРм» не должен читаться
+# как «ферма». Базу расценки вырезаем до сопоставления ключей.
+PRICE_BASE_RE = re.compile(r"(?<![а-яa-z])(ферм|терм|фер|тер|гэсн|фсбц|тсн)(?![а-яa-z])")
+
+
+def _kw_re(keyword: str):
+    """Ключ ищется с начала слова: «кладк» не должен срабатывать внутри «прокладка»."""
+    return re.compile(r"(?<![а-яa-z0-9])" + re.escape(_prep(keyword)))
+
+
+def strip_qualifiers(text: str, wt: dict) -> str:
+    """Вырезать из текста конструкции, которые описывают место, а не вид работ.
+
+    «Заделка отверстий в бетонных и кирпичных стенах» — это электромонтаж, а не бетон:
+    слова про материалы описывают место работ. Такие конструкции перечислены в матрице
+    (`qualifiers`) у того вида работ, к которому они относятся.
     """
-    text = (text or "").lower().replace("ё", "е")
+    out = PRICE_BASE_RE.sub(" ", _prep(text))
+    for pattern in wt.get("qualifiers") or []:
+        out = re.sub(pattern, " ", out)
+    return out
+
+
+def classify_work(text: str, matrix: dict | None = None) -> list[dict]:
+    """Определить виды работ по тексту позиции (наименование, шифр расценки).
+
+    Вид работ определяется **сильными** ключами: «кабель», «штробление», «щит», «УЗО».
+    Слабые ключи (материалы и контекст: бетон, кирпич, стена) сами по себе вид работ не
+    дают — иначе «заделка в бетонных стенах» тянет протоколы испытаний бетона.
+    Нераспознанное возвращает пустой список: пусть лучше позиция попадёт в unknown, чем
+    получит чужой комплект документов.
+    """
+    matrix = matrix or load_matrix()
+    strong_weight = (matrix.get("classifier") or {}).get("strong_weight", 2)
+    weak_weight = (matrix.get("classifier") or {}).get("weak_weight", 1)
     hits = []
     for wt in work_types(matrix):
-        matched = [kw for kw in wt["keywords"]
-                   if re.search(re.escape(kw.lower().replace("ё", "е")), text)]
-        if matched:
-            hits.append({"work_type": wt["id"], "name": wt["name"],
-                         "matched": matched, "score": len(matched)})
-    return sorted(hits, key=lambda h: -h["score"])
+        text_clean = strip_qualifiers(text, wt)
+        strong = [kw for kw in wt.get("strong") or [] if _kw_re(kw).search(text_clean)]
+        weak = [kw for kw in wt.get("keywords") or [] if _kw_re(kw).search(text_clean)]
+        if not strong:
+            continue                        # без сильного ключа вид работ не присваивается
+        hits.append({"work_type": wt["id"], "name": wt["name"],
+                     "matched": strong, "weak": weak,
+                     "hidden_work": wt.get("hidden_work", True),
+                     "score": strong_weight * len(strong) + weak_weight * len(weak)})
+    # «Демонтаж светильников» — это демонтаж, а не монтаж освещения: работы по снятию
+    # не оформляются АОСР, и они не должны попадать в акт на скрытые работы.
+    hits.sort(key=lambda h: (h["work_type"] != "demolition",
+                             h["work_type"] != "waste_removal", -h["score"]))
+    return hits
 
 
-def classify_positions(positions: list[dict], matrix: dict | None = None) -> dict:
-    """Классифицировать позиции сметы/КС-2 → виды работ с позициями и весами."""
+def classify_positions(positions: list[dict], matrix: dict | None = None,
+                       dominant: list[str] | None = None) -> dict:
+    """Классифицировать позиции сметы/КС-2 и определить виды работ документа.
+
+    Два шага, потому что смета — это документ, а не набор независимых строк:
+      1) по каждой позиции — сильные ключи;
+      2) по документу — доля сильного веса. Вид работ, набравший меньше `min_share`,
+         в комплект не идёт (он в `candidates`): одна строка «кронштейны под вентиляцию»
+         не должна приносить протоколы балансировки вентиляции в электромонтажный акт.
+    Нераспознанные позиции вид работ не наследуют молча: они в `unknown`, а если вид работ
+    документа задан явно (`dominant`), помечаются `inherited` — «отнесено к виду работ
+    документа по решению инженера, ключей в тексте нет».
+    """
     matrix = matrix or load_matrix()
+    min_share = (matrix.get("classifier") or {}).get("min_share", 0.15)
+
     by_type: dict[str, dict] = {}
-    unknown = []
+    unknown: list[dict] = []
+    total_score = 0
     for pos in positions:
-        text = " ".join(str(pos.get(k) or "") for k in ("name", "code", "work"))
+        text = " ".join(str(pos.get(k) or "") for k in ("name", "work"))
         hits = classify_work(text, matrix)
         if not hits:
-            unknown.append({"name": pos.get("name"), "code": pos.get("code")})
+            unknown.append({"name": pos.get("name"), "code": pos.get("code"),
+                            "qty": pos.get("qty"), "unit": pos.get("unit")})
             continue
         best = hits[0]
-        slot = by_type.setdefault(best["work_type"], {"work_type": best["work_type"],
-                                                      "name": best["name"], "positions": [],
-                                                      "score": 0})
+        total_score += best["score"]
+        slot = by_type.setdefault(best["work_type"], {
+            "work_type": best["work_type"], "name": best["name"], "positions": [],
+            "score": 0, "hidden_work": best["hidden_work"]})
         slot["positions"].append({"code": pos.get("code"), "name": pos.get("name"),
                                   "qty": pos.get("qty"), "unit": pos.get("unit")})
         slot["score"] += best["score"]
-    return {"work_types": sorted(by_type.values(), key=lambda x: -x["score"]),
-            "unknown": unknown,
-            "classified": len(positions) - len(unknown),
-            "total": len(positions)}
+
+    ranked = sorted(by_type.values(), key=lambda x: -x["score"])
+    for slot in ranked:
+        slot["share"] = round(slot["score"] / total_score, 3) if total_score else 0.0
+
+    if dominant:
+        chosen = [w for w in ranked if w["work_type"] in dominant]
+        candidates = [w for w in ranked if w["work_type"] not in dominant]
+    else:
+        chosen = [w for w in ranked if w["hidden_work"] and w["share"] >= min_share]
+        candidates = [w for w in ranked if w not in chosen]
+
+    # дочерние виды работ (например, заземление внутри электромонтажа) вливаются в родителя,
+    # если родитель выбран: иначе их позиции выпали бы из актов
+    chosen_ids = {w["work_type"] for w in chosen}
+    merged = []
+    for slot in list(ranked):
+        wt = get_work_type(slot["work_type"], matrix) or {}
+        parent = wt.get("parent")
+        if parent and parent in chosen_ids and slot["work_type"] not in chosen_ids:
+            for target in chosen:
+                if target["work_type"] == parent:
+                    target["positions"] += slot["positions"]
+                    target["score"] += slot["score"]
+                    merged.append({"work_type": slot["work_type"], "into": parent,
+                                   "positions": len(slot["positions"])})
+            if slot in candidates:
+                candidates = [c for c in candidates if c["work_type"] != slot["work_type"]]
+
+    inherited = []
+    if dominant:
+        inherited = [dict(u, inherited_from=dominant[0]) for u in unknown]
+        unknown = []
+
+    return {
+        "work_types": chosen,
+        "candidates": candidates,
+        "unknown": unknown,
+        "inherited": inherited,
+        "merged": merged,
+        "classified": len(positions) - len(unknown) - len(inherited),
+        "total": len(positions),
+        "min_share": min_share,
+        "hidden_work_types": [w["work_type"] for w in chosen if w["hidden_work"]],
+        "not_hidden_work_types": [w["work_type"] for w in ranked if not w["hidden_work"]],
+    }
+
+
+def act_groups(work_type_id: str, matrix: dict | None = None) -> list[dict]:
+    """Группы скрытых работ внутри вида работ: по ним режутся отдельные акты."""
+    matrix = matrix or load_matrix()
+    wt = get_work_type(work_type_id, matrix) or {}
+    groups = wt.get("act_groups") or []
+    if not groups:
+        groups = [{"id": "main", "name": f"Основные работы: {wt.get('name', work_type_id)}",
+                   "keywords": []}]
+    return groups
+
+
+def hidden_work(work_type_id: str, matrix: dict | None = None) -> bool:
+    matrix = matrix or load_matrix()
+    wt = get_work_type(work_type_id, matrix) or {}
+    return bool(wt.get("hidden_work", True))
 
 
 def work_type_requirements(work_type_id: str, matrix: dict | None = None) -> dict:
