@@ -1,0 +1,69 @@
+{
+  "schema": "pto-agent/takeoff-draft@1",
+  "object_name": "Средняя школа на 825 мест, г. Сертолово",
+  "section": "КР1",
+  "as_of": "2025-10-01",
+  "built_at": "2026-11-05",
+  "source_note": "объёмы — из выгрузки takeoff-инструмента, цены — из базы версий ФГИС ЦС на дату; это ведомость объёмов с ценами, не смета в ФЕР",
+  "lines": [
+    {
+      "code": "01.1.02.01-0001",
+      "element": "Бетон В25 W6 F150 — фундаментная плита",
+      "resource": "Бетон тяжёлый, класс В25",
+      "rule": "Бетон тяжёлый, класс В25",
+      "unit": "м3",
+      "qty": 5259.2,
+      "qty_native": null,
+      "unit_native": null,
+      "confidence": "medium",
+      "source": "расчёт по том КР1, стр. 11 (габариты) и стр. 11 (толщина 500 мм)",
+      "trade": null,
+      "price": 6200.0,
+      "price_unit": "м3",
+      "price_source": "ФГИС ЦС (КР, демо)",
+      "price_version": "2025-09-01-фгис-цс-кр-демо-47",
+      "price_date": "2025-09-01",
+      "price_digest": "556a06dc73ad0e9f",
+      "amount": 32607040.0,
+      "status": "review",
+      "confirmed": false,
+      "norm": null,
+      "reason": "объём средней уверенности: сумма посчитана, но требует проверки"
+    }
+  ],
+  "excluded": [
+    {
+      "code": "01.1.02.01-0001",
+      "element": "Бетон В25 — перекрытия (подвал + 3 этажа)",
+      "resource": "Бетон тяжёлый, класс В25",
+      "rule": "Бетон тяжёлый, класс В25",
+      "unit": "м3",
+      "qty": 9256.2,
+      "qty_native": null,
+      "unit_native": null,
+      "confidence": "low",
+      "source": "расчёт по том КР1, стр. 11; перекрытия в томе: подвал, 1 этаж, 2 этаж, 3 этаж",
+      "trade": null,
+      "status": "excluded",
+      "reason": "уверенность «low»: объём не проверен — в итог не идёт",
+      "price": null,
+      "amount": null
+    }
+  ],
+  "review": [
+    {
+      "element": "Бетон В25 W6 F150 — фундаментная плита",
+      "reason": "объём средней уверенности: сумма посчитана, но требует проверки"
+    }
+  ],
+  "totals": {
+    "lines": 1,
+    "priced_lines": 1,
+    "amount_rub": 32607040.0,
+    "amount_high_rub": 0,
+    "review_lines": 1,
+    "excluded_lines": 1,
+    "no_price_lines": 0
+  },
+  "confirmed_by": null
+}

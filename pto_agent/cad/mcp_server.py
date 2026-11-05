@@ -1041,7 +1041,10 @@ def t_materials_reconcile(args, ctx):
       "нет правила сопоставления — `no_price`, сумма null, а не 0 ₽. Шифр расценки ФЕР ставит "
       "человек при подтверждении; это ведомость объёмов с ценами, не смета.",
       {"type": "object", "properties": {
-          "action": {"type": "string", "enum": ["draft", "confirm"], "default": "draft"},
+          "action": {"type": "string", "enum": ["draft", "confirm", "pdf"], "default": "draft",
+                     "description": "pdf — прочитать том КР из PDF: факты с цитатами, объёмы "
+                                    "расчётом по габаритам и толщинам, без выдуманных цифр"},
+          "pdf_path": {"type": "string", "description": "PDF раздела КР (для action=pdf)"},
           "boq_path": {"type": "string", "description": "выгрузка объёмов (csv/xlsx)"},
           "map_path": {"type": "string", "description": "словарь «элемент → код ресурса»"},
           "prices_dir": {"type": "string", "default": "data/prices"},
@@ -1066,6 +1069,29 @@ def t_takeoff(args, ctx):
     if args.get("audit_path"):
         from ..audit import AuditLog
         audit = AuditLog(Path(args["audit_path"]))
+
+    if (args.get("action") or "draft") == "pdf":
+        from ..kr_pdf import (derive_boq, extract_facts, extract_levels, find_schedules,
+                              kr_report, read_pdf_text)
+        pdf_path = Path(_p(args, "pdf_path"))
+        cache = out_dir / f"{pdf_path.stem}_pages.json"
+        doc = read_pdf_text(pdf_path, cache=cache)
+        schedules = find_schedules(doc)
+        levels = extract_levels(doc)
+        facts = extract_facts(doc)
+        derived = derive_boq(facts, levels=levels)
+        draft = build_draft(derived["lines"], mapping=load_map(args.get("map_path")),
+                            prices_dir=prices_dir, as_of=args.get("as_of"),
+                            object_name=args.get("object_name") or "",
+                            section=args.get("section") or "КР1")
+        write(out_dir / "draft.json", draft)
+        export_draft_xlsx(draft, out_dir / "draft.xlsx")
+        markdown = kr_report(doc, schedules, facts, derived,
+                             object_name=args.get("object_name") or "", draft=draft)
+        (out_dir / "kr_report.md").write_text(markdown, encoding="utf-8")
+        return {"ok": True, "pages": doc["pages_total"], "schedules": schedules,
+                "levels": levels["levels"], "facts": facts["facts"],
+                "needs_input": derived["needs_input"], "draft": draft, "markdown": markdown}
 
     if (args.get("action") or "draft") == "draft":
         boq, problems = read_boq(Path(_p(args, "boq_path")))

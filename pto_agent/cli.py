@@ -12,6 +12,8 @@ from .export import (export_discrepancies, export_discrepancies_csv, export_ks2,
 from .llm import describe_discrepancies, route
 from .norms import NormIndex, load_norms
 from .parsers import read_closed, read_estimate, read_journal
+from .kr_pdf import (derive_boq, extract_facts, extract_levels, find_schedules, kr_report,
+                     read_pdf_text)
 from .takeoff import (build_draft as build_takeoff_draft, confirm as confirm_takeoff,
                       draft_to_markdown as takeoff_to_markdown, export_draft_xlsx,
                       load_map as load_takeoff_map, read_boq)
@@ -527,6 +529,50 @@ def cmd_takeoff(args) -> int:
         print(f"  файлы: {out_dir / 'draft.json'}, {out_dir / 'draft.xlsx'}, {out_dir / 'draft.md'}")
         return 0
 
+    if action == "pdf":
+        cache = Path(args.cache) if args.cache else out_dir / f"{Path(args.file).stem}_pages.json"
+        doc = read_pdf_text(args.file, cache=cache)
+        schedules = find_schedules(doc)
+        levels = extract_levels(doc)
+        facts = extract_facts(doc)
+        derived = derive_boq(facts, levels=levels)
+        draft = build_takeoff_draft(derived["lines"], mapping=load_takeoff_map(args.map),
+                                    prices_dir=args.prices_dir, as_of=args.as_of,
+                                    object_name=args.object_name, section=args.section)
+        (out_dir / "draft.json").write_text(json.dumps(draft, ensure_ascii=False, indent=2),
+                                            encoding="utf-8")
+        (out_dir / "draft.md").write_text(takeoff_to_markdown(draft), encoding="utf-8")
+        export_draft_xlsx(draft, out_dir / "draft.xlsx")
+        payload = {"schema": "pto-agent/kr-run@1", "file": doc["file"],
+                   "pages_total": doc["pages_total"], "pages_with_text": doc["pages_with_text"],
+                   "pages_without_text": doc["pages_without_text"],
+                   "read_errors": doc["read_errors"], "schedules": schedules, "levels": levels,
+                   "facts": facts["facts"],
+                   "derived": {k: derived[k] for k in ("lines", "needs_input", "formulas")}}
+        (out_dir / "kr_report.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2),
+                                                encoding="utf-8")
+        (out_dir / "kr_report.md").write_text(
+            kr_report(doc, schedules, facts, derived, object_name=args.object_name, draft=draft),
+            encoding="utf-8")
+
+        print(f"PDF: страниц {doc['pages_total']} · с текстом {doc['pages_with_text']} · "
+              f"без текста {len(doc['pages_without_text'])}")
+        print(f"  ведомости: {', '.join(schedules['found']) or 'не найдены'} "
+              f"| нет: {', '.join(schedules['missing'])}")
+        print(f"  фактов из текста: {len(facts['facts'])} · перекрытий в томе: "
+              f"{levels['levels_count']} ({', '.join(levels['levels'])})")
+        for line in derived["lines"]:
+            print(f"  объём: {line['description']} — {line['qty']:g} м3 "
+                  f"({line['confidence']}): {line['formula']}")
+        for need in derived["needs_input"]:
+            print(f"  нужно спросить: {need['what']} — {need['ask']}", file=sys.stderr)
+        totals = draft["totals"]
+        print(f"  итог по строкам с ценой: {totals['amount_rub']} ₽ · "
+              f"не включено строк: {totals['excluded_lines']}")
+        print(f"  файлы: {out_dir / 'kr_report.md'}, {out_dir / 'draft.xlsx'}, "
+              f"{out_dir / 'draft.json'}")
+        return 0
+
     if action == "confirm":
         draft = json.loads(Path(args.draft).read_text(encoding="utf-8"))
         changes = json.loads(Path(args.changes).read_text(encoding="utf-8")) if args.changes else {}
@@ -702,6 +748,15 @@ def main(argv=None):
     tkd.add_argument("--object-name", default="")
     tkd.add_argument("--section", default="КР")
     tkd.set_defaults(func=cmd_takeoff)
+    tkp = tksub.add_parser("pdf", help="раздел КР из PDF: факты, объёмы расчётом, черновик")
+    tkp.add_argument("--file", required=True, help="PDF раздела КР")
+    tkp.add_argument("--map", default=None)
+    tkp.add_argument("--prices-dir", default="data/prices")
+    tkp.add_argument("--as-of", default=None)
+    tkp.add_argument("--object-name", default="")
+    tkp.add_argument("--section", default="КР1")
+    tkp.add_argument("--cache", default=None, help="кэш текста страниц (json)")
+    tkp.set_defaults(func=cmd_takeoff)
     tkc = tksub.add_parser("confirm", help="подтвердить ведомость: количества и шифры расценок")
     tkc.add_argument("--draft", required=True)
     tkc.add_argument("--changes", default=None, help="JSON {элемент: {qty, norm, exclude, note}}")
