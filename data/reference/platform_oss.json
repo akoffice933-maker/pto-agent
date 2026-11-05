@@ -1,0 +1,992 @@
+{
+ "schema": "pto-agent/platform-oss@1",
+ "checked_at": "2026-11-05",
+ "checked_via": "GitHub REST API: /search/repositories, /repos/{owner}/{repo}, /repos/{owner}/{repo}/license, raw LICENSE",
+ "our_license": "MIT",
+ "layers": {
+  "2": "Сметы и ценообразование",
+  "3": "Закупки и снабжение",
+  "4": "Подрядчики и субподряд",
+  "5": "Финансы и казначейство",
+  "6": "Управление проектом",
+  "7": "CRM и коммерция",
+  "8": "Мобильное приложение и поле",
+  "9": "1С / БИТ.Строительство",
+  "x": "Сквозные (аудит, документооборот, API)"
+ },
+ "rules": {
+  "copy_code": "код берём только при MIT / Apache-2.0 / BSD / ISC и с сохранением уведомления об авторстве",
+  "weak_copyleft": "LGPL / MPL / EPL: можно как отдельную зависимость или сервис, код внутрь пакета не копируем",
+  "strong_copyleft": "GPL / AGPL: только идеи, схема данных или внешний сервис по сети; в MIT-поставку код не попадает",
+  "no_license": "без лицензии = все права защищены: читаем как идею, копировать нельзя",
+  "not_osi": "Sustainable Use / двойные лицензии: не свободные — максимум идеи и внешний сервис",
+  "data": "базы данных и справочники проверяются отдельно: у данных своя лицензия"
+ },
+ "projects": [
+  {
+   "repo": "datadrivenconstruction/OpenConstructionERP",
+   "url": "https://github.com/datadrivenconstruction/OpenConstructionERP",
+   "license": "AGPL-3.0",
+   "license_note": "AGPL: только идеи и внешний сервис, код в MIT-поставку не попадает",
+   "stars": 1183,
+   "pushed": "2026-11-05",
+   "language": "Python",
+   "layer": "2",
+   "priority": "высокий",
+   "role": "Строительный ERP: BOQ, takeoff из PDF/CAD/BIM, сопоставление цен — самый близкий по смыслу OSS-аналог",
+   "we_take": [
+    "модель данных BOQ: работа → ресурсы → цена → объём, как у нас позиция сметы",
+    "идею «takeoff-сессия» с привязкой каждого объёма к листу чертежа",
+    "список типов документов комплекта ИД, который они держат рядом со сметой"
+   ],
+   "we_do_not_take": [
+    "код (AGPL-3.0 несовместим с MIT-поставкой)",
+    "их UI и стек"
+   ],
+   "integration": "reference-only",
+   "copy_allowed": false,
+   "verified_at": "2026-11-05"
+  },
+  {
+   "repo": "datadrivenconstruction/DDC_Skills_for_AI_Agents_in_Construction",
+   "url": "https://github.com/datadrivenconstruction/DDC_Skills_for_AI_Agents_in_Construction",
+   "license": "MIT",
+   "license_note": "MIT — код и тексты скиллов брать можно с уведомлением",
+   "stars": 393,
+   "pushed": "2026-10-19",
+   "language": "Python",
+   "layer": "2",
+   "priority": "высокий",
+   "role": "221 AI-скилл для стройки: анализ BIM, оценка стоимости, планирование, документный контроль",
+   "we_take": [
+    "структуру скилла: когда применять, что на входе, что на выходе, какие инструменты вызывает",
+    "набор скиллов «оценка стоимости» и «документный контроль» — сверить с нашими промптами",
+    "формат описания задачи так, чтобы модель не выдумывала числа"
+   ],
+   "we_do_not_take": [
+    "их привязку к конкретным коммерческим моделям и API"
+   ],
+   "integration": "pattern-and-code",
+   "copy_allowed": true,
+   "verified_at": "2026-11-05"
+  },
+  {
+   "repo": "frameIQ/pygaeb",
+   "url": "https://github.com/frameIQ/pygaeb",
+   "license": "MIT",
+   "license_note": "MIT",
+   "stars": 24,
+   "pushed": "2026-11-02",
+   "language": "Python",
+   "layer": "2",
+   "priority": "средний",
+   "role": "GAEB DA XML — машиночитаемый обмен сметными данными (немецкий стандарт, де-факто в Европе)",
+   "we_take": [
+    "идею строгой схемы обмена сметой + валидацию перед импортом",
+    "подход «не разбирать чужой формат эвристикой, а требовать схему»",
+    "пример тестов на реальных файлах смет"
+   ],
+   "we_do_not_take": [
+    "сам формат GAEB как основной — в РФ обмен идёт через АРОС/xlsx/XML заказчика"
+   ],
+   "integration": "pattern-and-code",
+   "copy_allowed": true,
+   "verified_at": "2026-11-05"
+  },
+  {
+   "repo": "oramaai/orama-core",
+   "url": "https://github.com/oramaai/orama-core",
+   "license": "MIT",
+   "license_note": "MIT",
+   "stars": 16,
+   "pushed": "2026-02-20",
+   "language": "TypeScript",
+   "layer": "2",
+   "priority": "средний",
+   "role": "AI-оценка стоимости: чертёж → перечень работ; инфраструктура, не приложение",
+   "we_take": [
+    "схему «документ → извлечённые элементы → строки сметы», где у каждой строки есть источник (лист, страница)",
+    "идею проверки: цифра без ссылки на элемент чертежа не принимается"
+   ],
+   "we_do_not_take": [
+    "их модели и облачные вызовы"
+   ],
+   "integration": "pattern-and-code",
+   "copy_allowed": true,
+   "verified_at": "2026-11-05"
+  },
+  {
+   "repo": "ibuilder/massing",
+   "url": "https://github.com/ibuilder/massing",
+   "license": "MIT",
+   "license_note": "MIT",
+   "stars": 133,
+   "pushed": "2026-11-02",
+   "language": "TypeScript",
+   "layer": "2",
+   "priority": "средний",
+   "role": "IFC-native AEC-платформа: web-просмотр модели, извлечение объёмов",
+   "we_take": [
+    "маршрут «модель → объёмы элементов → сверка с КС-2» как второй источник после PDF-обмера",
+    "идею совместного просмотра модели и замечаний"
+   ],
+   "we_do_not_take": [
+    "полноценный BIM-редактор — это отдельный продукт"
+   ],
+   "integration": "pattern-and-code",
+   "copy_allowed": true,
+   "verified_at": "2026-11-05"
+  },
+  {
+   "repo": "IfcOpenShell/IfcOpenShell",
+   "url": "https://github.com/IfcOpenShell/IfcOpenShell",
+   "license": "LGPL-3.0",
+   "license_note": "LGPL: только как отдельная зависимость, код внутрь пакета не копируем",
+   "stars": 2929,
+   "pushed": "2026-11-05",
+   "language": "C++",
+   "layer": "2",
+   "priority": "средний",
+   "role": "Библиотека IFC: чтение/запись модели, геометрия, объёмы",
+   "we_take": [
+    "счётчик объёмов по типам элементов (стены, проёмы) для сверки с актом",
+    "извлечение атрибутов элемента для привязки объёма к позиции сметы"
+   ],
+   "we_do_not_take": [
+    "включение в поставку как встроенного кода"
+   ],
+   "integration": "dependency",
+   "copy_allowed": false,
+   "verified_at": "2026-11-05"
+  },
+  {
+   "repo": "Kentucky-ai/opentakeoff",
+   "url": "https://github.com/Kentucky-ai/opentakeoff",
+   "license": "AGPL-3.0",
+   "license_note": "AGPL: только идеи и внешний сервис",
+   "stars": 754,
+   "pushed": "2026-11-04",
+   "language": "TypeScript",
+   "layer": "2",
+   "priority": "средний",
+   "role": "PDF-takeoff: измерение объёмов прямо на листах PDF",
+   "we_take": [
+    "UX «обвести область на листе → объём в таблицу → ссылка на лист» (наш обмер сейчас по фото/скану)",
+    "правила пересчёта масштаба листа"
+   ],
+   "we_do_not_take": [
+    "код"
+   ],
+   "integration": "reference-only",
+   "copy_allowed": false,
+   "verified_at": "2026-11-05"
+  },
+  {
+   "repo": "datadrivenconstruction/cad2data-Revit-IFC-DWG",
+   "url": "https://github.com/datadrivenconstruction/cad2data-Revit-IFC-DWG",
+   "license": "MIT (частично)",
+   "license_note": "MIT с ограничением области: см. LICENSE — покрыты не все части репозитория",
+   "stars": 542,
+   "pushed": "2026-11-01",
+   "language": "Python",
+   "layer": "2",
+   "priority": "средний",
+   "role": "Конвертеры RVT/RFA/IFC/DWG → GLB/JSONL/Excel/SVG",
+   "we_take": [
+    "маршрут «DWG → Excel/JSONL» для извлечения объёмов без открытия CAD",
+    "список того, что реально извлекается из DWG без проприетарных SDK"
+   ],
+   "we_do_not_take": [
+    "бинарники конвертеров, если лицензия покрывает не все файлы"
+   ],
+   "integration": "reference-only",
+   "copy_allowed": false,
+   "verified_at": "2026-11-05",
+   "license_api": [
+    "NOASSERTION"
+   ]
+  },
+  {
+   "repo": "datadrivenconstruction/OpenConstructionEstimate-DDC-CWICR",
+   "url": "https://github.com/datadrivenconstruction/OpenConstructionEstimate-DDC-CWICR",
+   "license": "двойная (не OSI)",
+   "license_note": "двойное лицензирование: данные требуют отдельного согласия",
+   "stars": 273,
+   "pushed": "2026-10-15",
+   "language": "Python",
+   "layer": "2",
+   "priority": "низкий",
+   "role": "Мультиязычная база расценок/ресурсов (55 тыс. работ) для сопоставления цен",
+   "we_take": [
+    "идею структуры справочника ресурсов и региональных привязок",
+    "подход к сопоставлению наших расценок с внешним каталогом"
+   ],
+   "we_do_not_take": [
+    "данные целиком — лицензия на данные отдельная, копировать нельзя"
+   ],
+   "integration": "reference-only",
+   "copy_allowed": false,
+   "verified_at": "2026-11-05"
+  },
+  {
+   "repo": "frappe/erpnext",
+   "url": "https://github.com/frappe/erpnext",
+   "license": "GPL-3.0",
+   "license_note": "GPL: идеи и внешний сервис, код не копируем",
+   "stars": 40962,
+   "pushed": "2026-11-05",
+   "language": "Python",
+   "layer": "3",
+   "priority": "высокий",
+   "role": "ERP: заявки, запрос КП, сравнение предложений поставщиков, заказ поставщику, склад",
+   "we_take": [
+    "схему «заявка → запрос КП → сравнение по цене/сроку/условиям → заказ»",
+    "модель сравнения КП: цена, срок, НДС, условия оплаты в одной таблице с обоснованием выбора",
+    "связку «заказ → приход → счёт → платёж»"
+   ],
+   "we_do_not_take": [
+    "код (GPL-3.0)",
+    "их бухгалтерское ядро"
+   ],
+   "integration": "reference-only",
+   "copy_allowed": false,
+   "verified_at": "2026-11-05"
+  },
+  {
+   "repo": "odoo/odoo",
+   "url": "https://github.com/odoo/odoo",
+   "license": "LGPL-3.0",
+   "license_note": "LGPL (community): можно как отдельный сервис, код внутрь не копируем",
+   "stars": 55554,
+   "pushed": "2026-11-05",
+   "language": "Python",
+   "layer": "3",
+   "priority": "высокий",
+   "role": "Закупки, склад, наряд-заказы на выезд, ремонт — эталонные бизнес-процессы",
+   "we_take": [
+    "справочник процессов закупки и полевых работ — что должно быть в заявке и наряде",
+    "идею «правило повторного заказа» (min/max остатка)"
+   ],
+   "we_do_not_take": [
+    "код и их ORM/фреймворк"
+   ],
+   "integration": "reference-only",
+   "copy_allowed": false,
+   "verified_at": "2026-11-05"
+  },
+  {
+   "repo": "inventree/InvenTree",
+   "url": "https://github.com/inventree/InvenTree",
+   "license": "MIT",
+   "license_note": "MIT — код брать можно с уведомлением",
+   "stars": 7817,
+   "pushed": "2026-11-05",
+   "language": "Python",
+   "layer": "3",
+   "priority": "высокий",
+   "role": "Складской учёт: номенклатура, партии, остатки, REST API, QR-этикетки",
+   "we_take": [
+    "модель номенклатуры и партий (серия/партия важна для сертификатов на материалы)",
+    "схему REST API склада, чтобы наш агент спрашивал остатки, а не вёл их сам",
+    "идею привязки «партия → документ о качестве» — прямо в наш реестр ИД"
+   ],
+   "we_do_not_take": [
+    "их UI"
+   ],
+   "integration": "external-mcp-server",
+   "copy_allowed": true,
+   "verified_at": "2026-11-05"
+  },
+  {
+   "repo": "openprocurement/openprocurement.api",
+   "url": "https://github.com/openprocurement/openprocurement.api",
+   "license": "Apache-2.0",
+   "license_note": "Apache-2.0 — схемы и код можно брать с уведомлением",
+   "stars": 117,
+   "pushed": "2025-06-14",
+   "language": "Python",
+   "layer": "3",
+   "priority": "средний",
+   "role": "Открытые закупки (Prozorro): тендер, оферты, квалификация участника, жалобы",
+   "we_take": [
+    "схему данных тендера и оферты как образец машиночитаемого сравнения КП",
+    "идею обязательных полей оферты (цена, срок, гарантия), без которых КП не принимается"
+   ],
+   "we_do_not_take": [
+    "их процессуальную модель — она под другой закон"
+   ],
+   "integration": "schema-reference",
+   "copy_allowed": true,
+   "verified_at": "2026-11-05"
+  },
+  {
+   "repo": "leihs/leihs",
+   "url": "https://github.com/leihs/leihs",
+   "license": "GPL-3.0",
+   "license_note": "GPL: идеи",
+   "stars": 246,
+   "pushed": "2026-11-04",
+   "language": "Ruby",
+   "layer": "3",
+   "priority": "низкий",
+   "role": "Закупки + инвентарь + выдача (учёт инструмента и оборудования)",
+   "we_take": [
+    "идею учёта возвратного имущества и инструмента на объекте"
+   ],
+   "we_do_not_take": [
+    "код"
+   ],
+   "integration": "reference-only",
+   "copy_allowed": false,
+   "verified_at": "2026-11-05"
+  },
+  {
+   "repo": "openboxes/openboxes",
+   "url": "https://github.com/openboxes/openboxes",
+   "license": "EPL-1.0",
+   "license_note": "EPL: слабый копилефт, код внутрь не копируем",
+   "stars": 921,
+   "pushed": "2026-11-04",
+   "language": "Groovy",
+   "layer": "3",
+   "priority": "низкий",
+   "role": "WMS: приёмка, перемещения, отгрузка на объект",
+   "we_take": [
+    "модель складских операций для склада стройплощадки"
+   ],
+   "we_do_not_take": [
+    "код"
+   ],
+   "integration": "reference-only",
+   "copy_allowed": false,
+   "verified_at": "2026-11-05"
+  },
+  {
+   "repo": "TMailletFR/ProjectEngine",
+   "url": "https://github.com/TMailletFR/ProjectEngine",
+   "license": "GPL-3.0",
+   "license_note": "GPL: идеи",
+   "stars": 32,
+   "pushed": "2026-11-02",
+   "language": "Python",
+   "layer": "4",
+   "priority": "средний",
+   "role": "Планирование и контроль по зависимостям: сроки, прогресс, задержки",
+   "we_take": [
+    "модель «задача зависит от задачи» → сдвиг сроков и виновный фронт работ",
+    "расчёт прогресса и просрочки по цепочке — это же нужно для оценки субподрядчика"
+   ],
+   "we_do_not_take": [
+    "код"
+   ],
+   "integration": "reference-only",
+   "copy_allowed": false,
+   "verified_at": "2026-11-05"
+  },
+  {
+   "repo": "openprocurement/openprocurement.api",
+   "url": "https://github.com/openprocurement/openprocurement.api",
+   "license": "Apache-2.0",
+   "license_note": "Apache-2.0",
+   "stars": 117,
+   "pushed": "2025-06-14",
+   "language": "Python",
+   "layer": "4",
+   "priority": "средний",
+   "role": "Квалификация участника: набор документов и проверок допуска",
+   "we_take": [
+    "перечень обязательных документов подрядчика (СРО, допуски, персонал, НРС)",
+    "идею «профиль подрядчика = документы + история исполнения»"
+   ],
+   "we_do_not_take": [
+    "код"
+   ],
+   "integration": "schema-reference",
+   "copy_allowed": true,
+   "verified_at": "2026-11-05"
+  },
+  {
+   "repo": "firefly-iii/firefly-iii",
+   "url": "https://github.com/firefly-iii/firefly-iii",
+   "license": "AGPL-3.0",
+   "license_note": "AGPL: идеи и внешний сервис",
+   "stars": 25074,
+   "pushed": "2026-11-03",
+   "language": "PHP",
+   "layer": "5",
+   "priority": "высокий",
+   "role": "Личные финансы, но с сильными правилами: автокатегоризация транзакций, бюджеты, прогноз",
+   "we_take": [
+    "систему правил категоризации платежей (по контрагенту, назначению, сумме)",
+    "модель бюджета на период и «остаток с учётом запланированного» — это же и есть кассовый разрыв",
+    "идею двойной записи в отчёте без бухгалтерской сложности"
+   ],
+   "we_do_not_take": [
+    "код (AGPL-3.0)"
+   ],
+   "integration": "reference-only",
+   "copy_allowed": false,
+   "verified_at": "2026-11-05"
+  },
+  {
+   "repo": "actualbudget/actual",
+   "url": "https://github.com/actualbudget/actual",
+   "license": "MIT",
+   "license_note": "MIT — код брать можно с уведомлением",
+   "stars": 29984,
+   "pushed": "2026-11-04",
+   "language": "TypeScript",
+   "layer": "5",
+   "priority": "средний",
+   "role": "Local-first бюджетирование с синхронизацией: правила, конверты, отчёты",
+   "we_take": [
+    "local-first модель синхронизации — пригодится для полевого приложения",
+    "идею «конвертов» (лимит на статью) для контроля бюджета объекта",
+    "структуру отчёта «план / факт / отклонение»"
+   ],
+   "we_do_not_take": [
+    "их UI как основной"
+   ],
+   "integration": "pattern-and-code",
+   "copy_allowed": true,
+   "verified_at": "2026-11-05"
+  },
+  {
+   "repo": "invoiceplane/invoiceplane",
+   "url": "https://github.com/invoiceplane/invoiceplane",
+   "license": "MIT + товарный знак",
+   "license_note": "ядро MIT, но LICENSE.txt запрещает перепродажу и распространение приложения и использование имени/логотипа — берём идеи, код не копируем",
+   "stars": 3277,
+   "pushed": "2026-11-03",
+   "language": "PHP",
+   "layer": "5",
+   "priority": "средний",
+   "role": "Счета, платежи, частичные оплаты, PDF-счёт",
+   "we_take": [
+    "модель «счёт → частичные платежи → остаток» для связки акт → оплата",
+    "идею печатной формы счёта на основе данных, а не ручной вёрстки"
+   ],
+   "we_do_not_take": [
+    "имя и логотип проекта",
+    "их UI"
+   ],
+   "integration": "pattern-and-code",
+   "copy_allowed": false,
+   "verified_at": "2026-11-05",
+   "license_api": [
+    "NOASSERTION"
+   ]
+  },
+  {
+   "repo": "opf/openproject",
+   "url": "https://github.com/opf/openproject",
+   "license": "GPL-3.0",
+   "license_note": "GPL: внешний сервис или идеи, код не копируем",
+   "stars": 17006,
+   "pushed": "2026-11-05",
+   "language": "Ruby",
+   "layer": "6",
+   "priority": "средний",
+   "role": "Управление проектами: Гантт, зависимости, базовый план, вехи",
+   "we_take": [
+    "модель «базовый план vs факт» (baseline) — без неё Гантт бесполезен",
+    "список типов связей между работами (FS/SS/FF) и как считаются сдвиги",
+    "API-схему, чтобы наш дашборд читал график, а не хранил второй"
+   ],
+   "we_do_not_take": [
+    "код (GPL-3.0)",
+    "их UI"
+   ],
+   "integration": "external-mcp-server",
+   "copy_allowed": false,
+   "verified_at": "2026-11-05"
+  },
+  {
+   "repo": "frappe/gantt",
+   "url": "https://github.com/frappe/gantt",
+   "license": "MIT",
+   "license_note": "MIT — можно встраивать как зависимость",
+   "stars": 6157,
+   "pushed": "2026-06-18",
+   "language": "JavaScript",
+   "layer": "6",
+   "priority": "средний",
+   "role": "Виджет Гантта: зависимости, перетаскивание, масштаб",
+   "we_take": [
+    "встраивание диаграммы в наш дашборд без своего движка",
+    "формат задач со связями — совместимый с OpenProject-подобными API"
+   ],
+   "we_do_not_take": [
+    "их бэкенд — у нас свой"
+   ],
+   "integration": "dependency",
+   "copy_allowed": true,
+   "verified_at": "2026-11-05"
+  },
+  {
+   "repo": "Leantime/leantime",
+   "url": "https://github.com/Leantime/leantime",
+   "license": "AGPL-3.0",
+   "license_note": "AGPL: идеи",
+   "stars": 11963,
+   "pushed": "2026-11-01",
+   "language": "PHP",
+   "layer": "6",
+   "priority": "низкий",
+   "role": "Простой PM-инструмент для небольших команд",
+   "we_take": [
+    "идею «портал объекта» с задачами, файлами и перепиской в одном месте"
+   ],
+   "we_do_not_take": [
+    "код"
+   ],
+   "integration": "reference-only",
+   "copy_allowed": false,
+   "verified_at": "2026-11-05"
+  },
+  {
+   "repo": "taigaio/taiga-back",
+   "url": "https://github.com/taigaio/taiga-back",
+   "license": "MPL-2.0",
+   "license_note": "MPL: можно как зависимость, файлы не перелицензируем",
+   "stars": 858,
+   "pushed": "2026-11-03",
+   "language": "Python",
+   "layer": "6",
+   "priority": "низкий",
+   "role": "Agile-трекер с открытым API",
+   "we_take": [
+    "схему API «история → задача → комментарий» для портала заказчика"
+   ],
+   "we_do_not_take": [
+    "код внутрь пакета"
+   ],
+   "integration": "dependency",
+   "copy_allowed": false,
+   "verified_at": "2026-11-05"
+  },
+  {
+   "repo": "krayin/laravel-crm",
+   "url": "https://github.com/krayin/laravel-crm",
+   "license": "MIT",
+   "license_note": "MIT",
+   "stars": 24109,
+   "pushed": "2026-11-05",
+   "language": "PHP",
+   "layer": "7",
+   "priority": "средний",
+   "role": "CRM: лиды, сделки, воронка, активности",
+   "we_take": [
+    "модель лида/сделки и этапов воронки для коммерческого блока",
+    "идею «активность по сделке» (звонок, письмо, встреча) как обязательный шаг"
+   ],
+   "we_do_not_take": [
+    "их UI"
+   ],
+   "integration": "pattern-and-code",
+   "copy_allowed": true,
+   "verified_at": "2026-11-05"
+  },
+  {
+   "repo": "Django-CRM/Django-CRM",
+   "url": "https://github.com/Django-CRM/Django-CRM",
+   "license": "MIT",
+   "license_note": "MIT",
+   "stars": 2463,
+   "pushed": "2026-10-31",
+   "language": "Python",
+   "layer": "7",
+   "priority": "средний",
+   "role": "CRM на Django: компании, контакты, сделки, задачи",
+   "we_take": [
+    "структуру моделей, совпадающую с нашим стеком (Python) — проще перенести идеи",
+    "идею разделения «компания → контакт → сделка → документ»"
+   ],
+   "we_do_not_take": [
+    "их админку как продуктовый UI"
+   ],
+   "integration": "pattern-and-code",
+   "copy_allowed": true,
+   "verified_at": "2026-11-05"
+  },
+  {
+   "repo": "espocrm/espocrm",
+   "url": "https://github.com/espocrm/espocrm",
+   "license": "AGPL-3.0",
+   "license_note": "AGPL: идеи",
+   "stars": 3548,
+   "pushed": "2026-11-04",
+   "language": "PHP",
+   "layer": "7",
+   "priority": "низкий",
+   "role": "CRM с расширяемыми сущностями",
+   "we_take": [
+    "идею «сущность описывается метаданными» — гибкая настройка полей без релиза"
+   ],
+   "we_do_not_take": [
+    "код"
+   ],
+   "integration": "reference-only",
+   "copy_allowed": false,
+   "verified_at": "2026-11-05"
+  },
+  {
+   "repo": "zeronezer/bidcraft",
+   "url": "https://github.com/zeronezer/bidcraft",
+   "license": "Apache-2.0",
+   "license_note": "Apache-2.0 — код можно брать с уведомлением",
+   "stars": 80,
+   "pushed": "2026-10-09",
+   "language": "Python",
+   "layer": "7",
+   "priority": "средний",
+   "role": "Тендерная документация с ИИ: разбор ТЗ, проверка комплектности, сборка заявки",
+   "we_take": [
+    "подход «разобрать ТЗ на требования → проверить, что каждое закрыто в заявке»",
+    "идею чек-листа комплектности тендерного пакета",
+    "структуру «требование → ответ → доказательство»"
+   ],
+   "we_do_not_take": [
+    "китайскоязычную модель данных и UI"
+   ],
+   "integration": "pattern-and-code",
+   "copy_allowed": true,
+   "verified_at": "2026-11-05"
+  },
+  {
+   "repo": "OCA/field-service",
+   "url": "https://github.com/OCA/field-service",
+   "license": "AGPL-3.0",
+   "license_note": "AGPL: идеи",
+   "stars": 204,
+   "pushed": "2026-11-02",
+   "language": "Python",
+   "layer": "8",
+   "priority": "высокий",
+   "role": "Модули полевого обслуживания Odoo: наряд-заказ, чек-листы, подпись заказчика, маршрут",
+   "we_take": [
+    "структуру наряда-заказа на объект: работы, чек-лист, фото, подпись представителя",
+    "идею «обязательные фото до/после» на каждую скрытую работу — прямо в наш АОСР",
+    "перечень статусов наряда и кто их меняет"
+   ],
+   "we_do_not_take": [
+    "код (AGPL-3.0)"
+   ],
+   "integration": "reference-only",
+   "copy_allowed": false,
+   "verified_at": "2026-11-05"
+  },
+  {
+   "repo": "Nozbe/WatermelonDB",
+   "url": "https://github.com/Nozbe/WatermelonDB",
+   "license": "MIT",
+   "license_note": "MIT",
+   "stars": 11797,
+   "pushed": "2026-09-16",
+   "language": "JavaScript",
+   "layer": "8",
+   "priority": "средний",
+   "role": "Offline-first база для мобильных приложений: синхронизация, реактивные запросы",
+   "we_take": [
+    "модель «локальная запись → очередь синхронизации → разрешение конфликтов»",
+    "идею, что поле работает без сети и синхронизируется позже (объект без интернета)",
+    "код — если будем делать приложение на React Native"
+   ],
+   "we_do_not_take": [
+    "их ORM как обязательный выбор — зависит от платформы"
+   ],
+   "integration": "dependency",
+   "copy_allowed": true,
+   "verified_at": "2026-11-05"
+  },
+  {
+   "repo": "powersync-ja/powersync-js",
+   "url": "https://github.com/powersync-ja/powersync-js",
+   "license": "Apache-2.0",
+   "license_note": "Apache-2.0 — клиенты можно брать, сервис отдельный",
+   "stars": 738,
+   "pushed": "2026-11-05",
+   "language": "TypeScript",
+   "layer": "8",
+   "priority": "средний",
+   "role": "Синхронизация offline-клиентов с SQL-базой: очередь изменений, конфликты",
+   "we_take": [
+    "схему синхронизации «правила на сервере, кэш на клиенте» для полевых данных",
+    "подход к конфликтам при параллельной правке акта"
+   ],
+   "we_do_not_take": [
+    "привязку к их облачному сервису"
+   ],
+   "integration": "pattern-and-code",
+   "copy_allowed": true,
+   "verified_at": "2026-11-05"
+  },
+  {
+   "repo": "paperless-ngx/paperless-ngx",
+   "url": "https://github.com/paperless-ngx/paperless-ngx",
+   "license": "GPL-3.0",
+   "license_note": "GPL: внешний сервис",
+   "stars": 47707,
+   "pushed": "2026-11-05",
+   "language": "Python",
+   "layer": "8",
+   "priority": "средний",
+   "role": "Приём и распознавание документов: OCR, теги, поиск, архив скан-копий",
+   "we_take": [
+    "идею «документ с объекта загружается с телефона → OCR → теги по объекту и типу»",
+    "схему полнотекстового поиска по сканам (у нас уже есть OCR, не хватает архива-поиска)"
+   ],
+   "we_do_not_take": [
+    "код (GPL-3.0)"
+   ],
+   "integration": "external-mcp-server",
+   "copy_allowed": false,
+   "verified_at": "2026-11-05"
+  },
+  {
+   "repo": "Bayselonarrend/OpenIntegrations",
+   "url": "https://github.com/Bayselonarrend/OpenIntegrations",
+   "license": "MIT",
+   "license_note": "MIT — код брать можно с уведомлением",
+   "stars": 688,
+   "pushed": "2026-11-02",
+   "language": "1C Enterprise",
+   "layer": "9",
+   "priority": "высокий",
+   "role": "Набор интеграций 1С с внешними сервисами через HTTP/JSON (и обратно)",
+   "we_take": [
+    "готовые приёмы «1С ↔ HTTP/JSON» на стороне 1С — как отдавать и принимать данные",
+    "формат обмена, который 1С-ники уже понимают, вместо своего протокола",
+    "код: MIT, можно положить в поставку как модуль обмена"
+   ],
+   "we_do_not_take": [
+    "охват всех их сервисов — нам нужен только HTTP-обмен"
+   ],
+   "integration": "library",
+   "copy_allowed": true,
+   "verified_at": "2026-11-05"
+  },
+  {
+   "repo": "ArtemiusUA/django-cml",
+   "url": "https://github.com/ArtemiusUA/django-cml",
+   "license": "BSD-3-Clause",
+   "license_note": "BSD-3 — можно брать с уведомлением",
+   "stars": 25,
+   "pushed": "2019-10-16",
+   "language": "Python",
+   "layer": "9",
+   "priority": "средний",
+   "role": "Обмен в формате CommerceML 2 (номенклатура, цены, остатки) — формат, который понимает 1С",
+   "we_take": [
+    "схему CommerceML для выгрузки номенклатуры и цен из 1С к нам",
+    "парсер, работающий с тем, что реально отдаёт 1С (а не только с идеальным XML)"
+   ],
+   "we_do_not_take": [
+    "заброшенность проекта: код читать, но лучше писать свой парсер по их тестам"
+   ],
+   "integration": "pattern-and-code",
+   "copy_allowed": true,
+   "verified_at": "2026-11-05"
+  },
+  {
+   "repo": "carono/php-commerceml",
+   "url": "https://github.com/carono/php-commerceml",
+   "license": "MIT",
+   "license_note": "MIT",
+   "stars": 22,
+   "pushed": "2023-11-12",
+   "language": "PHP",
+   "layer": "9",
+   "priority": "низкий",
+   "role": "Разбор файлов CommerceML на PHP",
+   "we_take": [
+    "перечень реальных «сюрпризов» 1С в CommerceML (кодировки, вложенность, лишние теги)"
+   ],
+   "we_do_not_take": [
+    "код — у нас Python"
+   ],
+   "integration": "reference-only",
+   "copy_allowed": true,
+   "verified_at": "2026-11-05"
+  },
+  {
+   "repo": "suvit/python-commerceml",
+   "url": "https://github.com/suvit/python-commerceml",
+   "license": "нет лицензии",
+   "license_note": "без лицензии = все права защищены: только идеи",
+   "stars": 37,
+   "pushed": "2014-04-10",
+   "language": "Python",
+   "layer": "9",
+   "priority": "низкий",
+   "role": "Обмен 1С ↔ сайт на Python (старый, но показательный)",
+   "we_take": [
+    "представление о структуре обмена на Python"
+   ],
+   "we_do_not_take": [
+    "код — копировать нельзя, лицензии нет"
+   ],
+   "integration": "reference-only",
+   "copy_allowed": false,
+   "verified_at": "2026-11-05"
+  },
+  {
+   "repo": "1c-syntax/bsl-parser",
+   "url": "https://github.com/1c-syntax/bsl-parser",
+   "license": "GPL-3.0",
+   "license_note": "GPL: идеи",
+   "stars": 64,
+   "pushed": "2026-11-04",
+   "language": "ANTLR",
+   "layer": "9",
+   "priority": "низкий",
+   "role": "Парсеры языка 1С (BSL) в ANTLR4",
+   "we_take": [
+    "идею разбора кода 1С, если понадобится читать их расчёты"
+   ],
+   "we_do_not_take": [
+    "код"
+   ],
+   "integration": "reference-only",
+   "copy_allowed": false,
+   "verified_at": "2026-11-05"
+  },
+  {
+   "repo": "ivanarama/onebase",
+   "url": "https://github.com/ivanarama/onebase",
+   "license": "MIT",
+   "license_note": "MIT",
+   "stars": 139,
+   "pushed": "2026-11-05",
+   "language": "Python",
+   "layer": "9",
+   "priority": "низкий",
+   "role": "Открытая платформа с предметным DSL, похожим на 1С",
+   "we_take": [
+    "подход «описание учётной логики данными, а не кодом» — если будем делать свою настройку",
+    "идею совместимости с привычками 1С-разработчиков"
+   ],
+   "we_do_not_take": [
+    "платформу целиком"
+   ],
+   "integration": "reference-only",
+   "copy_allowed": true,
+   "verified_at": "2026-11-05"
+  },
+  {
+   "repo": "jazzband/django-simple-history",
+   "url": "https://github.com/jazzband/django-simple-history",
+   "license": "BSD-3-Clause",
+   "license_note": "BSD-3 — можно брать с уведомлением",
+   "stars": 2465,
+   "pushed": "2026-11-01",
+   "language": "Python",
+   "layer": "x",
+   "priority": "высокий",
+   "role": "История изменений записей: кто, когда, что изменил, откат",
+   "we_take": [
+    "схему аудит-лога: снимок записи + дельта + автор + причина",
+    "идею «история как отдельная таблица, а не поле в записи» — для наших актов и денег"
+   ],
+   "we_do_not_take": [
+    "привязку к Django ORM"
+   ],
+   "integration": "pattern-and-code",
+   "copy_allowed": true,
+   "verified_at": "2026-11-05"
+  },
+  {
+   "repo": "mayan-edms/Mayan-EDMS",
+   "url": "https://github.com/mayan-edms/Mayan-EDMS",
+   "license": "Apache-2.0",
+   "license_note": "Apache-2.0 — код можно брать с уведомлением",
+   "stars": 850,
+   "pushed": "2026-05-23",
+   "language": "Python",
+   "layer": "x",
+   "priority": "средний",
+   "role": "СЭД: карточка документа, версии, метаданные, права, OCR",
+   "we_take": [
+    "модель карточки документа ИД: версии, связи, метаданные, права",
+    "идею «документ живёт отдельно от акта» — акт ссылается, а не встраивает"
+   ],
+   "we_do_not_take": [
+    "их UI и тяжёлый стек"
+   ],
+   "integration": "pattern-and-code",
+   "copy_allowed": true,
+   "verified_at": "2026-11-05",
+   "license_api": [
+    "NOASSERTION"
+   ]
+  },
+  {
+   "repo": "bpmn-io/bpmn-js",
+   "url": "https://github.com/bpmn-io/bpmn-js",
+   "license": "MIT",
+   "license_note": "MIT",
+   "stars": 9724,
+   "pushed": "2026-10-30",
+   "language": "JavaScript",
+   "layer": "x",
+   "priority": "средний",
+   "role": "Редактор и рендер BPMN 2.0 в браузере",
+   "we_take": [
+    "визуальную схему согласования акта/платежа: кто следующий и что блокирует",
+    "код: MIT, встраивается как зависимость в дашборд"
+   ],
+   "we_do_not_take": [
+    "BPMN-движок — нам нужна схема, а не исполняемый процесс"
+   ],
+   "integration": "dependency",
+   "copy_allowed": true,
+   "verified_at": "2026-11-05",
+   "license_api": [
+    "NOASSERTION"
+   ]
+  },
+  {
+   "repo": "n8n-io/n8n",
+   "url": "https://github.com/n8n-io/n8n",
+   "license": "Sustainable Use License",
+   "license_note": "не OSI: код копировать нельзя, только внешний сервис у себя",
+   "stars": 209588,
+   "pushed": "2026-11-05",
+   "language": "TypeScript",
+   "layer": "x",
+   "priority": "низкий",
+   "role": "Автоматизация интеграций между сервисами",
+   "we_take": [
+    "идею «интеграция как набор шагов с логом», если понадобится конструктор обменов",
+    "список готовых коннекторов (1С, почта, мессенджеры) — как карта возможностей"
+   ],
+   "we_do_not_take": [
+    "код и встраивание: лицензия Sustainable Use — не свободная"
+   ],
+   "integration": "reference-only",
+   "copy_allowed": false,
+   "verified_at": "2026-11-05"
+  },
+  {
+   "repo": "nocodb/nocodb",
+   "url": "https://github.com/nocodb/nocodb",
+   "license": "Sustainable Use License",
+   "license_note": "не OSI: только внешний сервис/идеи",
+   "stars": 65433,
+   "pushed": "2026-11-04",
+   "language": "TypeScript",
+   "layer": "x",
+   "priority": "низкий",
+   "role": "Таблицы поверх SQL с API и формами",
+   "we_take": [
+    "идею «быстрая таблица + форма + API» для внутренних справочников ПТО"
+   ],
+   "we_do_not_take": [
+    "код"
+   ],
+   "integration": "reference-only",
+   "copy_allowed": false,
+   "verified_at": "2026-11-05"
+  }
+ ]
+}
