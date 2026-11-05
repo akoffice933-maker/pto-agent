@@ -329,11 +329,16 @@ def test_mcp_prices_and_procurement_tools(tmp_path):
                             "prices_dir": str(tmp_path / "prices")})
     assert found["price"]["found"] is True
 
-    request = call("procurement", {"action": "request",
-                                   "smeta_path": str(SMETA if SMETA.exists() else QUOTES)})
-    assert request["ok"]
+    if SMETA.exists():                       # смета АРОС есть не во всех средах (uploads/ локальный)
+        request = call("procurement", {"action": "request", "smeta_path": str(SMETA),
+                                       "request_no": "ЗМ-МСП"})
+        assert request["ok"]
+        payload = request["request"]
+    else:
+        payload = build_request([{"kind": "material", "code": CABLE, "name": "Кабель",
+                                  "qty": 1.0, "unit": "1000 м"}], request_no="ЗМ-МСП")
     path = tmp_path / "request.json"
-    path.write_text(json.dumps(request["request"], ensure_ascii=False), encoding="utf-8")
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     comparison = call("procurement", {"action": "compare", "request_path": str(path),
                                       "quotes_paths": [str(QUOTES)]})
     assert comparison["ok"] and comparison["comparison"]["status"] in {"complete", "partial"}
