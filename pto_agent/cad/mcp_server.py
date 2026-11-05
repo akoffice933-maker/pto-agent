@@ -1041,10 +1041,15 @@ def t_materials_reconcile(args, ctx):
       "нет правила сопоставления — `no_price`, сумма null, а не 0 ₽. Шифр расценки ФЕР ставит "
       "человек при подтверждении; это ведомость объёмов с ценами, не смета.",
       {"type": "object", "properties": {
-          "action": {"type": "string", "enum": ["draft", "confirm", "pdf"], "default": "draft",
+          "action": {"type": "string",
+                     "enum": ["draft", "confirm", "pdf", "schedules"], "default": "draft",
                      "description": "pdf — прочитать том КР из PDF: факты с цитатами, объёмы "
-                                    "расчётом по габаритам и толщинам, без выдуманных цифр"},
+                                    "расчётом по габаритам и толщинам; schedules — взять "
+                                    "объёмы из ведомостей расхода стали и спецификаций, "
+                                    "проверить арифметику и марки. Без выдуманных цифр"},
           "pdf_path": {"type": "string", "description": "PDF раздела КР (для action=pdf)"},
+          "schedules_path": {"type": "string",
+                             "description": "ведомости в JSON (для action=schedules)"},
           "boq_path": {"type": "string", "description": "выгрузка объёмов (csv/xlsx)"},
           "map_path": {"type": "string", "description": "словарь «элемент → код ресурса»"},
           "prices_dir": {"type": "string", "default": "data/prices"},
@@ -1092,6 +1097,34 @@ def t_takeoff(args, ctx):
         return {"ok": True, "pages": doc["pages_total"], "schedules": schedules,
                 "levels": levels["levels"], "facts": facts["facts"],
                 "needs_input": derived["needs_input"], "draft": draft, "markdown": markdown}
+
+    if (args.get("action") or "draft") == "schedules":
+        from ..kr_schedules import (coverage as schedules_coverage, read_schedules,
+                                    schedules_report, to_boq as schedules_to_boq,
+                                    validate_schedules)
+        doc = read_schedules(Path(_p(args, "schedules_path")))
+        facts = {}
+        if args.get("pdf_path") and Path(_p(args, "pdf_path")).exists():
+            from ..kr_pdf import extract_facts, read_pdf_text
+            pdf_doc = read_pdf_text(Path(_p(args, "pdf_path")),
+                                    cache=out_dir / f"{Path(_p(args, 'pdf_path')).stem}_pages.json")
+            facts = {"by_name": {f["name"]: f for f in extract_facts(pdf_doc)["facts"]}}
+        validation = validate_schedules(doc, facts)
+        boq = schedules_to_boq(doc, validation)
+        cover = schedules_coverage(doc)
+        draft = build_draft(boq["lines"], mapping=load_map(args.get("map_path")),
+                            prices_dir=prices_dir, as_of=args.get("as_of"),
+                            object_name=args.get("object_name") or doc.get("object") or "",
+                            section=args.get("section") or "КР1")
+        write(out_dir / "draft.json", draft)
+        export_draft_xlsx(draft, out_dir / "draft.xlsx")
+        markdown = schedules_report(doc, validation, boq, draft=draft, cover=cover)
+        (out_dir / "kr_schedules_report.md").write_text(markdown, encoding="utf-8")
+        return {"ok": True, "sheets": len(doc.get("sheets") or []),
+                "needs_verification": bool(doc.get("needs_verification")),
+                "findings": validation["findings"], "boq_totals": boq["totals_by_kind"],
+                "missing": cover["missing"], "draft_totals": draft["totals"],
+                "draft": draft, "markdown": markdown}
 
     if (args.get("action") or "draft") == "draft":
         boq, problems = read_boq(Path(_p(args, "boq_path")))

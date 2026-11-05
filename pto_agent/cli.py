@@ -14,6 +14,8 @@ from .norms import NormIndex, load_norms
 from .parsers import read_closed, read_estimate, read_journal
 from .kr_pdf import (derive_boq, extract_facts, extract_levels, find_schedules, kr_report,
                      read_pdf_text)
+from .kr_schedules import (coverage as schedules_coverage, read_schedules, schedules_report,
+                           to_boq as schedules_to_boq, validate_schedules)
 from .takeoff import (build_draft as build_takeoff_draft, confirm as confirm_takeoff,
                       draft_to_markdown as takeoff_to_markdown, export_draft_xlsx,
                       load_map as load_takeoff_map, read_boq)
@@ -573,6 +575,60 @@ def cmd_takeoff(args) -> int:
               f"{out_dir / 'draft.json'}")
         return 0
 
+    if action == "schedules":
+        doc = read_schedules(args.schedules)
+        facts = {}
+        derived = None
+        if args.pdf_report and Path(args.pdf_report).exists():
+            pdf_payload = json.loads(Path(args.pdf_report).read_text(encoding="utf-8"))
+            facts = {"by_name": {f["name"]: f for f in pdf_payload.get("facts") or []}}
+            derived = pdf_payload.get("derived")
+        validation = validate_schedules(doc, facts)
+        boq = schedules_to_boq(doc, validation)
+        # покрытие считаем только по ведомостям: расчёт по габаритам не делает конструкцию
+        # «покрытой ведомостью»
+        cover = schedules_coverage(doc)
+        draft = build_takeoff_draft(boq["lines"], mapping=load_takeoff_map(args.map),
+                                    prices_dir=args.prices_dir, as_of=args.as_of,
+                                    object_name=args.object_name or doc.get("object") or "",
+                                    section=args.section)
+        (out_dir / "draft.json").write_text(json.dumps(draft, ensure_ascii=False, indent=2),
+                                           encoding="utf-8")
+        (out_dir / "draft.md").write_text(takeoff_to_markdown(draft), encoding="utf-8")
+        export_draft_xlsx(draft, out_dir / "draft.xlsx")
+        payload = {"schema": "pto-agent/kr-schedules-run@1",
+                   "object": doc.get("object"), "project": doc.get("project"),
+                   "source": doc.get("source"),
+                   "needs_verification": bool(doc.get("needs_verification")),
+                   "validation": validation, "boq": boq, "coverage": cover,
+                   "draft_totals": draft["totals"]}
+        (out_dir / "kr_schedules_report.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        (out_dir / "kr_schedules_report.md").write_text(
+            schedules_report(doc, validation, boq, draft=draft, derived_from_pdf=derived,
+                             cover=cover), encoding="utf-8")
+
+        print(f"Ведомости: листов {len(doc.get('sheets') or [])} · таблиц "
+              f"{sum(len(s.get('tables') or []) for s in doc.get('sheets') or [])}"
+              + (" · требуют сверки с PDF" if doc.get("needs_verification") else ""))
+        for kind, slot in boq["totals_by_kind"].items():
+            qty = ", ".join(f"{v:g} {u}" for u, v in slot["qty"].items())
+            print(f"  {kind}: строк {slot['lines']} · {qty}")
+        for finding in validation["findings"]:
+            print(f"  замечание [{finding['type']}] {finding['where']}: {finding['detail']}",
+                   file=sys.stderr)
+        for item in cover["missing"]:
+            print(f"  нет в ведомостях: {item['position']} — {item['ask']}", file=sys.stderr)
+        totals = draft["totals"]
+        print(f"  ведомость с ценами: строк {totals['lines']} · с ценой {totals['priced_lines']}"
+              f" · без цены {totals['no_price_lines']} · не включено {totals['excluded_lines']}")
+        print(f"  итог по строкам с ценой: {totals['amount_rub']} ₽")
+        for item in draft["excluded"]:
+            print(f"  не включено: {item['element'][:60]} — {item['reason']}", file=sys.stderr)
+        print(f"  файлы: {out_dir / 'kr_schedules_report.md'}, {out_dir / 'draft.md'}, "
+              f"{out_dir / 'draft.xlsx'}")
+        return 0
+
     if action == "confirm":
         draft = json.loads(Path(args.draft).read_text(encoding="utf-8"))
         changes = json.loads(Path(args.changes).read_text(encoding="utf-8")) if args.changes else {}
@@ -757,6 +813,18 @@ def main(argv=None):
     tkp.add_argument("--section", default="КР1")
     tkp.add_argument("--cache", default=None, help="кэш текста страниц (json)")
     tkp.set_defaults(func=cmd_takeoff)
+    tks = tksub.add_parser("schedules",
+                           help="ведомости расхода стали и спецификации → проверка и черновик")
+    tks.add_argument("--schedules", default="data/input/kr1_schedules.json",
+                     help="ведомости в JSON (перенесённые из листов проекта)")
+    tks.add_argument("--pdf-report", default=None,
+                     help="отчёт прогона PDF того же тома — для сверки «габариты vs ведомость»")
+    tks.add_argument("--map", default="data/reference/takeoff_map_kr1.json")
+    tks.add_argument("--prices-dir", default="data/demo/prices_kr1")
+    tks.add_argument("--as-of", default=None)
+    tks.add_argument("--object-name", default="")
+    tks.add_argument("--section", default="КР1")
+    tks.set_defaults(func=cmd_takeoff)
     tkc = tksub.add_parser("confirm", help="подтвердить ведомость: количества и шифры расценок")
     tkc.add_argument("--draft", required=True)
     tkc.add_argument("--changes", default=None, help="JSON {элемент: {qty, norm, exclude, note}}")
