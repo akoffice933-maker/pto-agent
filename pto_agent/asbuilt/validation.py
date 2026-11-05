@@ -139,6 +139,11 @@ def validate_norms_against_base(norms, norms_dir=None, base: dict | None = None)
             issues.append(_issue("norm_not_in_base",
                                  f"{r['doc']} п. {r['clause']}: документа нет в нормативной базе "
                                  f"агента — ссылка не подтверждена", "warning", doc=r["doc"]))
+        elif r["status"] == "verified_partial":
+            issues.append(_issue("norm_base_fragment",
+                                 f"{r['doc']} п. {r['clause']}: в базе только фрагмент "
+                                 f"документа — цитату сверять по первоисточнику", "info",
+                                 doc=r["doc"], clause=r["clause"]))
         elif r["status"] == "clause_missing":
             issues.append(_issue("norm_clause_not_in_base",
                                  f"{r['doc']}: пункта {r['clause']} нет в базе — {r['note']}",
@@ -219,6 +224,10 @@ def validate_attachments(spec: dict, work_types: list[str] | None = None,
     if work_types:
         from .requirements import required_kinds
         req = required_kinds(work_types, matrix)
+        if spec.get("required_kinds"):
+            # акт на конкретную группу скрытых работ: комплект документов у него свой,
+            # иначе акт на борозды требовал бы акт испытаний электроустановки
+            req = {**req, "required": list(spec["required_kinds"])}
         from .registry import _kind_of
         present = {_kind_of(doc) for doc in attachments}
         for kind in req["required"]:

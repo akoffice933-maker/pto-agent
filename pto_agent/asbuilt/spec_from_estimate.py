@@ -31,13 +31,29 @@ def _positions_from_summary(summary: dict) -> list[dict]:
     return out
 
 
+AROS_SUFFIXES = {".md", ".markdown", ".html", ".htm"}
+
+
 def load_positions(*, smeta: str | Path | None = None,
                    summary_path: str | Path | None = None) -> tuple[list[dict], str]:
-    """Позиции из сметы (XLSX) или из summary.json; возвращает позиции и источник."""
+    """Позиции из сметы (XLSX или выгрузка АРОС) либо summary.json.
+
+    Смета АРОС читается как есть (html/markdown-выгрузка), без ручного перевода в xlsx.
+    У позиций есть `kind`: `work` — работа (обоснование — сметная норма), `material` —
+    материал/оборудование отдельной строкой (код ресурса ФГИС ЦС). Материал в акт как
+    работу не попадает, но идёт в перечень материалов спецификации.
+    """
     if smeta:
-        items = read_estimate(Path(smeta))
-        return ([{"code": i.code, "name": i.name, "qty": i.qty, "unit": i.unit}
-                 for i in items], f"смета {Path(smeta).name}")
+        path = Path(smeta)
+        if path.suffix.lower() in AROS_SUFFIXES:
+            from .aros import aros_positions, read_aros
+            doc = read_aros(path)
+            return (aros_positions(doc),
+                    f"смета {path.name} (АРОС: {len(doc['works'])} работ, "
+                    f"{len(doc['materials'])} материалов)")
+        items = read_estimate(path)
+        return ([{"code": i.code, "name": i.name, "qty": i.qty, "unit": i.unit,
+                  "kind": "work"} for i in items], f"смета {path.name}")
     if summary_path:
         import json
         data = json.loads(Path(summary_path).read_text(encoding="utf-8"))

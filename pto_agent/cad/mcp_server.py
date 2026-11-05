@@ -393,14 +393,16 @@ def t_review_summary(args, ctx):
       {"type": "object", "properties": {
           "kind": {"type": "string",
                    "enum": ["scheme", "aosr", "registry", "check", "requirements",
-                            "validate", "spec", "forms", "acts", "verify-norms"],
+                            "validate", "spec", "forms", "acts", "verify-norms", "smeta"],
                    "description": "scheme — схема из DXF; aosr — черновик акта скрытых работ; "
                                   "registry — реестр ИД (XLSX); check — комплектность; "
                                   "requirements — матрица требований по видам работ; "
                                   "validate — проверки черновика (даты, пункты норм, подписи); "
                                   "spec — спецификация АОСР из сметы/КС-2; forms — какие формы действуют; "
                                   "acts — план отдельных актов по скрытым работам; "
-                                  "verify-norms — сверка норм с нормативной базой"},
+                                  "verify-norms — сверка норм с нормативной базой; "
+                                  "smeta — разбор сметы АРОС (md/html) или xlsx: работы, "
+                                  "материалы, классификация"},
           "drawing_path": {"type": "string", "description": "DXF для схемы"},
           "spec_path": {"type": "string", "description": "JSON/YAML со данными акта или реестра"},
           "spec": {"type": "object", "description": "те же данные inline, вместо spec_path"},
@@ -457,6 +459,34 @@ def t_asbuilt_docs(args, ctx):
                                   work_types=work_types or None, source=source)
         return {"ok": True, "spec": spec, "markdown": spec_to_markdown(spec),
                 "needs_input": spec["needs_input"]}
+
+    if kind == "smeta":
+        from ..asbuilt.aros import aros_to_markdown, read_aros
+        from ..asbuilt.requirements import classify_positions
+        positions, source = load_positions(smeta=args.get("smeta_path"),
+                                           summary_path=args.get("summary_source"))
+        path = Path(args.get("smeta_path") or "")
+        parsed = read_aros(path) if path.suffix.lower() in {".md", ".markdown", ".html",
+                                                            ".htm"} else None
+        classified = classify_positions(positions)
+        payload = {"ok": True, "source": source,
+                   "classification": {
+                       "total": classified["total"],
+                       "classified": classified["classified"],
+                       "materials_skipped": classified.get("materials_skipped"),
+                       "work_types": [{"work_type": w["work_type"], "positions": len(w["positions"]),
+                                       "share": w.get("share")}
+                                      for w in classified["work_types"]],
+                       "candidates": [{"work_type": w["work_type"],
+                                       "positions": len(w["positions"])}
+                                      for w in classified["candidates"]],
+                       "unknown": classified["unknown"]}}
+        if parsed:
+            payload["sections"] = [{"index": s["index"], "title": s["title"]}
+                                   for s in parsed["sections"]]
+            payload["works"], payload["materials"] = len(parsed["works"]), len(parsed["materials"])
+            payload["markdown"] = aros_to_markdown(parsed)
+        return payload
 
     if kind == "acts":
         positions, source = load_positions(smeta=args.get("smeta_path"),

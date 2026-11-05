@@ -10,6 +10,7 @@ from pathlib import Path
 from .acts_plan import plan_acts, plan_to_markdown, plan_to_specs
 from .aosr import aosr_to_markdown, build_aosr
 from .norms_check import DEFAULT_NORMS_DIR, norms_to_markdown, verify_norms, verify_quote
+from .requirements import classify_positions
 from .forms import forms_catalog
 from .registry import build_registry, check_completeness, registry_to_markdown
 from .requirements import matrix_summary, required_kinds, work_type_requirements
@@ -156,6 +157,61 @@ def cmd_spec(args) -> int:
     return 0
 
 
+def cmd_smeta(args) -> int:
+    """Разбор сметы как есть: АРОС (md/html) или xlsx — что агент в ней увидел."""
+    path = Path(args.smeta)
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    payload: dict = {"file": path.name}
+    if path.suffix.lower() in {".md", ".markdown", ".html", ".htm"}:
+        from .aros import aros_to_markdown, read_aros, section_summary
+        doc = read_aros(path)
+        payload.update({"format": "АРОС (html/markdown-выгрузка)",
+                        "totals": doc["totals"], "sections": section_summary(doc),
+                        "works": len(doc["works"]), "materials": len(doc["materials"]),
+                        "positions": [{k: p[k] for k in ("n", "code", "name", "unit", "qty",
+                                                          "section", "kind")}
+                                      for p in doc["positions"]]})
+        md = aros_to_markdown(doc)
+    else:
+        payload["format"] = "xlsx"
+        md = f"# Смета {path.name}\n\nразбор xlsx: позиции читаются как работы\n"
+    positions, source = load_positions(smeta=path)
+    classified = classify_positions(positions)
+    payload["source"] = source
+    payload["classification"] = {
+        "total": classified["total"], "classified": classified["classified"],
+        "work_types": [{"work_type": w["work_type"], "name": w["name"],
+                        "positions": len(w["positions"]), "share": w.get("share")}
+                       for w in classified["work_types"]],
+        "candidates": [{"work_type": w["work_type"], "positions": len(w["positions"])}
+                       for w in classified["candidates"]],
+        "unknown": classified["unknown"], "merged": classified.get("merged") or []}
+    (out / "smeta_parse.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2),
+                                          encoding="utf-8")
+    lines = [md.rstrip(), "", "## Классификация работ", "",
+             f"- работ: {classified['total']} · распознано: {classified['classified']}",
+             "", "| Вид работ | Позиций | Доля |", "|---|---|---|"]
+    for w in classified["work_types"]:
+        lines.append(f"| {w['name']} | {len(w['positions'])} | {w.get('share')} |")
+    for w in classified["candidates"]:
+        lines.append(f"| {w['name']} (кандидат, в комплект не идёт) | {len(w['positions'])} | "
+                     f"{w.get('share')} |")
+    if classified["unknown"]:
+        lines += ["", "**Не распознано:**"] + [f"- {u['name']}" for u in classified["unknown"]]
+    _write_md(out / "smeta_parse.md", "\n".join(lines) + "\n")
+    print(f"Разбор сметы: {out / 'smeta_parse.json'}")
+    print(f"  работ {classified['total']}: распознано {classified['classified']} · "
+          f"видов работ {len(classified['work_types'])}")
+    for w in classified["work_types"]:
+        print(f"  {w['work_type']}: позиций {len(w['positions'])} (доля {w.get('share')})")
+    if classified["unknown"]:
+        print(f"  не распознано: {len(classified['unknown'])} — "
+              f"{'; '.join(str(u['name'])[:40] for u in classified['unknown'][:3])}",
+              file=sys.stderr)
+    return 0
+
+
 def cmd_acts(args) -> int:
     positions, source = load_positions(smeta=args.smeta, summary_path=args.summary)
     plan = plan_acts(positions,
@@ -186,7 +242,7 @@ def cmd_acts(args) -> int:
 
 
 def cmd_verify_norms(args) -> int:
-    norms_dir = args.norms_dir or (DEFAULT_NORMS_DIR if DEFAULT_NORMS_DIR.exists() else None)
+    norms_dir = args.norms_dir or None      # None → рабочая база + демо-база
     if args.quote:
         result = verify_quote(args.quote, args.doc or "", args.clause or "", norms_dir)
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -262,6 +318,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     f = sub.add_parser("forms", help="какие формы актов действуют и какие устарели")
     f.set_defaults(func=cmd_forms)
+
+    sm = sub.add_parser("smeta", help="разбор сметы (АРОС md/html или xlsx): что увидел агент")
+    sm.add_argument("--smeta", required=True, help="смета: выгрузка АРОС (.md/.html) или .xlsx")
+    sm.add_argument("--out", default="out/asbuilt/smeta")
+    sm.set_defaults(func=cmd_smeta)
 
     ac = sub.add_parser("acts", help="план отдельных АОСР по скрытым работам из сметы/КС-2")
     acsrc = ac.add_mutually_exclusive_group(required=True)

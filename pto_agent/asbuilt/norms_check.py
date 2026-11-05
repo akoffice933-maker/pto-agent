@@ -23,7 +23,10 @@ from pathlib import Path
 
 from ..norms import cite_verify, load_norms
 
-DEFAULT_NORMS_DIR = Path(__file__).resolve().parents[2] / "data" / "demo" / "norms"
+_ROOT = Path(__file__).resolve().parents[2]
+# рабочая база + демонстрационная: документ, которого нет в рабочей, ищется в демо
+DEFAULT_NORMS_DIRS = (_ROOT / "data" / "norms", _ROOT / "data" / "demo" / "norms")
+DEFAULT_NORMS_DIR = DEFAULT_NORMS_DIRS[0]
 
 
 def _norm_designation(text: str) -> str:
@@ -41,22 +44,42 @@ def _norm_clause(text: str) -> str:
     return text.strip(" .;")
 
 
-def load_base(folder: str | Path | None = None) -> dict:
-    """Индекс базы: обозначение → {clauses, meta}. Пустая база — валидный случай."""
-    folder = Path(folder) if folder else DEFAULT_NORMS_DIR
-    base = {"dir": str(folder), "exists": folder.exists(), "docs": {}}
-    if not folder.exists():
-        return base
+def _folders(folder) -> list[Path]:
+    if not folder:
+        return [d for d in DEFAULT_NORMS_DIRS if d.exists()]
+    if isinstance(folder, (list, tuple)):
+        return [Path(f) for f in folder if Path(f).exists()]
+    return [Path(folder)]
+
+
+def load_base(folder=None) -> dict:
+    """Индекс базы: обозначение → {clauses, meta}. Пустая база — валидный случай.
+
+    `folder` — каталог или список каталогов; по умолчанию `data/norms` + `data/demo/norms`.
+    """
+    folders = _folders(folder)
+    base = {"dir": ", ".join(str(f) for f in folders) if folders else str(DEFAULT_NORMS_DIR),
+            "exists": bool(folders), "docs": {}}
+    for folder in folders:
+        _load_into(base, folder)
+    return base
+
+
+def _load_into(base: dict, folder: Path) -> None:
     for clause in load_norms(folder):
+        if clause.doc.designation.lower().startswith(("readme", "index")):
+            continue                       # README — инструкция, а не документ базы
         doc = clause.doc
         key = _norm_designation(doc.designation)
         slot = base["docs"].setdefault(key, {"designation": doc.designation,
                                              "edition": doc.edition,
                                              "status": doc.status,
                                              "file": doc.file,
+                                             "partial": False,
                                              "clauses": set()})
         slot["clauses"].add(_norm_clause(clause.clause))
-    return base
+        slot["partial"] = str(doc.status or "").lower() in {"fragment", "partial"}
+
 
 
 def verify_norms(norms, folder: str | Path | None = None, base: dict | None = None) -> dict:
@@ -82,25 +105,36 @@ def verify_norms(norms, folder: str | Path | None = None, base: dict | None = No
             status, note = "clause_missing", (
                 f"в базе есть {found['designation']} ({found['edition'] or 'редакция не указана'}), "
                 f"но пункта {clause} нет; в базе: {', '.join(sorted(found['clauses'])[:6])}")
+        elif found.get("partial"):
+            # документ в базе есть, но загружен фрагментом: пункт найден, полного текста нет
+            status, note = "verified_partial", (
+                f"пункт есть в базе фрагментом ({found['file']}), полный текст документа "
+                f"не загружен — цитату проверять по первоисточнику")
         else:
             status, note = "verified", f"подтверждено базой ({found['file']})"
         trust = "matrix" if isinstance(norm, dict) and norm.get("source") == "matrix" else "spec"
         results.append({"doc": doc, "clause": clause, "status": status, "note": note,
                         "source": trust, "in_base": found is not None})
-    verified = [r for r in results if r["status"] == "verified"]
-    unverified = [r for r in results if r["status"] != "verified"]
+    verified = [r for r in results if r["status"] in {"verified", "verified_partial"}]
+    unverified = [r for r in results if r["status"] not in {"verified", "verified_partial"}]
+    partial = [r for r in results if r["status"] == "verified_partial"]
     return {
         "base": {"dir": base["dir"], "exists": base["exists"],
                  "documents": sorted(d["designation"] for d in base["docs"].values())},
         "results": results,
         "total": len(results),
         "verified": len(verified),
+        "verified_partial": len(partial),
         "unverified": len(unverified),
         "doc_missing": sorted({r["doc"] for r in results if r["status"] == "doc_missing"}),
         "clause_missing": [{"doc": r["doc"], "clause": r["clause"]}
                            for r in results if r["status"] == "clause_missing"],
         "verified_share": round(len(verified) / len(results), 3) if results else 0.0,
-        "verdict": ("все ссылки подтверждены базой" if results and not unverified else
+        "verdict": ("все ссылки подтверждены базой" if results and not unverified and not partial else
+                    f"подтверждено базой: {len(verified)} из {len(results)}"
+                    f" (фрагментами: {len(partial)}); не проверено: {len(unverified)}"
+                    if results and unverified else
+                    f"подтверждено фрагментами: {len(partial)} из {len(results)}" if results and partial else
                     f"не подтверждено базой: {len(unverified)} из {len(results)}"
                     if results else "ссылок нет"),
     }

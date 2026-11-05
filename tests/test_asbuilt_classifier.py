@@ -176,16 +176,16 @@ def test_norms_base_loads_repo_documents():
     assert any("70.13330" in d["designation"] for d in base["docs"].values())
 
 
-def test_verify_norms_distinguishes_three_outcomes():
+def test_verify_norms_distinguishes_outcomes():
     report = verify_norms([{"doc": "СП 70.13330.2012", "clause": "5.3.3"},
                            {"doc": "СП 63.13330.2018", "clause": "99.9.9"},
-                           {"doc": "ПУЭ, 7-е изд.", "clause": "1.8.37"}], NORMS_DIR)
+                           {"doc": "СП 76.13330.2016", "clause": "6.1"}], NORMS_DIR)
     statuses = {r["doc"]: r["status"] for r in report["results"]}
     assert statuses["СП 70.13330.2012"] == "verified"
     assert statuses["СП 63.13330.2018"] == "clause_missing"
-    assert statuses["ПУЭ, 7-е изд."] == "doc_missing"
+    assert statuses["СП 76.13330.2016"] == "doc_missing"
     assert report["verified"] == 1 and report["unverified"] == 2
-    assert "ПУЭ, 7-е изд." in report["doc_missing"]
+    assert "СП 76.13330.2016" in report["doc_missing"]
 
 
 def test_verify_norms_markdown_does_not_claim_false_verification():
@@ -264,15 +264,29 @@ def test_cli_acts_with_explicit_work_type(tmp_path):
 
 
 def test_cli_verify_norms_exit_code(tmp_path):
+    """Ссылка, документа которого нет в базе, — код возврата 1: «не проверено»."""
     spec = tmp_path / "spec.json"
-    spec.write_text(json.dumps({"norms": [{"doc": "ПУЭ, 7-е изд.", "clause": "1.8.37"}]},
+    spec.write_text(json.dumps({"norms": [{"doc": "СП 76.13330.2016", "clause": "6.1"}]},
                                ensure_ascii=False), encoding="utf-8")
     res = subprocess.run([sys.executable, "-m", "pto_agent", "asbuilt", "verify-norms",
                           "--spec", str(spec)], capture_output=True, text=True,
                          timeout=120, cwd=ROOT)
     assert res.returncode == 1
     report = json.loads(res.stdout)
-    assert report["doc_missing"] == ["ПУЭ, 7-е изд."]
+    assert report["doc_missing"] == ["СП 76.13330.2016"]
+
+
+def test_cli_verify_norms_pue_fragment_passes_with_note(tmp_path):
+    """ПУЭ 1.8.37 в базе фрагментом: код 0, но статус — «подтверждено фрагментом»."""
+    spec = tmp_path / "spec.json"
+    spec.write_text(json.dumps({"norms": [{"doc": "ПУЭ, 7-е изд.", "clause": "1.8.37"}]},
+                               ensure_ascii=False), encoding="utf-8")
+    res = subprocess.run([sys.executable, "-m", "pto_agent", "asbuilt", "verify-norms",
+                          "--spec", str(spec)], capture_output=True, text=True,
+                         timeout=120, cwd=ROOT)
+    report = json.loads(res.stdout)
+    assert report["results"][0]["status"] == "verified_partial"
+    assert report["verified_partial"] == 1
 
 
 def test_cli_verify_norms_ok_exit_code(tmp_path):
@@ -300,7 +314,7 @@ def test_mcp_acts_and_verify_norms():
     res = handle_rpc({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
                       "params": {"name": "asbuilt_docs",
                                  "arguments": {"kind": "verify-norms",
-                                               "spec": {"norms": [{"doc": "ПУЭ, 7-е изд.",
-                                                                   "clause": "1.8.37"}]}}}}, ctx)
+                                               "spec": {"norms": [{"doc": "СП 76.13330.2016",
+                                                                   "clause": "6.1"}]}}}}, ctx)
     payload = json.loads(res["result"]["content"][0]["text"])
-    assert payload["report"]["doc_missing"] == ["ПУЭ, 7-е изд."]
+    assert payload["report"]["doc_missing"] == ["СП 76.13330.2016"]

@@ -116,11 +116,17 @@ def classify_positions(positions: list[dict], matrix: dict | None = None,
     """
     matrix = matrix or load_matrix()
     min_share = (matrix.get("classifier") or {}).get("min_share", 0.15)
+    materials_skipped = sum(1 for p in positions if str(p.get("kind") or "work") != "work")
+    positions = [p for p in positions if str(p.get("kind") or "work") == "work"]
 
     by_type: dict[str, dict] = {}
     unknown: list[dict] = []
     total_score = 0
     for pos in positions:
+        if str(pos.get("kind") or "work") != "work":
+            # материал/оборудование отдельной строкой сметы — не работа и не «неизвестная
+            # позиция»: он идёт в перечень материалов, а не в акт
+            continue
         text = " ".join(str(pos.get(k) or "") for k in ("name", "work"))
         hits = classify_work(text, matrix)
         if not hits:
@@ -177,6 +183,7 @@ def classify_positions(positions: list[dict], matrix: dict | None = None,
         "merged": merged,
         "classified": len(positions) - len(unknown) - len(inherited),
         "total": len(positions),
+        "materials_skipped": materials_skipped,
         "min_share": min_share,
         "hidden_work_types": [w["work_type"] for w in chosen if w["hidden_work"]],
         "not_hidden_work_types": [w["work_type"] for w in ranked if not w["hidden_work"]],
