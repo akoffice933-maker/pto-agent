@@ -843,6 +843,140 @@ async function send(){{
 </script></body></html>"""
 
 
+@tool("prices",
+      "Цены ресурсов с источником и датой: импорт выгрузки (ФГИС ЦС, письмо индексов, прайс "
+      "поставщика) как новой версии, поиск цены на дату, история изменений. Если цены нет — "
+      "так и говорит (`found: false`) и перечисляет, в каких версиях смотрел: подставлять "
+      "«похожий» ресурс агент не будет.",
+      {"type": "object", "properties": {
+          "action": {"type": "string", "enum": ["import", "lookup", "history", "list"],
+                     "description": "import — загрузить выгрузку; lookup — цена на дату; "
+                                    "history — как менялась; list — версии в базе"},
+          "file_path": {"type": "string", "description": "выгрузка цен (xlsx/csv) для import"},
+          "source": {"type": "string", "description": "откуда цены: ФГИС ЦС, письмо индексов, "
+                                                     "прайс поставщика"},
+          "price_date": {"type": "string", "description": "дата, на которую действуют цены"},
+          "code": {"type": "string"}, "name": {"type": "string"},
+          "as_of": {"type": "string", "description": "искать цену на эту дату"},
+          "region": {"type": "string"}, "zone": {"type": "string"},
+          "prices_dir": {"type": "string", "default": "data/prices"},
+          "audit_path": {"type": "string", "description": "журнал аудита (по умолчанию не пишем)"}},
+       "required": ["action"]})
+def t_prices(args, ctx):
+    from ..prices import import_prices, load_index, lookup, price_history, prices_to_markdown
+    base = Path(ctx.get("base_dir") or ".")
+    out_dir = Path(args.get("prices_dir") or base / "data" / "prices")
+    action = args.get("action")
+    audit = None
+    if args.get("audit_path"):
+        from ..audit import AuditLog
+        audit = AuditLog(Path(args["audit_path"]))
+    if action == "import":
+        result = import_prices(Path(_p(args, "file_path")), source=_p(args, "source"),
+                               price_date=_p(args, "price_date"),
+                               region=args.get("region") or "", zone=args.get("zone") or "",
+                               out_dir=out_dir, audit_log=audit)
+        return result
+    if action == "lookup":
+        result = lookup(code=args.get("code") or "", name=args.get("name") or "",
+                        as_of=args.get("as_of"), out_dir=out_dir)
+        return {"ok": True, "price": result, "markdown": prices_to_markdown(lookup_result=result)}
+    if action == "history":
+        history = price_history(code=args.get("code") or "", name=args.get("name") or "",
+                                out_dir=out_dir)
+        return {"ok": True, "history": history, "markdown": prices_to_markdown(history=history)}
+    index = load_index(out_dir)
+    return {"ok": True, "index": index, "markdown": prices_to_markdown(index=index)}
+
+
+@tool("procurement",
+      "Закупка материалов: заявка из сметы (в т.ч. выгрузки АРОС), сравнение коммерческих "
+      "предложений с приведением к цене с НДС и обоснованием выбора. КП без даты, срока "
+      "поставки или срока действия цены в сравнении не участвует — уходит в `not_comparable` "
+      "с причиной. Выбор поставщика за человеком: `decide` пишет его в журнал аудита "
+      "с автором и причиной.",
+      {"type": "object", "properties": {
+          "action": {"type": "string", "enum": ["request", "compare", "decide"],
+                     "description": "request — заявка из сметы; compare — сравнить КП; "
+                                    "decide — зафиксировать решение человека"},
+          "smeta_path": {"type": "string", "description": "смета xlsx или выгрузка АРОС (md/html)"},
+          "request_path": {"type": "string", "description": "JSON заявки (для compare/decide)"},
+          "quotes_paths": {"type": "array", "items": {"type": "string"},
+                           "description": "файлы КП (csv/xlsx), можно несколько"},
+          "prefer": {"type": "string", "enum": ["price", "delivery"], "default": "price"},
+          "choose": {"type": "object", "description": "для decide: {код ресурса: поставщик}"},
+          "by": {"type": "string", "description": "кто решил (ФИО)"},
+          "role": {"type": "string", "default": "инженер ПТО"},
+          "reason": {"type": "string", "description": "почему выбран этот поставщик"},
+          "object_name": {"type": "string"}, "request_no": {"type": "string"},
+          "need_by": {"type": "string"},
+          "audit_path": {"type": "string"}},
+       "required": ["action"]})
+def t_procurement(args, ctx):
+    from ..procurement import (compare_quotes, decide, load_quotes, procurement_to_markdown,
+                               request_from_estimate)
+    action = args.get("action")
+    if action == "request":
+        request = request_from_estimate(Path(_p(args, "smeta_path")),
+                                        object_name=args.get("object_name") or "",
+                                        request_no=args.get("request_no") or "",
+                                        need_by=args.get("need_by") or "")
+        return {"ok": True, "request": request,
+                "markdown": procurement_to_markdown(
+                    {"request_no": request["request_no"], "status": "request",
+                     "lines": [], "lines_count": 0, "amount": 0, "saving_vs_worst": 0},
+                    request=request)}
+
+    request = json.loads(Path(_p(args, "request_path")).read_text(encoding="utf-8"))
+    quotes, problems = [], []
+    for path in args.get("quotes_paths") or []:
+        loaded, issues = load_quotes(Path(path))
+        quotes += loaded
+        problems += issues
+    comparison = compare_quotes(request, quotes, prefer=args.get("prefer") or "price")
+    payload = {"ok": True, "comparison": comparison, "read_problems": problems,
+               "markdown": procurement_to_markdown(comparison, request=request)}
+    if action == "decide":
+        audit = None
+        if args.get("audit_path"):
+            from ..audit import AuditLog
+            audit = AuditLog(Path(args["audit_path"]))
+        decision = decide(comparison, args.get("choose") or {}, by=_p(args, "by"),
+                          role=args.get("role") or "инженер ПТО",
+                          reason=args.get("reason") or "", audit_log=audit)
+        payload["decision"] = decision
+        payload["markdown"] = procurement_to_markdown(comparison, decision=decision,
+                                                     request=request)
+    return payload
+
+
+@tool("audit_trail",
+      "Журнал аудита: лента изменений (кто, когда, что изменил, почему), запись по хэшу, "
+      "проверка целостности хэш-цепочки. Изменения пишутся со снимком «до/после» и дельтой — "
+      "видно не только факт, но и что именно поменялось и на каком основании.",
+      {"type": "object", "properties": {
+          "action": {"type": "string", "enum": ["list", "show", "verify"], "default": "list"},
+          "audit_path": {"type": "string", "default": "out/audit.jsonl"},
+          "entity": {"type": "string", "description": "фильтр по сущности, напр. procurement:ЗМ-1:код"},
+          "hash": {"type": "string", "description": "начало хэша записи для action=show"},
+          "limit": {"type": "integer", "description": "последние N записей"}},
+       "required": []})
+def t_audit_trail(args, ctx):
+    from ..audit import AuditLog, summarize_changes
+    base = Path(ctx.get("base_dir") or ".")
+    audit_path = Path(args.get("audit_path") or base / "out" / "audit.jsonl")
+    log = AuditLog(audit_path)
+    action = args.get("action") or "list"
+    if action == "verify":
+        ok, count, message = log.verify()
+        return {"ok": ok, "records": count, "message": message}
+    if action == "show":
+        record = log.find(_p(args, "hash"))
+        return {"ok": bool(record), "record": record}
+    records = log.history(entity=args.get("entity"), limit=args.get("limit"))
+    return {"ok": True, "records": len(records), "trail": summarize_changes(records)}
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="pto_agent.cad.mcp_server",
                                  description="MCP-сервер CAD-модуля ИИ-агента ПТО")

@@ -6,12 +6,15 @@ import sys
 from datetime import date, datetime
 from pathlib import Path
 
-from .audit import AuditLog
+from .audit import AuditLog, summarize_changes
 from .export import (export_discrepancies, export_discrepancies_csv, export_ks2,
                      export_remainder)
 from .llm import describe_discrepancies, route
 from .norms import NormIndex, load_norms
 from .parsers import read_closed, read_estimate, read_journal
+from .prices import DEFAULT_INDEX, import_prices, load_index, lookup, price_history, prices_to_markdown
+from .procurement import (build_request, compare_quotes, decide, export_comparison_xlsx,
+                          load_quotes, procurement_to_markdown, request_from_estimate)
 from .reconcile import reconcile
 from .report import build_report
 
@@ -310,6 +313,163 @@ def cmd_review(args):
     return 0
 
 
+# ─────────────────────────── цены ресурсов (ФГИС ЦС и др.) ───────────────────────────
+def cmd_prices(args) -> int:
+    out_dir = Path(args.out)
+    audit = AuditLog(Path(args.audit)) if args.audit else None
+    action = args.prices_action
+
+    if action == "import":
+        result = import_prices(args.file, source=args.source, price_date=args.date,
+                               region=args.region, zone=args.zone, out_dir=out_dir,
+                               actor=args.actor, audit_log=audit)
+        if not result.get("ok"):
+            print(f"импорт не выполнен: {result.get('error')}", file=sys.stderr)
+            for problem in result.get("problems") or []:
+                print("  " + problem, file=sys.stderr)
+            return 1
+        print(f"Версия цен {result['version']}: позиций {result['items']} "
+              f"· источник {result['source']} · дата цены {result['price_date']}")
+        print(f"  файл версии: {result['file']} (digest {result['digest']})")
+        for problem in result["problems"][:5]:
+            print(f"  пропущено: {problem}", file=sys.stderr)
+        return 0
+
+    if action == "lookup":
+        result = lookup(code=args.code or "", name=args.name or "", as_of=args.as_of,
+                        out_dir=out_dir)
+        print(prices_to_markdown(lookup_result=result), end="")
+        return 0 if result.get("found") else 1
+
+    if action == "history":
+        history = price_history(code=args.code or "", name=args.name or "", out_dir=out_dir)
+        print(prices_to_markdown(history=history), end="")
+        return 0
+
+    if action == "list":
+        print(prices_to_markdown(index=load_index(out_dir)), end="")
+        return 0
+
+    print("неизвестное действие", file=sys.stderr)
+    return 2
+
+
+# ─────────────────────────── закупка материалов ───────────────────────────
+def cmd_procure(args) -> int:
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    audit = AuditLog(Path(args.audit)) if args.audit else None
+    action = args.procure_action
+
+    if action == "request":
+        request = request_from_estimate(args.smeta, object_name=args.object_name,
+                                        request_no=args.request_no, need_by=args.need_by)
+        (out_dir / "request.json").write_text(json.dumps(request, ensure_ascii=False, indent=2),
+                                              encoding="utf-8")
+        print(f"Заявка {request['request_no']}: позиций {request['items_count']} "
+              f"· источник {request['source']}")
+        for item in request["items"]:
+            print(f"  {item['code']}: {item['name'][:60]} — {item['qty']} {item['unit']}")
+        print(f"  файл: {out_dir / 'request.json'}")
+        return 0
+
+    if action in {"compare", "decide"}:
+        request = json.loads(Path(args.request).read_text(encoding="utf-8"))
+        quotes, problems = [], []
+        for path in args.quotes:
+            loaded, issues = load_quotes(path)
+            quotes += loaded
+            problems += issues
+        comparison = compare_quotes(request, quotes, prefer=args.prefer)
+        (out_dir / "comparison.json").write_text(
+            json.dumps(comparison, ensure_ascii=False, indent=2), encoding="utf-8")
+        export_comparison_xlsx(comparison, out_dir / "comparison.xlsx")
+
+        decision = None
+        if action == "decide":
+            choice = {}
+            for chunk in args.choose or []:
+                if "=" not in chunk:
+                    print(f"неверный формат выбора: {chunk} (ожидается код=поставщик)",
+                          file=sys.stderr)
+                    return 2
+                code, supplier = chunk.split("=", 1)
+                choice[code.strip()] = supplier.strip()
+            decision = decide(comparison, choice, by=args.by, role=args.role,
+                              reason=args.reason or "", audit_log=audit)
+            (out_dir / "decision.json").write_text(
+                json.dumps(decision, ensure_ascii=False, indent=2), encoding="utf-8")
+            export_comparison_xlsx(comparison, out_dir / "comparison.xlsx", decision=decision)
+
+        report = out_dir / "procurement.md"
+        report.write_text(procurement_to_markdown(
+            comparison, decision=decision, request=request if action == "compare" else None),
+            encoding="utf-8")
+        print(f"Сравнение КП: статус {comparison['status']} · позиций "
+              f"{comparison['lines_count']} · сумма {comparison['amount']} руб. · "
+              f"экономия {comparison['saving_vs_worst']} руб.")
+        if comparison["not_comparable"]:
+            print(f"  непригодных КП: {len(comparison['not_comparable'])} "
+                  f"(без срока/даты/реквизитов)", file=sys.stderr)
+        if comparison["no_quotes"]:
+            print(f"  без пригодных предложений: {len(comparison['no_quotes'])} позиций",
+                  file=sys.stderr)
+        for problem in problems[:5]:
+            print("  " + problem, file=sys.stderr)
+        if decision:
+            print(f"  решение {decision['by']}: {len(decision['decisions'])} позиций, "
+                  f"сумма {decision['amount']} руб.; дороже лучшего на "
+                  f"{decision['over_best']} руб.")
+            for problem in decision["problems"]:
+                print("  " + problem, file=sys.stderr)
+        print(f"  файлы: {out_dir / 'comparison.xlsx'}, {report}")
+        return 0
+
+    print("неизвестное действие", file=sys.stderr)
+    return 2
+
+
+# ─────────────────────────── журнал аудита ───────────────────────────
+def cmd_audit(args) -> int:
+    log = AuditLog(Path(args.path))
+    if args.audit_action == "list":
+        rows = summarize_changes(log.history(entity=args.entity, limit=args.limit))
+        print(f"записей: {len(rows)}")
+        for row in rows:
+            fields = ",".join(row["fields"][:4])
+            print(f"  {row['ts']} {row['hash']} {row['actor']:<18} {row['action']:<26} "
+                  f"{row['entity'][:34]:<34} {fields}")
+            if row["reason"]:
+                print(f"      причина: {row['reason']}")
+        return 0
+    if args.audit_action == "show":
+        record = log.find(args.hash)
+        if not record:
+            print("запись не найдена", file=sys.stderr)
+            return 1
+        print(json.dumps(record, ensure_ascii=False, indent=2))
+        return 0
+    if args.audit_action == "export":
+        rows = summarize_changes(log.history(entity=args.entity))
+        out = Path(args.output)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        from openpyxl import Workbook
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Аудит"
+        ws.append(["Когда", "Хэш", "Кто", "Действие", "Сущность", "Поля", "Причина",
+                   "Основание"])
+        for row in rows:
+            ws.append([row["ts"], row["hash"], row["actor"], row["action"], row["entity"],
+                       ", ".join(row["fields"]), row["reason"], row["ref"]])
+        wb.save(out)
+        ok, count, message = log.verify()
+        print(f"выгружено {len(rows)} записей → {out}; проверка цепочки: {message}")
+        return 0 if ok else 1
+    print("неизвестное действие", file=sys.stderr)
+    return 2
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     # подкоманды CAD и MCP живут в своих пакетах: делегируем до разбора argparse,
@@ -341,6 +501,70 @@ def main(argv=None):
     n.add_argument("--data", default="data/demo")
     n.add_argument("--as-of", default=None, help="дата применимости норм, YYYY-MM-DD")
     n.set_defaults(func=cmd_norms)
+
+    pr = sub.add_parser("prices", help="цены ресурсов: импорт выгрузки, поиск, история версий")
+    pr.add_argument("--out", default="data/prices")
+    pr.add_argument("--audit", default=None, help="журнал аудита (по умолчанию не пишем)")
+    prsub = pr.add_subparsers(dest="prices_action", required=True)
+    pi = prsub.add_parser("import", help="импортировать выгрузку цен как новую версию")
+    pi.add_argument("--file", required=True)
+    pi.add_argument("--source", required=True, help="ФГИС ЦС, письмо индексов, прайс поставщика")
+    pi.add_argument("--date", required=True, help="дата, на которую действуют цены, YYYY-MM-DD")
+    pi.add_argument("--region", default="")
+    pi.add_argument("--zone", default="")
+    pi.add_argument("--actor", default="agent:prices")
+    pi.set_defaults(func=cmd_prices)
+    pl = prsub.add_parser("lookup", help="найти цену по коду/наименованию на дату")
+    pl.add_argument("--code", default="")
+    pl.add_argument("--name", default="")
+    pl.add_argument("--as-of", default=None)
+    pl.set_defaults(func=cmd_prices)
+    ph = prsub.add_parser("history", help="история цены по версиям")
+    ph.add_argument("--code", default="")
+    ph.add_argument("--name", default="")
+    ph.set_defaults(func=cmd_prices)
+    pls = prsub.add_parser("list", help="список версий цен")
+    pls.set_defaults(func=cmd_prices)
+
+    pc = sub.add_parser("procure", help="закупка материалов: заявка из сметы, сравнение КП, решение")
+    pc.add_argument("--out", default="out/procurement")
+    pc.add_argument("--audit", default=None, help="журнал аудита для решений")
+    pcsub = pc.add_subparsers(dest="procure_action", required=True)
+    prq = pcsub.add_parser("request", help="заявка на материалы из сметы")
+    prq.add_argument("--smeta", required=True)
+    prq.add_argument("--object-name", default="")
+    prq.add_argument("--request-no", default="")
+    prq.add_argument("--need-by", default="")
+    prq.set_defaults(func=cmd_procure)
+    prc = pcsub.add_parser("compare", help="сравнить КП по заявке")
+    prc.add_argument("--request", required=True)
+    prc.add_argument("--quotes", nargs="+", required=True)
+    prc.add_argument("--prefer", default="price", choices=["price", "delivery"])
+    prc.set_defaults(func=cmd_procure)
+    prd = pcsub.add_parser("decide", help="зафиксировать выбор человека (в журнал аудита)")
+    prd.add_argument("--request", required=True)
+    prd.add_argument("--quotes", nargs="+", required=True)
+    prd.add_argument("--choose", nargs="+", default=[], help="код=поставщик (можно несколько)")
+    prd.add_argument("--by", required=True)
+    prd.add_argument("--role", default="инженер ПТО")
+    prd.add_argument("--reason", default="")
+    prd.add_argument("--prefer", default="price", choices=["price", "delivery"])
+    prd.set_defaults(func=cmd_procure)
+
+    au = sub.add_parser("audit", help="журнал аудита: лента изменений, запись, выгрузка")
+    au.add_argument("--path", default="out/audit.jsonl")
+    ausub = au.add_subparsers(dest="audit_action", required=True)
+    aul = ausub.add_parser("list", help="лента записей")
+    aul.add_argument("--entity", default=None)
+    aul.add_argument("--limit", type=int, default=None)
+    aul.set_defaults(func=cmd_audit)
+    aus = ausub.add_parser("show", help="показать запись по началу хэша")
+    aus.add_argument("hash")
+    aus.set_defaults(func=cmd_audit)
+    aue = ausub.add_parser("export", help="выгрузить ленту в xlsx")
+    aue.add_argument("--output", default="out/audit_report.xlsx")
+    aue.add_argument("--entity", default=None)
+    aue.set_defaults(func=cmd_audit)
 
     a = sub.add_parser("audit-verify", help="проверить целостность журнала аудита")
     a.add_argument("--path", default="out/audit.jsonl")
