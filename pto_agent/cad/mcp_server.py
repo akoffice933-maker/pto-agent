@@ -361,6 +361,8 @@ def t_takeoff(args, ctx):
           "acts_path": {"type": "string", "description": "реестр актов acts.json"},
           "impact_path": {"type": "string", "description": "impact.json (деньги под риском)"},
           "plan_path": {"type": "string", "description": "план операций по чертежу"},
+          "materials_path": {"type": "string",
+                             "description": "сверка материалов materials.json (заявка → приход → КС-2)"},
           "object_name": {"type": "string"},
           "format": {"type": "string", "enum": ["json", "markdown"], "default": "json",
                      "description": "markdown — готовый текст для отчёта"}},
@@ -375,6 +377,7 @@ def t_review_summary(args, ctx):
                             acts_path=p("acts_path", "data/demo/acts/acts.json"),
                             impact_path=p("impact_path", "out/cad/impact/impact.json"),
                             plan_path=p("plan_path", "out/cad/plan.json"),
+                            materials_path=p("materials_path", "out/materials/materials.json"),
                             object_name=args.get("object_name"))
     if (args.get("format") or "json") == "markdown":
         return {"ok": True, "format": "markdown", "markdown": review_to_markdown(review),
@@ -975,6 +978,60 @@ def t_audit_trail(args, ctx):
         return {"ok": bool(record), "record": record}
     records = log.history(entity=args.get("entity"), limit=args.get("limit"))
     return {"ok": True, "records": len(records), "trail": summarize_changes(records)}
+
+
+@tool("materials_reconcile",
+      "Сверка материалов: что решили закупить → что реально привезли (накладные/УПД) → что "
+      "предъявили в КС-2. Находит замороженные деньги (недопоставка), приход без заявки, "
+      "перерасход против решения, замену поставщика и предъявление в акте материалов, "
+      "накладных на которые нет. Каждая сумма — с формулой и источником; нет цены — «не "
+      "оценено», а не 0 ₽. Если в акте материалов построчно нет, так и говорит "
+      "(`act_materials: unknown`) и не делает вывода «материалов в акте нет».",
+      {"type": "object", "properties": {
+          "decision_path": {"type": "string", "description": "decision.json из procure decide"},
+          "receipts_paths": {"type": "array", "items": {"type": "string"},
+                             "description": "накладные/УПД (csv, xlsx)"},
+          "act_paths": {"type": "array", "items": {"type": "string"},
+                        "description": "материалы КС-2 построчно (csv, xlsx), если есть"},
+          "object_name": {"type": "string"},
+          "out_dir": {"type": "string", "description": "куда сложить json/xlsx/md"},
+          "format": {"type": "string", "enum": ["json", "markdown"], "default": "json"}},
+       "required": ["decision_path"]})
+def t_materials_reconcile(args, ctx):
+    from ..materials import (export_materials_xlsx, materials_to_markdown, orders_from_decision,
+                             read_act_materials, read_receipts, reconcile, write)
+    base = Path(ctx.get("base_dir") or ".")
+    decision = json.loads(Path(_p(args, "decision_path")).read_text(encoding="utf-8"))
+    orders = orders_from_decision(decision)
+    if not orders:
+        raise ValueError("в решении нет ни одной позиции — сверять нечего")
+
+    receipts, problems = [], []
+    for path in args.get("receipts_paths") or []:
+        loaded, issues = read_receipts(Path(path))
+        receipts += loaded
+        problems += issues
+    act_materials, act_provided = [], False
+    for path in args.get("act_paths") or []:
+        loaded, issues = read_act_materials(Path(path))
+        act_materials += loaded
+        problems += issues
+        act_provided = act_provided or bool(loaded)
+
+    report = reconcile(orders, receipts, act_materials if act_provided else None,
+                       object_name=args.get("object_name") or decision.get("object_name") or "",
+                       request_no=decision.get("request_no") or "",
+                       act_provided=act_provided)
+    out_dir = Path(args.get("out_dir") or base / "out" / "materials")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    write(out_dir / "materials.json", report)
+    export_materials_xlsx(report, out_dir / "materials.xlsx")
+    markdown = materials_to_markdown(report)
+    (out_dir / "materials.md").write_text(markdown, encoding="utf-8")
+    if (args.get("format") or "json") == "markdown":
+        return {"ok": True, "format": "markdown", "markdown": markdown,
+                "status": report["status"], "totals": report["totals"]}
+    return {"ok": True, "report": report, "read_problems": problems, "markdown": markdown}
 
 
 def main(argv=None):

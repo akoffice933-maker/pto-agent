@@ -96,11 +96,28 @@ def plan_clean():
     return {"summary": {"operations": 2}, "validation": {"blocking": 0, "issues": []}}
 
 
+def _materials_clean() -> dict:
+    """Сверка материалов без расхождений — чтобы проверка не оставалась «не выполнялась»."""
+    return {"schema": "pto-agent/materials-reconcile@1", "status": "complete",
+            "act_materials": "known", "lines": [], "discrepancies": [], "unpriced": [],
+            "totals": {"frozen_rub": 0, "at_risk_rub": 0, "claim_risk_rub": 0, "overpay_rub": 0,
+                       "saving_rub": 0, "discrepancies": 0}}
+
+
 def test_clean_artifacts_are_ready():
     review = build_review(summary=summary_ok(), batch=batch_ok(), acts=acts_all_checked(),
-                          impact=zero_impact(), plan=plan_clean())
+                          impact=zero_impact(), plan=plan_clean(), materials=_materials_clean())
     assert not [i for i in review["open_items"] if i["kind"] == "not_estimated"]
     assert review["verdict"]["status"] == VERDICT_READY
+
+
+def test_without_materials_review_is_not_ready():
+    """Материалы не сверяли — это «не выполнялось», а не «всё хорошо»."""
+    review = build_review(summary=summary_ok(), batch=batch_ok(), acts=acts_all_checked(),
+                          impact=zero_impact(), plan=plan_clean())
+    assert review["verdict"]["status"] == VERDICT_REVIEW
+    skipped = [c["id"] for c in review["checked"] if c["status"] == "skipped"]
+    assert skipped == ["materials"]
     assert review["verdict"]["can_sign"] is True
     assert review["decisions"] == []
 
@@ -230,7 +247,7 @@ def test_cli_review_writes_report(tmp_path):
 
 def test_mcp_tool_review_summary(tmp_path):
     from pto_agent.cad.mcp_server import TOOLS, handle_rpc, make_ctx
-    assert len(TOOLS) == 20
+    assert len(TOOLS) == 21
     ctx = make_ctx(ROOT, ROOT / "out" / "cad" / "audit.jsonl")
     req = {"jsonrpc": "2.0", "id": 31, "method": "tools/call",
            "params": {"name": "review_summary", "arguments": {}}}
@@ -239,7 +256,7 @@ def test_mcp_tool_review_summary(tmp_path):
     assert out["ok"] is True
     assert out["verdict"]["status"] in (VERDICT_BLOCKED, VERDICT_REVIEW, VERDICT_READY,
                                         VERDICT_NO_DATA)
-    assert isinstance(out["checked"], list) and len(out["checked"]) == 5
+    assert isinstance(out["checked"], list) and len(out["checked"]) == 6   # + материалы
 
 
 def test_mcp_tool_review_summary_markdown_format():

@@ -364,7 +364,8 @@ def decide(comparison: dict, choice: dict, *, by: str, role: str = "инжене
                             f"(есть: {', '.join(sorted(allowed))})")
             continue
         offer = next(o for o in line["offers"] if o["supplier"] == supplier)
-        chosen = {"code": code, "name": line["name"], "supplier": supplier,
+        chosen = {"code": code, "name": line["name"], "unit": line.get("unit"),
+                  "qty": line.get("qty"), "supplier": supplier,
                   "price_vat": offer["price_vat"], "price_basis": offer["price_basis"],
                   "delivery_days": offer.get("delivery_days"),
                   "valid_until": offer.get("valid_until"),

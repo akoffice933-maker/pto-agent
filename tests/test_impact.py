@@ -222,7 +222,7 @@ def test_cli_impact(tmp_path):
 
 def test_mcp_assess_release_impact(tmp_path):
     from pto_agent.cad.mcp_server import TOOLS, handle_rpc, make_ctx
-    assert len(TOOLS) == 20
+    assert len(TOOLS) == 21
     assert "assess_release_impact" in {t["name"] for t in TOOLS}
     if not BATCH.exists():
         pytest.skip("нет сводки выпуска")

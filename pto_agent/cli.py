@@ -12,6 +12,8 @@ from .export import (export_discrepancies, export_discrepancies_csv, export_ks2,
 from .llm import describe_discrepancies, route
 from .norms import NormIndex, load_norms
 from .parsers import read_closed, read_estimate, read_journal
+from .materials import (export_materials_xlsx, materials_to_markdown, orders_from_decision,
+                        read_act_materials, read_receipts, reconcile as reconcile_materials)
 from .prices import DEFAULT_INDEX, import_prices, load_index, lookup, price_history, prices_to_markdown
 from .procurement import (build_request, compare_quotes, decide, export_comparison_xlsx,
                           load_quotes, procurement_to_markdown, request_from_estimate)
@@ -295,7 +297,8 @@ def cmd_review(args):
     """Сводка проверки: что проверено, что осталось, где нужно решение человека."""
     from .review import collect, write_review
     review = collect(summary_path=args.summary, batch_path=args.batch, acts_path=args.acts,
-                     impact_path=args.impact, plan_path=args.plan, object_name=args.object_name)
+                     impact_path=args.impact, plan_path=args.plan,
+                     materials_path=args.materials, object_name=args.object_name)
     paths = write_review(review, args.out)
     v = review["verdict"]
     print(f"Вердикт:   {v['status']} · подпись {'возможна' if v['can_sign'] else 'невозможна'}")
@@ -429,6 +432,58 @@ def cmd_procure(args) -> int:
     return 2
 
 
+# ─────────────────────────── материалы: заявка → приход → КС-2 ───────────────────────────
+def cmd_materials(args) -> int:
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if args.materials_action != "reconcile":
+        print("неизвестное действие", file=sys.stderr)
+        return 2
+
+    decision = json.loads(Path(args.decision).read_text(encoding="utf-8"))
+    orders = orders_from_decision(decision)
+    if not orders:
+        print("в решении нет ни одной позиции — сверять нечего", file=sys.stderr)
+        return 1
+
+    receipts, problems = [], []
+    for path in args.receipts or []:
+        loaded, issues = read_receipts(path)
+        receipts += loaded
+        problems += issues
+
+    act_materials, act_provided = [], False
+    for path in args.act or []:
+        loaded, issues = read_act_materials(path)
+        act_materials += loaded
+        problems += issues
+        act_provided = act_provided or bool(loaded)
+
+    report = reconcile_materials(orders, receipts, act_materials if act_provided else None,
+                                 object_name=args.object_name or decision.get("object_name") or "",
+                                 request_no=decision.get("request_no") or "",
+                                 act_provided=act_provided)
+    (out_dir / "materials.json").write_text(json.dumps(report, ensure_ascii=False, indent=2),
+                                            encoding="utf-8")
+    (out_dir / "materials.md").write_text(materials_to_markdown(report), encoding="utf-8")
+    export_materials_xlsx(report, out_dir / "materials.xlsx")
+
+    totals = report["totals"]
+    print(f"Сверка материалов: статус {report['status']} · расхождений {totals['discrepancies']} "
+          f"· материалы в акте: {report['act_materials']}")
+    print(f"  заморожено {totals['frozen_rub']:.2f} ₽ · под риском {totals['at_risk_rub']:.2f} ₽ "
+          f"· перерасход {totals['overpay_rub']:.2f} ₽ · экономия {totals['saving_rub']:.2f} ₽")
+    for item in report["discrepancies"]:
+        money = ("—" if item["money"] is None else f"{item['money']:.2f} ₽")
+        print(f"  {item['kind']}: {item['code'] or '—'} → {money}")
+        print(f"      кому: {item['action']}")
+    for problem in problems[:8]:
+        print(f"  чтение: {problem}", file=sys.stderr)
+    print(f"  файлы: {out_dir / 'materials.json'}, {out_dir / 'materials.xlsx'}, "
+          f"{out_dir / 'materials.md'}")
+    return 0 if report["status"] != "no_data" else 1
+
+
 # ─────────────────────────── журнал аудита ───────────────────────────
 def cmd_audit(args) -> int:
     log = AuditLog(Path(args.path))
@@ -551,6 +606,16 @@ def main(argv=None):
     prd.add_argument("--prefer", default="price", choices=["price", "delivery"])
     prd.set_defaults(func=cmd_procure)
 
+    mt = sub.add_parser("materials", help="материалы: сверка «заявка → приход → КС-2»")
+    mt.add_argument("--out", default="out/materials")
+    mtsub = mt.add_subparsers(dest="materials_action", required=True)
+    mtr = mtsub.add_parser("reconcile", help="сверить решение по поставщику, накладные и акт")
+    mtr.add_argument("--decision", required=True, help="decision.json из procure decide")
+    mtr.add_argument("--receipts", nargs="*", default=[], help="накладные/УПД (csv, xlsx)")
+    mtr.add_argument("--act", nargs="*", default=[], help="материалы КС-2 построчно (csv, xlsx)")
+    mtr.add_argument("--object-name", default="")
+    mtr.set_defaults(func=cmd_materials)
+
     au = sub.add_parser("audit", help="журнал аудита: лента изменений, запись, выгрузка")
     au.add_argument("--path", default="out/audit.jsonl")
     ausub = au.add_subparsers(dest="audit_action", required=True)
@@ -626,12 +691,14 @@ def main(argv=None):
     rv.add_argument("--acts", default="data/demo/acts/acts.json")
     rv.add_argument("--impact", default="out/cad/impact/impact.json")
     rv.add_argument("--plan", default="out/cad/plan.json")
+    rv.add_argument("--materials", default="out/materials/materials.json",
+                    help="сверка материалов «заявка → приход → КС-2»")
     rv.add_argument("--object-name", default=None)
     rv.add_argument("--out", default="out/review")
     rv.set_defaults(func=cmd_review)
 
     args = p.parse_args(argv)
     result = args.func(args)
-    if args.cmd in ("audit-verify", "approve"):
+    if args.cmd in ("audit-verify", "approve", "prices", "materials", "procure", "audit"):
         return result
     return 0

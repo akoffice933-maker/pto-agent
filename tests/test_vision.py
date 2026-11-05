@@ -316,7 +316,7 @@ def test_mcp_exposes_scan_tools():
     names = {t["name"] for t in TOOLS}
     assert {"scan_redline_image", "plan_from_scan_redline",
             "scan_release_batch"} <= names
-    assert len(TOOLS) == 20
+    assert len(TOOLS) == 21
 
 
 def test_mcp_plan_from_scan_redline():

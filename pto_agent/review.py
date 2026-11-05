@@ -205,6 +205,73 @@ def _check_money(impact: dict | None, summary: dict | None, source: str) -> tupl
     return check, [], open_items
 
 
+def _check_materials(report: dict | None, source: str) -> tuple[dict, list, list]:
+    """Материалы: заявка ↔ приход ↔ КС-2. Деньги считаются по расхождениям с известной ценой."""
+    if report is None:
+        return ({"id": "materials", "name": "Материалы: заявка → приход → КС-2",
+                 "status": STATUS_SKIPPED, "source": source,
+                 "detail": "сверки материалов не было — накладные и акт не сверялись"},
+                [], [])
+
+    totals = report.get("totals") or {}
+    frozen = _num(totals.get("frozen_rub"))
+    at_risk = _num(totals.get("at_risk_rub"))
+    claim = _num(totals.get("claim_risk_rub"))
+    overpay = _num(totals.get("overpay_rub"))
+    saving = _num(totals.get("saving_rub"))
+    count = int(totals.get("discrepancies") or len(report.get("discrepancies") or []))
+    unpriced = report.get("unpriced") or []
+    act_unknown = (report.get("act_materials") or "").startswith("unknown")
+
+    status = STATUS_WARNING if (frozen or at_risk or overpay or unpriced or act_unknown) else STATUS_OK
+    check = {
+        "id": "materials",
+        "name": "Материалы: заявка → приход → КС-2",
+        "status": status,
+        "source": source,
+        "money": {"at_risk_rub": round(at_risk, 2),          # claim_risk уже внутри суммы
+                  "blocked_rub": round(frozen, 2),
+                  "overpay_rub": round(overpay, 2),
+                  "saving_rub": round(saving, 2),
+                  "unpriced_positions": len(unpriced)},
+        "detail": (f"расхождений {count}: заморожено {frozen:,.2f} ₽, "
+                   f"под риском {at_risk:,.2f} ₽ (из них предъявлено без накладных "
+                   f"{claim:,.2f} ₽)").replace(",", " ")
+                  + (f", материалов в акте нет построчно — сверка «приход ↔ акт» не выполнялась"
+                     if act_unknown else ""),
+    }
+
+    decisions, open_items = [], []
+    for item in report.get("discrepancies") or []:
+        if item.get("kind") not in ("ACT_WITHOUT_RECEIPT", "ACT_NOT_DELIVERED",
+                                    "DELIVERED_NOT_ORDERED", "PRICE_UP"):
+            continue
+        money = item.get("money")
+        decisions.append({
+            "kind": "materials", "priority": PRIORITY_IMPORTANT,
+            "question": f"{item['title']}: {item.get('code') or '—'}",
+            "why": item.get("detail") or "",
+            "if_not": (f"спор на {money:,.2f} ₽".replace(",", " ") if money
+                       else "риск не оценён в деньгах"),
+            "action": item.get("action") or "",
+            "source": source,
+        })
+    if act_unknown:
+        open_items.append({
+            "kind": "materials_in_act_unknown", "priority": PRIORITY_IMPORTANT,
+            "detail": "в акте нет построчных материалов: «материалов в акте нет» — не доказано",
+            "source": source,
+            "action": "получить КС-2 с построчными ресурсами или решить, что сверяем только приход",
+        })
+    if unpriced:
+        open_items.append({
+            "kind": "not_estimated", "priority": PRIORITY_OPTIONAL,
+            "detail": f"{len(unpriced)} материал(ов) без цены: сумма не посчитана, это не 0 ₽",
+            "source": source, "action": "дозаполнить цену в накладной или решении",
+        })
+    return check, decisions, open_items
+
+
 def _check_portfolio(portfolio: dict | None, source: str) -> tuple[dict, list, list]:
     """Портфель актов: покрытие проверкой."""
     if portfolio is None:
@@ -281,7 +348,8 @@ def _check_cad(plan: dict | None, source: str) -> tuple[dict, list, list]:
 # ─────────────────────────── сборка сводки ───────────────────────────────
 def build_review(*, summary: dict | None = None, batch: dict | None = None,
                  acts: dict | None = None, impact: dict | None = None,
-                 plan: dict | None = None, sources: dict | None = None,
+                 plan: dict | None = None, materials: dict | None = None,
+                 sources: dict | None = None,
                  object_name: str | None = None) -> dict:
     """Собрать сводку проверки из готовых артефактов (всё необязательно)."""
     sources = sources or {}
@@ -290,12 +358,15 @@ def build_review(*, summary: dict | None = None, batch: dict | None = None,
     for builder, key, src in ((_check_ks2, "ks2", summary),
                               (_check_release, "batch", batch),
                               (_check_money, "impact", impact),
+                              (_check_materials, "materials", materials),
                               (_check_portfolio, "acts", acts),
                               (_check_cad, "plan", plan)):
         if builder is _check_money:
             check, dec, items = builder(impact, summary, sources.get(key, "out/cad/impact"))
         elif builder is _check_cad:
             check, dec, items = builder(plan, sources.get(key, "out/cad/plan.json"))
+        elif builder is _check_materials:
+            check, dec, items = builder(materials, sources.get(key, "out/materials/materials.json"))
         else:
             check, dec, items = builder(src, sources.get(key, ""))
         checks.append(check)
@@ -446,15 +517,16 @@ def write_review(review: dict, out_dir: str | Path) -> dict:
 
 
 def collect(*, summary_path=None, batch_path=None, acts_path=None, impact_path=None,
-            plan_path=None, object_name=None) -> dict:
+            plan_path=None, materials_path=None, object_name=None) -> dict:
     """Прочитать артефакты с диска и собрать сводку (пути могут отсутствовать)."""
     summary = load_json(summary_path)
     batch = load_json(batch_path)
     acts = load_json(acts_path)
     impact = load_json(impact_path)
     plan = load_json(plan_path)
+    materials = load_json(materials_path)
     sources = {"ks2": str(summary_path or ""), "batch": str(batch_path or ""),
                "acts": str(acts_path or ""), "impact": str(impact_path or ""),
-               "plan": str(plan_path or "")}
+               "plan": str(plan_path or ""), "materials": str(materials_path or "")}
     return build_review(summary=summary, batch=batch, acts=acts, impact=impact, plan=plan,
-                        sources=sources, object_name=object_name)
+                        materials=materials, sources=sources, object_name=object_name)
