@@ -1,5 +1,9 @@
 """Regression tests: AROS sub-resources, source totals and manual review."""
+import sys
 from decimal import Decimal
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from pto_agent.asbuilt.aros import parse_aros_markdown, aros_positions
 from pto_agent.asbuilt.acts_plan import plan_acts, plan_to_specs
 from pto_agent.asbuilt.validation import validate_dates

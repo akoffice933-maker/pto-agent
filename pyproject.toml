@@ -45,3 +45,5 @@ include = ["pto_agent*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# чтобы `pytest tests` работал без установки пакета: CI запускает именно так
+pythonpath = ["."]
