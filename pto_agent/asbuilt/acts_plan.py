@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal, InvalidOperation
 
 from .requirements import (_kw_re, act_groups, classify_positions, classify_work, get_work_type,
                            load_matrix, required_kinds)
@@ -35,21 +36,37 @@ def _match_group(position: dict, groups: list[dict]) -> dict | None:
 
 
 def _materials(positions: list[dict]) -> list[dict]:
-    """Материалы сметы: одна строка на код ресурса, объёмы складываются."""
-    acc: dict[str, dict] = {}
+    """Ресурсы по коду и единице, с источником и без округления объёмов."""
+    acc: dict[tuple[str, str], dict] = {}
     for pos in positions:
         if str(pos.get("kind") or "work") != "material":
             continue
-        key = str(pos.get("code") or pos.get("name"))
+        key = (str(pos.get("code") or pos.get("name")), str(pos.get("unit") or "").strip())
         slot = acc.setdefault(key, {"code": pos.get("code"), "name": pos.get("name"),
-                                    "unit": pos.get("unit"), "qty": 0.0, "lines": 0,
-                                    "documents": None, "needs_input": True})
+                                    "unit": key[1], "sum": Decimal(0), "missing_qty": False,
+                                    "lines": 0, "sources": [], "documents": None,
+                                    "needs_input": True, "resource_role_unverified": False})
+        value = pos.get("qty")
         try:
-            slot["qty"] = round(slot["qty"] + float(pos.get("qty") or 0), 4)
-        except (TypeError, ValueError):
-            pass
+            if value is None or value == "":
+                raise InvalidOperation
+            number = Decimal(str(value))
+            if not number.is_finite():
+                raise InvalidOperation
+            slot["sum"] += number
+        except (InvalidOperation, TypeError, ValueError):
+            slot["missing_qty"] = True
         slot["lines"] += 1
-    return list(acc.values())
+        slot["sources"].append({"position": pos.get("n"), "parent_position": pos.get("parent_n"),
+                                "nested": bool(pos.get("nested")), "qty": value,
+                                "unit": pos.get("unit")})
+        slot["resource_role_unverified"] |= bool(pos.get("resource_role_unverified"))
+    out = []
+    for slot in acc.values():
+        slot["qty"] = None if slot.pop("missing_qty") else float(slot["sum"])
+        slot.pop("sum")
+        out.append(slot)
+    return out
 
 
 def _material_group(material: dict, groups: list[dict]) -> str | None:
@@ -202,21 +219,36 @@ def plan_acts(positions: list[dict], *, work_types: list[str] | None = None,
         excluded.append({**pos, "reason": reason,
                          "work_type": hits[0]["work_type"] if hits else None})
 
-    # материал попадает в перечень материалов того акта, к которому относится;
-    # не разложился — остаётся в общем перечне плана и никуда не теряется
+    # У вложенного ресурса приоритет у связи с родительской работой,
+    # не у эвристического совпадения наименований. Конфликт не разрешается молча.
+    parent_groups: dict[int, set[str]] = {}
+    for act in acts:
+        for classified_pos in act["positions"]:
+            for original in works:
+                if original.get("n") is not None and _key(original) == _key(classified_pos):
+                    parent_groups.setdefault(original["n"], set()).add(act["group"])
     for material in materials:
+        parent_ids = [s["parent_position"] for s in material["sources"]
+                      if s.get("parent_position") is not None]
+        groups_for_parents = [parent_groups.get(n, set()) for n in parent_ids]
         assigned = None
-        for act in acts:
-            groups = act_groups(act["work_type"], matrix)
-            groups = [g for g in groups if g["id"] == act["group"]]
-            if groups and _material_group(material, groups) == act["group"]:
-                assigned = act["group"]
-                break
+        if parent_ids:
+            possible = set().union(*groups_for_parents)
+            if all(len(g) == 1 for g in groups_for_parents) and len(possible) == 1:
+                assigned = next(iter(possible))
+        else:
+            for act in acts:
+                groups = [g for g in act_groups(act["work_type"], matrix)
+                          if g["id"] == act["group"]]
+                if groups and _material_group(material, groups) == act["group"]:
+                    assigned = act["group"]
+                    break
         material["act_group"] = assigned
     for act in acts:
         act["materials"] = [m for m in materials if m.get("act_group") == act["group"]]
 
-    act_date = act_date or date.today().isoformat()
+    # Дата составления плана не является датой реального освидетельствования.
+    act_date = act_date or ""
     for index, act in enumerate(acts, 1):
         act["index"] = index
         act["code"] = f"{act_prefix}-{index}"
@@ -281,7 +313,9 @@ def plan_to_specs(plan: dict, *, matrix: dict | None = None) -> list[dict]:
             "project_docs": [],
             "materials": [{"name": m["name"], "qty": m["qty"], "unit": m["unit"],
                            "code": m.get("code"), "certificate": None,
-                           "certificate_date": None, "needs_input": True}
+                           "certificate_date": None, "needs_input": True,
+                           "resource_role_unverified": m.get("resource_role_unverified", False),
+                           "sources": m.get("sources", [])}
                           for m in act.get("materials") or []],
             "norms": norms,
             "norms_source": MATRIX_NORMS_NOTE,
@@ -299,8 +333,9 @@ def plan_to_specs(plan: dict, *, matrix: dict | None = None) -> list[dict]:
                        "inherited": act["inherited"]},
             "needs_input": [f for f in ["representatives", "project_docs",
                                         "materials_documents", "norms", "start_date",
-                                        "end_date"]
-                            if f != "materials_documents" or act.get("materials")],
+                                        "end_date", "act_date"]
+                            if (f != "materials_documents" or act.get("materials"))
+                            and (f != "act_date" or not act.get("act_date"))],
         })
     return specs
 

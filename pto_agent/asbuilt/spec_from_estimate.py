@@ -50,7 +50,8 @@ def load_positions(*, smeta: str | Path | None = None,
             doc = read_aros(path)
             return (aros_positions(doc),
                     f"смета {path.name} (АРОС: {len(doc['works'])} работ, "
-                    f"{len(doc['materials'])} материалов)")
+                    f"{len(doc['materials'])} отдельных материалов, "
+                    f"{len(doc.get('nested_resources', []))} вложенных ресурсов)")
         items = read_estimate(path)
         return ([{"code": i.code, "name": i.name, "qty": i.qty, "unit": i.unit,
                   "kind": "work"} for i in items], f"смета {path.name}")
@@ -129,7 +130,8 @@ def spec_from_estimate(positions: list[dict], *, object_name: str = "",
         "next_works": "",
         "excluded": excluded,
         "source": {"positions_from": source,
-                   "positions_total": len(positions),
+                   "positions_total": sum(1 for p in positions if not p.get("nested")),
+                   "nested_resources_total": sum(1 for p in positions if p.get("nested")),
                    "positions_classified": classified["classified"],
                    "positions_in_act": len(hidden_positions),
                    "positions_excluded": len(excluded),

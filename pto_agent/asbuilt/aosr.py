@@ -106,7 +106,7 @@ def build_aosr(spec: dict, out_dir: str | Path, *, form: str | None = None,
 
     act_number = str(spec.get("act_number") or "").strip()
     stem = (act_number or "aosr").replace(" ", "_").replace("/", "-").replace("№", "N")
-    date_str = spec.get("act_date") or (today or date.today()).isoformat()
+    date_str = spec.get("act_date") or "—"
 
     work_types = spec.get("work_types") or []
     validation = validate_draft(spec, work_types=work_types, matrix=matrix, today=today,

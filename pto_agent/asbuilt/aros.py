@@ -77,6 +77,7 @@ def parse_aros_markdown(text: str) -> dict:
     rows = re.findall(r"<tr[^>]*>(.*?)</tr>", text, re.S)
     sections: list[dict] = []
     positions: list[dict] = []
+    nested_resources: list[dict] = []
     section = None
     totals: dict[str, str] = {}
 
@@ -103,6 +104,24 @@ def parse_aros_markdown(text: str) -> dict:
         if len(cells) < 5:
             continue
         number, code = cells[0], cells[1]
+        # Номер вида 13.1 — ресурс внутри позиции, а не самостоятельная работа.
+        # Графа 5 — норма на единицу работы; количество всего находится в графе 7.
+        nested = re.fullmatch(r"(\d+)\.(\d+)", number or "")
+        if nested and _kind(code) == "material":
+            parent = int(nested.group(1))
+            if any(p["n"] == parent and p["section_index"] ==
+                   (section["index"] if section else None) for p in positions):
+                nested_resources.append({
+                    "n": number, "parent_n": parent, "code": code.strip(),
+                    "name": FORMULA_RE.sub("", cells[2]).strip(" |"),
+                    "unit": cells[3], "qty": _num(cells[6]) if len(cells) > 6 else None,
+                    "qty_text": cells[6] if len(cells) > 6 else "",
+                    "section_index": section["index"] if section else None,
+                    "section": section["title"] if section else "",
+                    "kind": "material", "nested": True,
+                    "resource_role_unverified": True,
+                })
+            continue
         if not re.fullmatch(r"\d+", number or ""):
             continue          # строки ресурсов под позицией (1, 2, ОТ, ЭМ …) — не позиции
         # позицией считается только строка с обоснованием: сметная норма (работа)
@@ -135,7 +154,7 @@ def parse_aros_markdown(text: str) -> dict:
     works = [p for p in positions if p["kind"] == "work"]
     materials = [p for p in positions if p["kind"] == "material"]
     return {"totals": totals, "sections": sections, "positions": positions,
-            "works": works, "materials": materials,
+            "works": works, "materials": materials, "nested_resources": nested_resources,
             "source": "АРОС (html/markdown-выгрузка)"}
 
 
@@ -149,9 +168,12 @@ def read_aros(path: str | Path) -> dict:
 
 def aros_positions(doc: dict) -> list[dict]:
     """Позиции в формате ядра агента: работы — `work`, материалы — `material`."""
-    return [{"code": p["code"], "name": p["name"], "qty": p["qty"], "unit": p["unit"],
+    main = [{"code": p["code"], "name": p["name"], "qty": p["qty"], "unit": p["unit"],
              "kind": p["kind"], "section": p["section"], "n": p["n"]}
             for p in doc["positions"]]
+    nested = [{**p} for p in doc.get("nested_resources", [])]
+    return main + nested
+
 
 
 def section_summary(doc: dict) -> list[dict]:
@@ -171,6 +193,8 @@ def aros_to_markdown(doc: dict) -> str:
              f"- объект: {doc['totals'].get('object', '—')}",
              f"- позиций: {len(doc['positions'])} · работ: {len(doc['works'])} · "
              f"материалов и оборудования: {len(doc['materials'])}",
+             f"- вложенных номерных ресурсов: {len(doc.get('nested_resources', []))} "
+             "(назначение и закупку подтвердить; внутри стоимости родительских позиций)",
              "", "| Раздел | Работ | Материалов |", "|---|---|---|"]
     for sec in section_summary(doc):
         lines.append(f"| {sec['index']}. {sec['title']} | {sec['works']} | {sec['materials']} |")

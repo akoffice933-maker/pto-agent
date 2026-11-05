@@ -372,7 +372,11 @@ def cmd_procure(args) -> int:
         print(f"Заявка {request['request_no']}: позиций {request['items_count']} "
               f"· источник {request['source']}")
         for item in request["items"]:
-            print(f"  {item['code']}: {item['name'][:60]} — {item['qty']} {item['unit']}")
+            flag = " [назначение вложенного ресурса подтвердить]" if item.get("resource_role_unverified") else ""
+            print(f"  {item['code']}: {item['name'][:60]} — {item['qty']} {item['unit']}{flag}")
+        if "АРОС" in request.get("source", ""):
+            print("  ВНИМАНИЕ: ненумерованные ресурсы внутри расценок не включены; "
+                  "это черновик, не готовый заказ.", file=sys.stderr)
         print(f"  файл: {out_dir / 'request.json'}")
         return 0
 

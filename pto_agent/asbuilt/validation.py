@@ -48,6 +48,8 @@ def validate_dates(spec: dict, today: date | None = None) -> list[dict]:
     start = _parse_date(spec.get("start_date"))
     end = _parse_date(spec.get("end_date"))
 
+    if not spec.get("act_date"):
+        issues.append(_issue("act_date_missing", "не указана дата освидетельствования акта"))
     if spec.get("act_date") and act is None:
         issues.append(_issue("act_date_unparsed",
                              f"дата акта не читается: {spec.get('act_date')!r}", "blocking"))
@@ -176,6 +178,10 @@ def validate_materials(spec: dict) -> list[dict]:
                        "не указаны материалы и реквизиты документов об их качестве")]
     issues = []
     for mat in materials:
+        if isinstance(mat, dict) and mat.get("resource_role_unverified"):
+            issues.append(_issue("resource_role_unverified",
+                                 f"{mat.get('name') or 'Ресурс'}: назначение вложенного "
+                                 "ресурса в составе акта не подтверждено"))
         if isinstance(mat, str):
             if not re.search(r"(сертификат|паспорт|декларац|№)", mat, re.I):
                 issues.append(_issue("material_without_docs",

@@ -21,6 +21,7 @@ from __future__ import annotations
 import csv
 import json
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 QUOTE_REQUIRED = ("supplier", "code", "price", "unit", "delivery_days", "valid_until",
@@ -74,32 +75,48 @@ def build_request(materials: list[dict], *, object_name: str = "", request_no: s
                   request_date: str | None = None, source: str = "",
                   need_by: str = "") -> dict:
     """Заявка на материалы из позиций сметы (в перечень идут только материалы)."""
-    # один код ресурса — одна позиция заявки: в смете кабель может стоять двумя строками
-    # (разные участки), закупать его двумя лотами бессмысленно
-    grouped: dict[str, dict] = {}
+    # Код и единица — общий ключ. Несовместимые единицы не складываются.
+    # Decimal(str(...)) не отбрасывает исходные десятичные знаки при суммировании.
+    grouped: dict[tuple[str, str], dict] = {}
     for material in materials:
         if str(material.get("kind") or "material") != "material":
             continue
         code = str(material.get("code") or material.get("name") or "")
-        slot = grouped.setdefault(code, {"code": str(material.get("code") or ""),
-                                         "name": str(material.get("name") or ""),
-                                         "unit": str(material.get("unit") or ""),
-                                         "qty": 0.0, "lines": 0})
+        unit = str(material.get("unit") or "").strip()
+        slot = grouped.setdefault((code, unit), {
+            "code": str(material.get("code") or ""),
+            "name": str(material.get("name") or ""), "unit": unit,
+            "sum": Decimal(0), "missing_qty": False, "lines": 0,
+            "sources": [], "resource_role_unverified": False,
+        })
+        value = material.get("qty")
         try:
-            slot["qty"] = round(slot["qty"] + float(material.get("qty") or 0), 4)
-        except (TypeError, ValueError):
-            pass
+            if value is None or value == "":
+                raise InvalidOperation
+            number = Decimal(str(value))
+            if not number.is_finite():
+                raise InvalidOperation
+            slot["sum"] += number
+        except (InvalidOperation, ValueError, TypeError):
+            slot["missing_qty"] = True
         slot["lines"] += 1
+        slot["sources"].append({"position": material.get("n"),
+                                "parent_position": material.get("parent_n"),
+                                "nested": bool(material.get("nested")),
+                                "qty": value, "unit": unit})
+        slot["resource_role_unverified"] |= bool(material.get("resource_role_unverified"))
     items = []
     for slot in grouped.values():
+        qty = None if slot["missing_qty"] else float(slot["sum"])
+        needs_input = [f for f, ok in (("qty", qty is not None and qty != 0),
+                                       ("unit", bool(slot["unit"]))) if not ok]
+        if slot["resource_role_unverified"]:
+            needs_input.append("resource_role")
         items.append({
-            "code": slot["code"],
-            "name": slot["name"],
-            "unit": slot["unit"],
-            "qty": slot["qty"] or None,
-            "lines": slot["lines"],
-            "needs_input": [f for f, ok in (("qty", slot["qty"] not in (None, 0)),
-                                            ("unit", bool(slot["unit"]))) if not ok],
+            "code": slot["code"], "name": slot["name"], "unit": slot["unit"],
+            "qty": qty, "lines": slot["lines"], "sources": slot["sources"],
+            "resource_role_unverified": slot["resource_role_unverified"],
+            "needs_input": needs_input,
         })
     return {
         "schema": "pto-agent/procurement-request@1",
@@ -110,8 +127,9 @@ def build_request(materials: list[dict], *, object_name: str = "", request_no: s
         "source": source,
         "items": items,
         "items_count": len(items),
-        "note": ("объёмы взяты из сметы; материал без объёма помечен needs_input — "
-                 "в закупку без объёма не уходит"),
+        "note": ("Черновик: подтверждаются назначение вложенных ресурсов, остатки и закупочные объёмы. "
+                 "Вложенные ресурсы не прибавляются к стоимости родительских позиций. "
+                 "Ненумерованные ресурсы расценок автоматически в заявку не включены."),
     }
 
 
@@ -259,10 +277,26 @@ def compare_quotes(request: dict, quotes: list[dict], *, today: date | None = No
     no_quotes: list[dict] = []
 
     for item in request.get("items") or []:
+        if item.get("resource_role_unverified"):
+            no_quotes.append({"code": item["code"], "name": item["name"],
+                              "qty": item.get("qty"), "unit": item.get("unit"),
+                              "reason": "вложенный ресурс: сначала подтвердить назначение и закупку"})
+            continue
+        if item.get("qty") in (None, 0) or not item.get("unit"):
+            no_quotes.append({"code": item["code"], "name": item["name"],
+                              "qty": item.get("qty"), "unit": item.get("unit"),
+                              "reason": "не задано количество или единица"})
+            continue
         candidates = by_code.get(item["code"], [])
         eligible: list[dict] = []
         for quote in candidates:
             verdict = validate_quote(quote, today=today)
+            from .parsers import norm_unit
+            if norm_unit(quote.get("unit")) != norm_unit(item.get("unit")):
+                verdict["comparable"] = False
+                verdict["notes"].append(
+                    f"единица КП {quote.get('unit')!r} не совпадает с единицей заявки "
+                    f"{item.get('unit')!r}; требуется проверка и пересчёт")
             enriched = {**quote, "price_vat": _price_with_vat(quote)[0],
                         "price_basis": _price_with_vat(quote)[1],
                         "validation": verdict}

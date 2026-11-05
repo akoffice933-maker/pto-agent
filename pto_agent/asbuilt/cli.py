@@ -169,6 +169,8 @@ def cmd_smeta(args) -> int:
         payload.update({"format": "АРОС (html/markdown-выгрузка)",
                         "totals": doc["totals"], "sections": section_summary(doc),
                         "works": len(doc["works"]), "materials": len(doc["materials"]),
+                        "nested_resources": doc.get("nested_resources", []),
+                        "nested_resources_warning": "Ненумерованные ресурсы расценок не учтены; назначение вложенных ресурсов требует проверки.",
                         "positions": [{k: p[k] for k in ("n", "code", "name", "unit", "qty",
                                                           "section", "kind")}
                                       for p in doc["positions"]]})
