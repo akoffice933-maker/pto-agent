@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "ПТО-агент: контракты инструментов (tool-calling)",
   "description": "Единый реестр инструментов для агентов Документатор, Сметчик, Нормативщик, Чертёжник. Все инструменты вызываются только через оркестратор с проверкой прав и валидацией параметров. Деструктивные операции требуют флага confirmed=true и записи в журнал аудита.",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "tools": [
     {
       "name": "get_estimate",
@@ -764,6 +764,72 @@
             "type": "string"
           },
           "out_dir": {
+            "type": "string"
+          },
+          "format": {
+            "enum": [
+              "json",
+              "markdown"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "takeoff",
+      "agent": "takeoff",
+      "side_effect": "write",
+      "description": "Объёмы из чертежей (BOQ от takeoff-инструмента) → ведомость объёмов с ценами из базы версий ФГИС ЦС. HIGH — в итог, MEDIUM — в итог с пометкой, LOW и RATE_NOT_FOUND — в «не включено». Нет цены — no_price (не 0 ₽). Шифр расценки ФЕР ставит человек при подтверждении; это не смета.",
+      "implemented_by": "pto_agent.takeoff",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "enum": [
+              "draft",
+              "confirm"
+            ]
+          },
+          "boq_path": {
+            "type": "string"
+          },
+          "map_path": {
+            "type": "string"
+          },
+          "prices_dir": {
+            "type": "string"
+          },
+          "as_of": {
+            "type": "string"
+          },
+          "object_name": {
+            "type": "string"
+          },
+          "section": {
+            "type": "string"
+          },
+          "out_dir": {
+            "type": "string"
+          },
+          "draft_path": {
+            "type": "string"
+          },
+          "changes": {
+            "type": "object"
+          },
+          "by": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "audit_path": {
             "type": "string"
           },
           "format": {

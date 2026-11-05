@@ -1034,6 +1034,64 @@ def t_materials_reconcile(args, ctx):
     return {"ok": True, "report": report, "read_problems": problems, "markdown": markdown}
 
 
+@tool("takeoff",
+      "Объёмы из чертежей (BOQ от takeoff-инструмента) → ведомость объёмов с ценами из базы "
+      "версий ФГИС ЦС. Уверенность строк не выбрасывается: HIGH идёт в итог, MEDIUM — в итог с "
+      "пометкой «проверить», LOW и RATE_NOT_FOUND — в «не включено» с причиной. Нет цены или "
+      "нет правила сопоставления — `no_price`, сумма null, а не 0 ₽. Шифр расценки ФЕР ставит "
+      "человек при подтверждении; это ведомость объёмов с ценами, не смета.",
+      {"type": "object", "properties": {
+          "action": {"type": "string", "enum": ["draft", "confirm"], "default": "draft"},
+          "boq_path": {"type": "string", "description": "выгрузка объёмов (csv/xlsx)"},
+          "map_path": {"type": "string", "description": "словарь «элемент → код ресурса»"},
+          "prices_dir": {"type": "string", "default": "data/prices"},
+          "as_of": {"type": "string", "description": "цены на дату"},
+          "object_name": {"type": "string"}, "section": {"type": "string", "default": "КР"},
+          "out_dir": {"type": "string"},
+          "draft_path": {"type": "string", "description": "для confirm: готовый draft.json"},
+          "changes": {"type": "object",
+                      "description": "для confirm: {элемент: {qty, norm, exclude, note}}"},
+          "by": {"type": "string"}, "role": {"type": "string"}, "reason": {"type": "string"},
+          "audit_path": {"type": "string"},
+          "format": {"type": "string", "enum": ["json", "markdown"], "default": "json"}},
+       "required": ["action"]})
+def t_takeoff(args, ctx):
+    from ..takeoff import (build_draft, confirm, draft_to_markdown, export_draft_xlsx, load_map,
+                           read_boq, write)
+    base = Path(ctx.get("base_dir") or ".")
+    out_dir = Path(args.get("out_dir") or base / "out" / "takeoff")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    prices_dir = Path(args.get("prices_dir") or base / "data" / "prices")
+    audit = None
+    if args.get("audit_path"):
+        from ..audit import AuditLog
+        audit = AuditLog(Path(args["audit_path"]))
+
+    if (args.get("action") or "draft") == "draft":
+        boq, problems = read_boq(Path(_p(args, "boq_path")))
+        if not boq:
+            raise ValueError("в выгрузке объёмов нет ни одной строки")
+        draft = build_draft(boq, mapping=load_map(args.get("map_path")),
+                            prices_dir=prices_dir, as_of=args.get("as_of"),
+                            object_name=args.get("object_name") or "",
+                            section=args.get("section") or "КР")
+        draft["read_problems"] = problems
+    else:
+        draft = json.loads(Path(_p(args, "draft_path")).read_text(encoding="utf-8"))
+        draft = confirm(draft, args.get("changes") or {}, by=_p(args, "by"),
+                        role=args.get("role") or "инженер ПТО",
+                        reason=args.get("reason") or "", audit_log=audit)
+
+    write(out_dir / "draft.json", draft)
+    export_draft_xlsx(draft, out_dir / "draft.xlsx")
+    markdown = draft_to_markdown(draft)
+    (out_dir / "draft.md").write_text(markdown, encoding="utf-8")
+    if (args.get("format") or "json") == "markdown":
+        return {"ok": True, "format": "markdown", "markdown": markdown,
+                "totals": draft["totals"]}
+    return {"ok": True, "draft": draft, "markdown": markdown}
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="pto_agent.cad.mcp_server",
                                  description="MCP-сервер CAD-модуля ИИ-агента ПТО")

@@ -1,0 +1,96 @@
+{
+  "$schema": "pto-agent/takeoff-oss@1",
+  "checked_at": "2026-11-05",
+  "method": "GitHub REST API /repos/{owner}/{repo}: звёзды, лицензия (spdx), язык, дата последнего push; спорные лицензии читались в LICENSE*",
+  "summary": {
+    "repos": 6,
+    "copy_allowed": 1,
+    "conclusion": "готового «PDF КР → российская смета (ГЭСН/ФЕР)» в открытом коде нет; стык делаем сами: BOQ из takeoff-инструмента + наши цены с источником и датой"
+  },
+  "repos": [
+    {
+      "repo": "hamzaabduljabbar/autoconst-claude-2d-pdf-to-priced-boq",
+      "layer": "takeoff КР из PDF/DXF → priced BOQ",
+      "stars": 13,
+      "license": "MIT",
+      "license_api": "MIT",
+      "language": "Python",
+      "pushed_at": "2026-08-07",
+      "what": "PDF (векторный текст) или DXF → BOQ в Excel: графики, выноски, размеры; арматура реестром; каждый элемент с confidence HIGH/MEDIUM",
+      "why": "Формат вывода (masterformat_code, description, unit, qty, confidence, source-лист) — готовый вход для нашей ведомости объёмов. Философия та же: «две подписи», ничего не выдумывать, флаги на нечитаемых страницах",
+      "copy_allowed": true,
+      "how": "читаем его BOQ (xlsx/csv) как источник объёмов; код не копируем, формат совместим",
+      "limits": "не знает ГЭСН/ФЕР и rub-цены; PDF-сканы без текстового слоя не читает (честно флагует)"
+    },
+    {
+      "repo": "datadrivenconstruction/OpenConstructionERP",
+      "layer": "ERP: takeoff + BOQ + расценки",
+      "stars": 1237,
+      "license": "AGPL-3.0",
+      "license_api": "AGPL-3.0",
+      "language": "TypeScript",
+      "pushed_at": "2026-11-05",
+      "what": "Полная платформа: PDF/CAD/BIM takeoff, AI cost matching, BOQ, 293 сценария",
+      "why": "Эталон модели данных BOQ и сопоставления цен",
+      "copy_allowed": false,
+      "how": "только идеи и структура (AGPL): код в наш продукт не берём",
+      "limits": "тяжёлая платформа, под РФ-расценки всё равно переделывать"
+    },
+    {
+      "repo": "Kentucky-ai/opentakeoff",
+      "layer": "takeoff в браузере + MCP",
+      "stars": 755,
+      "license": "AGPL-3.0",
+      "license_api": "AGPL-3.0",
+      "language": "TypeScript",
+      "pushed_at": "2026-11-04",
+      "what": "PDF-takeoff: площади, длины, количества; MCP-сервер для агентов",
+      "why": "Формат выгрузки обмеров и MCP-подход — совместимы с нашим сервером",
+      "copy_allowed": false,
+      "how": "только идеи: обмен через файл выгрузки, не через код",
+      "limits": "AGPL; метрики — площади/длины, без разбора КР-схем армирования"
+    },
+    {
+      "repo": "Zinalr44/AI-Powered-Material-Estimation-from-Architectural-PDFs",
+      "layer": "архитектурные PDF → материалы",
+      "stars": 14,
+      "license": null,
+      "license_api": null,
+      "language": "Python",
+      "pushed_at": "2025-09-08",
+      "what": "OCR + LLM: room-wise материалы из архитектурных PDF в CSV",
+      "why": "Идея room-wise разбивки",
+      "copy_allowed": false,
+      "how": "не используем: лицензии нет — все права у автора",
+      "limits": "без лицензии код брать нельзя; архитектура, не КР"
+    },
+    {
+      "repo": "xixiaohe/cad-boq-pipeline",
+      "layer": "CAD → BOQ (китайские нормативы)",
+      "stars": 7,
+      "license": "GPL-3.0",
+      "license_api": "GPL-3.0",
+      "language": null,
+      "pushed_at": "2026-08-06",
+      "what": "Распознавание чертежей, расчёт объёмов, ведомость",
+      "why": "Идея последовательности «распознать → посчитать → ведомость»",
+      "copy_allowed": false,
+      "how": "только идеи (GPL + китайские нормы)",
+      "limits": "нормативы чужие, код GPL"
+    },
+    {
+      "repo": "lisong2003-lgtm/tujian-suanliang",
+      "layer": "структурные чертежи → бетон и арматура",
+      "stars": 0,
+      "license": null,
+      "license_api": "NOASSERTION",
+      "language": "Python",
+      "pushed_at": "2026-11-01",
+      "what": "Бетон и арматура по этажам/захваткам: чистая масса, заказ с потерями, марки, швы",
+      "why": "Идея выдачи «нетто + с потерями» и разбивки по захваткам",
+      "copy_allowed": false,
+      "how": "не используем: лицензия не определена (NOASSERTION) — считаем «нельзя»",
+      "limits": "0 звёзд, один автор, лицензия не заявлена"
+    }
+  ]
+}

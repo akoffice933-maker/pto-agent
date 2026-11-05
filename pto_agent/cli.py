@@ -12,6 +12,9 @@ from .export import (export_discrepancies, export_discrepancies_csv, export_ks2,
 from .llm import describe_discrepancies, route
 from .norms import NormIndex, load_norms
 from .parsers import read_closed, read_estimate, read_journal
+from .takeoff import (build_draft as build_takeoff_draft, confirm as confirm_takeoff,
+                      draft_to_markdown as takeoff_to_markdown, export_draft_xlsx,
+                      load_map as load_takeoff_map, read_boq)
 from .materials import (export_materials_xlsx, materials_to_markdown, orders_from_decision,
                         read_act_materials, read_receipts, reconcile as reconcile_materials)
 from .prices import DEFAULT_INDEX, import_prices, load_index, lookup, price_history, prices_to_markdown
@@ -488,6 +491,74 @@ def cmd_materials(args) -> int:
     return 0 if report["status"] != "no_data" else 1
 
 
+# ─────────────────────────── takeoff → ведомость объёмов с ценами ───────────────────────────
+def cmd_takeoff(args) -> int:
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    action = args.takeoff_action
+
+    if action == "draft":
+        boq, problems = read_boq(args.boq)
+        if not boq:
+            print("в выгрузке объёмов нет ни одной строки", file=sys.stderr)
+            for problem in problems:
+                print("  " + problem, file=sys.stderr)
+            return 1
+        draft = build_takeoff_draft(boq, mapping=load_takeoff_map(args.map),
+                                    prices_dir=args.prices_dir, as_of=args.as_of,
+                                    object_name=args.object_name, section=args.section)
+        (out_dir / "draft.json").write_text(json.dumps(draft, ensure_ascii=False, indent=2),
+                                            encoding="utf-8")
+        (out_dir / "draft.md").write_text(takeoff_to_markdown(draft), encoding="utf-8")
+        export_draft_xlsx(draft, out_dir / "draft.xlsx")
+        totals = draft["totals"]
+        print(f"Ведомость объёмов {draft['section']}: строк {totals['lines']} · с ценой "
+              f"{totals['priced_lines']} · на проверку {totals['review_lines']} · не включено "
+              f"{totals['excluded_lines']}")
+        amount = totals["amount_rub"]
+        high = totals["amount_high_rub"]
+        print(f"  итог по строкам с известной ценой: "
+              f"{'—' if amount is None else f'{amount:.2f}'} ₽"
+              + (f" (высокая уверенность: {high:.2f} ₽)" if high is not None else ""))
+        for item in draft["excluded"]:
+            print(f"  не включено: {item['element'][:60]} — {item['reason']}", file=sys.stderr)
+        for problem in problems[:5]:
+            print(f"  чтение: {problem}", file=sys.stderr)
+        print(f"  файлы: {out_dir / 'draft.json'}, {out_dir / 'draft.xlsx'}, {out_dir / 'draft.md'}")
+        return 0
+
+    if action == "confirm":
+        draft = json.loads(Path(args.draft).read_text(encoding="utf-8"))
+        changes = json.loads(Path(args.changes).read_text(encoding="utf-8")) if args.changes else {}
+        for chunk in args.set or []:
+            if "=" not in chunk:
+                print(f"неверный формат --set: {chunk} (ожидается «элемент=количество»)",
+                      file=sys.stderr)
+                return 2
+            element, qty = chunk.rsplit("=", 1)
+            changes.setdefault(element.strip(), {})["qty"] = qty.strip()
+        audit = AuditLog(Path(args.audit)) if args.audit else None
+        draft = confirm_takeoff(draft, changes, by=args.by, role=args.role,
+                                reason=args.reason or "", audit_log=audit)
+        (out_dir / "draft.json").write_text(json.dumps(draft, ensure_ascii=False, indent=2),
+                                            encoding="utf-8")
+        (out_dir / "draft.md").write_text(takeoff_to_markdown(draft), encoding="utf-8")
+        export_draft_xlsx(draft, out_dir / "draft.xlsx")
+        confirmed = draft["confirmed_by"]
+        print(f"Ведомость подтверждена: {confirmed['by']} ({confirmed['role']}), "
+              f"правок {len(confirmed['changes'])} · итог {draft['totals']['amount_rub']} ₽")
+        if confirmed.get("reason_missing"):
+            print("  причина не указана — в журнале будет пометка reason_missing",
+                  file=sys.stderr)
+        for problem in confirmed["problems"]:
+            print(f"  {problem}", file=sys.stderr)
+        print(f"  файлы: {out_dir / 'draft.json'}, {out_dir / 'draft.xlsx'}")
+        return 0
+
+    print("неизвестное действие", file=sys.stderr)
+    return 2
+
+
 # ─────────────────────────── журнал аудита ───────────────────────────
 def cmd_audit(args) -> int:
     log = AuditLog(Path(args.path))
@@ -620,6 +691,27 @@ def main(argv=None):
     mtr.add_argument("--object-name", default="")
     mtr.set_defaults(func=cmd_materials)
 
+    tk = sub.add_parser("takeoff", help="объёмы из чертежей (BOQ) → ведомость с ценами из базы")
+    tk.add_argument("--out", default="out/takeoff")
+    tksub = tk.add_subparsers(dest="takeoff_action", required=True)
+    tkd = tksub.add_parser("draft", help="собрать черновик ведомости из выгрузки объёмов")
+    tkd.add_argument("--boq", required=True, help="выгрузка объёмов (csv, xlsx)")
+    tkd.add_argument("--map", default=None, help="словарь «элемент → код ресурса»")
+    tkd.add_argument("--prices-dir", default="data/prices")
+    tkd.add_argument("--as-of", default=None, help="цены на дату (не свежее этой даты)")
+    tkd.add_argument("--object-name", default="")
+    tkd.add_argument("--section", default="КР")
+    tkd.set_defaults(func=cmd_takeoff)
+    tkc = tksub.add_parser("confirm", help="подтвердить ведомость: количества и шифры расценок")
+    tkc.add_argument("--draft", required=True)
+    tkc.add_argument("--changes", default=None, help="JSON {элемент: {qty, norm, exclude, note}}")
+    tkc.add_argument("--set", nargs="*", default=[], help="элемент=количество (можно несколько)")
+    tkc.add_argument("--by", required=True)
+    tkc.add_argument("--role", default="инженер ПТО")
+    tkc.add_argument("--reason", default="")
+    tkc.add_argument("--audit", default=None)
+    tkc.set_defaults(func=cmd_takeoff)
+
     au = sub.add_parser("audit", help="журнал аудита: лента изменений, запись, выгрузка")
     au.add_argument("--path", default="out/audit.jsonl")
     ausub = au.add_subparsers(dest="audit_action", required=True)
@@ -703,6 +795,7 @@ def main(argv=None):
 
     args = p.parse_args(argv)
     result = args.func(args)
-    if args.cmd in ("audit-verify", "approve", "prices", "materials", "procure", "audit"):
+    if args.cmd in ("audit-verify", "approve", "prices", "materials", "procure", "audit",
+                    "takeoff"):
         return result
     return 0
