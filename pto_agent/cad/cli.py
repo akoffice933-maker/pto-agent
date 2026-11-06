@@ -56,8 +56,10 @@ def cmd_inventory(args):
           f"(в печати при {tpl.scale}: {tpl.print_mm(inv['text_heights']['min'] or 0)} мм)")
     tb = d.titleblock(tpl.titleblock_block)
     if tb:
-        print(f"Штамп:     {tb['block']} · поля: "
-              f"{', '.join(f'{k}={v or '—'}' for k, v in tb['fields'].items())}")
+        # вложенные f-строки с одинаковыми кавычками компилируются только с Python 3.12,
+        # а поставка и CI заявляют 3.11 — внутреннюю часть собираем отдельно
+        fields = ", ".join("%s=%s" % (k, v or "—") for k, v in tb["fields"].items())
+        print(f"Штамп:     {tb['block']} · поля: {fields}")
     else:
         print("Штамп:     не найден")
     items = takeoff(d)

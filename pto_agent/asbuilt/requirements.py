@@ -54,8 +54,17 @@ PRICE_BASE_RE = re.compile(r"(?<![а-яa-z])(ферм|терм|фер|тер|г�
 
 
 def _kw_re(keyword: str):
-    """Ключ ищется с начала слова: «кладк» не должен срабатывать внутри «прокладка»."""
-    return re.compile(r"(?<![а-яa-z0-9])" + re.escape(_prep(keyword)))
+    """Ключ ищется с начала слова: «кладк» не должен срабатывать внутри «прокладка».
+
+    Ключ из нескольких слов («бетонн подготовк») сопоставляется с учётом окончаний в
+    каждом слове: иначе «бетонная подготовка» не находится по ключу «бетонн подготовк»,
+    и половина простых работ уходит в unknown.
+    """
+    words = [_prep(w) for w in str(keyword).split() if w]
+    if not words:
+        return re.compile(r"(?!x)x")
+    body = r"[а-яa-z0-9]*\s+".join(re.escape(w) for w in words)
+    return re.compile(r"(?<![а-яa-z0-9])" + body)
 
 
 def strip_qualifiers(text: str, wt: dict) -> str:
@@ -99,6 +108,22 @@ def classify_work(text: str, matrix: dict | None = None) -> list[dict]:
     hits.sort(key=lambda h: (h["work_type"] != "demolition",
                              h["work_type"] != "waste_removal", -h["score"]))
     return hits
+
+
+# Открытые работы — не скрытые: их не оформляют актом на скрытые работы. Признак берём
+# только из прямых формулировок, а не «по смыслу»: «открытая прокладка», «открытая
+# проводка», «по поверхности стен».
+OPEN_WORK_RE = re.compile(
+    r"открыт[а-я]*\s+(?:по\s+)?(?:стен|потолк|пол|поверхност|конструкц|прокладк|проводк|"
+    r"монтаж|установк|способ)"
+    r"|прокладк[а-я]*\s+открыт"
+    r"|по поверхности\s+(?:стен|потолк|пол|конструкц)"
+    r"|неутопленного типа")
+
+
+def is_open_work(text: str) -> bool:
+    """Работа открытая (видимая после монтажа) — значит, скрытой она не становится."""
+    return bool(OPEN_WORK_RE.search(_prep(text)))
 
 
 def classify_positions(positions: list[dict], matrix: dict | None = None,

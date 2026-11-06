@@ -91,6 +91,10 @@ jobs:
             --summary out/summary.json --out out/cad/impact --with-background
           python -m pto_agent cad impact --acts data/demo/acts/acts.json \
             --summary out/summary.json --out out/cad/portfolio
+      - name: Якорь журнала аудита (ловит удаление хвоста)
+        run: |
+          python -m pto_agent audit anchor --path out/audit.jsonl
+          python -m pto_agent audit-verify --path out/audit.jsonl --anchor
       - name: Дашборд руководителя
         run: python docs/build_dashboard.py
       - name: Все тесты на собранных артефактах

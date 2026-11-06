@@ -259,6 +259,50 @@ def validate_operations(doc, ops, tpl: CorpTemplate) -> list:
     return issues
 
 
+# ── подтверждение человека ───────────────────────────────────────────────
+# Идентичность нельзя доказать внутри процесса: если агент сам заполняет поле «кто
+# подтвердил», это не подтверждение. Поэтому здесь два ограничения, которые можно
+# проверить кодом: (1) отсекаются машинные идентичности, (2) подпись помечается как
+# непроверенная, пока её не привязали к учётной записи (IdP/одноразовый код).
+MACHINE_IDENTITY_RE = re.compile(
+    r"(?<![а-яa-z])(ai|ии|ai-agent|agent|агент|bot|бот|gpt|llm|claude|chatgpt|gemini|"
+    r"assistant|ассистент|system|система|auto|авто|robot|робот|api|service|сервис|"
+    r"cron|daemon|script|скрипт|noreply|no-reply)(?![а-яa-z])")
+HUMAN_NAME_RE = re.compile(r"[А-ЯЁA-Z][а-яёa-z]+")
+
+
+def check_approval(approval: dict | None) -> dict:
+    """Проверить подтверждение: кто, в какой роли, можно ли считать это человеком.
+
+    Возвращает `{"ok", "issues", "identity_verified"}`. `identity_verified=False` —
+    честная пометка: подпись не привязана к учётной записи, её проверил только формат.
+    """
+    approval = approval or {}
+    by = str(approval.get("by") or "").strip()
+    role = str(approval.get("role") or "").strip()
+    issues: list[dict] = []
+    if not by:
+        issues.append(_issue("blocking", "NO_HUMAN_CONFIRMATION",
+                             "commit без подтверждения человека запрещён: укажите, кто подтвердил"))
+    elif MACHINE_IDENTITY_RE.search(by.lower().replace("_", "-")):
+        issues.append(_issue("blocking", "APPROVAL_NOT_HUMAN",
+                             f"подтверждение оформлено машинной идентичностью «{by}»: "
+                             f"подтвердить может только человек"))
+    elif len(by) < 5 or not HUMAN_NAME_RE.search(by):
+        issues.append(_issue("blocking", "APPROVAL_LOOKS_LIKE_CODE",
+                             f"«{by}» не похоже на ФИО или учётную запись человека "
+                             f"(короче 5 символов или без имени)"))
+    if by and not role:
+        issues.append(_issue("warning", "APPROVAL_ROLE_MISSING",
+                             "в подтверждении не указана роль человека"))
+    blocking = [i for i in issues if i["severity"] == "blocking"]
+    return {"ok": not blocking, "issues": issues,
+            "identity_verified": False,
+            "identity_note": ("идентичность подтвердившего не привязана к учётной записи: "
+                              "проверен только формат подписи"),
+            "by": by, "role": role}
+
+
 # ── применение ───────────────────────────────────────────────────────────
 def apply_operations(drawing, ops, tpl: CorpTemplate, mode: str = "dry_run",
                      out_path: str | Path | None = None, actor: str = "agent:cad",
@@ -272,11 +316,11 @@ def apply_operations(drawing, ops, tpl: CorpTemplate, mode: str = "dry_run",
     issues = validate_operations(drawing.doc, ops, tpl)
     blocking = [i for i in issues if i["severity"] == "blocking"]
 
-    if mode == "commit" and require_confirmation and not (approval or {}).get("by"):
-        issue = _issue("blocking", "NO_HUMAN_CONFIRMATION",
-                       "commit без подтверждения человека запрещён: укажите, кто подтвердил")
-        issues.append(issue)
-        blocking.append(issue)
+    approval_check = None
+    if mode == "commit" and require_confirmation:
+        approval_check = check_approval(approval)
+        issues.extend(approval_check["issues"])
+        blocking.extend(i for i in approval_check["issues"] if i["severity"] == "blocking")
 
     if blocking:
         return {"ok": False, "mode": mode, "issues": issues, "blocking": len(blocking),
@@ -323,14 +367,22 @@ def apply_operations(drawing, ops, tpl: CorpTemplate, mode: str = "dry_run",
             actor, "agent", "cad.operations.commit", str(target),
             {"ops": len(results), "types": sorted({r["type"] for r in results}),
              "from_file": str(drawing.path), "from_hash": before_doc_hash,
-             "to_hash": saved.sha256, "approval": approval, "diff": {
+             "to_hash": saved.sha256, "approval": approval,
+             # честно: подпись проверена только по формату, к учётной записи не привязана
+             "approval_identity": None if not approval_check else {
+                 "verified": approval_check["identity_verified"],
+                 "note": approval_check["identity_note"],
+                 "by": approval_check["by"], "role": approval_check["role"]},
+             "diff": {
                  "added": diff["added"], "modified": diff["modified"], "removed": diff["removed"]}})
 
     return {"ok": True, "mode": "commit", "issues": issues, "blocking": 0,
             "applied": len(results), "operations": results, "diff": diff,
             "file": str(target), "sha256": saved.sha256, "written": True,
             "objects_before": before_count, "objects_after": after_count,
-            "objects_lost": max(lost, 0), "audit_hash": (record or {}).get("hash")}
+            "objects_lost": max(lost, 0), "audit_hash": (record or {}).get("hash"),
+            "approval_identity_verified": None if not approval_check
+            else approval_check["identity_verified"]}
 
 
 def _execute(doc, op, tpl):

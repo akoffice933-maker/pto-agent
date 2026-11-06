@@ -157,7 +157,10 @@ def cmd_norms(args):
 
 
 def cmd_audit_verify(args):
-    ok, count, msg = AuditLog(Path(args.path)).verify()
+    log = AuditLog(Path(args.path))
+    # --anchor: сверять с якорем хвоста (ловит удаление последних записей, чего
+    # хэш-цепочка сама по себе не видит)
+    ok, count, msg = log.verify_anchored() if args.anchor else log.verify()
     print(f"{'OK' if ok else 'НАРУШЕНИЕ'}: записей {count} — {msg}")
     return 0 if ok else 1
 
@@ -664,6 +667,11 @@ def cmd_takeoff(args) -> int:
 # ─────────────────────────── журнал аудита ───────────────────────────
 def cmd_audit(args) -> int:
     log = AuditLog(Path(args.path))
+    if args.audit_action == "anchor":
+        body = log.anchor()
+        print(f"якорь записан: записей {body['entries']}, хэш {body['head_hash'][:16]}… "
+              f"→ {log.anchor_path()}")
+        return 0 if body.get("chain_ok") else 1
     if args.audit_action == "list":
         rows = summarize_changes(log.history(entity=args.entity, limit=args.limit))
         print(f"записей: {len(rows)}")
@@ -838,6 +846,9 @@ def main(argv=None):
     au = sub.add_parser("audit", help="журнал аудита: лента изменений, запись, выгрузка")
     au.add_argument("--path", default="out/audit.jsonl")
     ausub = au.add_subparsers(dest="audit_action", required=True)
+    aua = ausub.add_parser("anchor", help="зафиксировать якорь хвоста журнала")
+    aua.add_argument("--path", default="out/audit.jsonl")
+    aua.set_defaults(func=cmd_audit)
     aul = ausub.add_parser("list", help="лента записей")
     aul.add_argument("--entity", default=None)
     aul.add_argument("--limit", type=int, default=None)
@@ -852,6 +863,8 @@ def main(argv=None):
 
     a = sub.add_parser("audit-verify", help="проверить целостность журнала аудита")
     a.add_argument("--path", default="out/audit.jsonl")
+    a.add_argument("--anchor", action="store_true",
+                   help="сверить хвост с якорем (ловит удаление последних записей)")
     a.set_defaults(func=cmd_audit_verify)
 
     ap = sub.add_parser("approve", help="зафиксировать решение человека по черновику акта (HITL)")

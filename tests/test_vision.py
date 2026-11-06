@@ -329,7 +329,13 @@ def test_mcp_plan_from_scan_redline():
                "truth_path": str(TRUTH)}}}
     res = handle_rpc(req, ctx)
     plan = json.loads(res["result"]["content"][0]["text"])
-    assert plan["summary"]["operations"] == 4
+    # Число операций зависит от того, сколько пометок в демо-скане, поэтому сверяем не
+    # «магическую» четвёрку, а правило: на каждую разобранную пометку — облако и текст.
+    truth = json.loads(TRUTH.read_text(encoding="utf-8"))
+    refs = {op["source"]["ref"] for op in plan["operations"]}
+    assert len(plan["operations"]) == 2 * len(refs)
+    assert 1 <= len(refs) <= len(truth["marks"])
+    assert plan["summary"]["marks"] == len(truth["marks"])
     # сам чертёж имеет 3 блокирующих нарушения шаблона — план честно их возвращает
     assert plan["validation"]["blocking"] == 3
     assert plan["source"]["engine"] == "mock_vlm"

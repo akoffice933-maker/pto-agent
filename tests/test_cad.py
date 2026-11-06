@@ -178,8 +178,10 @@ def test_commit_writes_new_version_with_audit(drawing, tpl, summary, tmp_path):
 def test_diff_detects_only_added_markup(drawing, tpl, summary):
     dry = apply_operations(drawing, _plan(summary, drawing, tpl), tpl, mode="dry_run")
     assert dry["diff"]["added"] == 9
+    # подтверждение — от человека: строка «тест» теперь обоснованно отклоняется
+    # (см. tests/test_review_fixes.py::test_machine_or_empty_identity_is_rejected)
     new_doc = apply_operations(drawing, _plan(summary, drawing, tpl), tpl, mode="commit",
-                               approval={"by": "тест"})
+                               approval={"by": "Иванов И.И.", "role": "инженер ПТО"})
     assert new_doc["ok"]
     # после commit исходный файл на диске не изменился — сравниваем его с новой версией
     d = diff_drawings(Drawing.open(drawing.path).doc, Drawing.open(new_doc["file"]).doc)

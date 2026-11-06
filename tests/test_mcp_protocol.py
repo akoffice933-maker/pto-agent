@@ -151,7 +151,8 @@ def http_server():
     from pto_agent.cad.mcp_server import make_ctx, serve_http
 
     port = 8791
-    ctx = make_ctx(ROOT, "out/cad/audit.jsonl")
+    # HTTP-транспорт с 1.7 требует токен: сервис в сети без аутентификации не поднимаем
+    ctx = make_ctx(ROOT, "out/cad/audit.jsonl", token=TOKEN)
     thread = threading.Thread(target=serve_http, args=(ctx, "127.0.0.1", port), daemon=True)
     thread.start()
     import time
@@ -164,11 +165,42 @@ def http_server():
     return f"http://127.0.0.1:{port}"
 
 
-def _post(url: str, payload: dict) -> dict:
+TOKEN = "test-token-local"
+
+
+def _post(url: str, payload: dict, token: str | None = TOKEN) -> dict:
     data = json.dumps(payload).encode()
-    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, data=data, headers=headers)
     with urllib.request.urlopen(req, timeout=30) as resp:
         return json.loads(resp.read())
+
+
+def test_http_requires_token(http_server):
+    """Без токена инструменты недоступны: сетевой MCP не должен быть открытым."""
+    with pytest.raises(urllib.error.HTTPError) as err:
+        _post(f"{http_server}/mcp", {"jsonrpc": "2.0", "id": 1, "method": "ping"}, token=None)
+    assert err.value.code == 401
+    with pytest.raises(urllib.error.HTTPError) as err2:
+        _post(f"{http_server}/mcp", {"jsonrpc": "2.0", "id": 1, "method": "ping"},
+              token="wrong-token")
+    assert err2.value.code == 401
+
+
+def test_http_has_no_wildcard_cors(http_server):
+    """CORS «*» не отдаём: иначе любая страница в браузере может дёргать инструменты."""
+    req = urllib.request.Request(f"{http_server}/health")
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        assert resp.headers.get("Access-Control-Allow-Origin") is None
+
+
+def test_http_refuses_network_bind_without_token():
+    from pto_agent.cad.mcp_server import make_ctx, serve_http
+
+    with pytest.raises(SystemExit):
+        serve_http(make_ctx(ROOT), "0.0.0.0", 8799)
 
 
 def test_http_health_and_tools(http_server):
@@ -195,14 +227,15 @@ def test_http_batch_requests(http_server):
         f"{http_server}/mcp",
         data=json.dumps([{"jsonrpc": "2.0", "id": 1, "method": "ping"},
                          {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}]).encode(),
-        headers={"Content-Type": "application/json"})
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {TOKEN}"})
     with urllib.request.urlopen(req, timeout=30) as resp:
         batch = json.loads(resp.read())
     assert [r["id"] for r in batch] == [1, 2]
 
 
 def test_inspector_page_is_served(http_server):
-    with urllib.request.urlopen(f"{http_server}/", timeout=10) as resp:
+    req = urllib.request.Request(f"{http_server}/", headers={"Authorization": f"Bearer {TOKEN}"})
+    with urllib.request.urlopen(req, timeout=10) as resp:
         html = resp.read().decode()
     assert "MCP-сервер" in html and "tools/list" in html and "fetch('mcp'" in html
 

@@ -17,7 +17,7 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 
 from .requirements import (_kw_re, act_groups, classify_positions, classify_work, get_work_type,
-                           load_matrix, required_kinds)
+                           is_open_work, load_matrix, required_kinds)
 
 
 def _match_group(position: dict, groups: list[dict]) -> dict | None:
@@ -107,6 +107,10 @@ def _key(pos: dict) -> tuple:
             str(pos.get("unit") or ""), str(pos.get("qty")))
 
 
+def _position_text(pos: dict) -> str:
+    return " ".join(str(pos.get(k) or "") for k in ("name", "work"))
+
+
 def plan_acts(positions: list[dict], *, work_types: list[str] | None = None,
               matrix: dict | None = None, act_prefix: str = "АОСР",
               object_name: str = "", source: str = "",
@@ -131,6 +135,9 @@ def plan_acts(positions: list[dict], *, work_types: list[str] | None = None,
         groups = act_groups(slot["work_type"], matrix)
         buckets: dict[str, list[dict]] = {}
         for pos in slot["positions"]:
+            # открытая прокладка/проводка скрытой работой не становится — в АОСР не идёт
+            if is_open_work(_position_text(pos)):
+                continue
             group = _match_group(pos, groups) or {"id": "other", "name": "Прочие скрытые работы"}
             buckets.setdefault(group["id"], [])
             buckets[group["id"]].append(pos)
@@ -204,6 +211,11 @@ def plan_acts(positions: list[dict], *, work_types: list[str] | None = None,
     excluded: list[dict] = []
     for pos in works:
         if _key(pos) in in_acts:
+            continue
+        if is_open_work(_position_text(pos)):
+            excluded.append({**pos, "reason": ("открытые работы (прокладка/монтаж по поверхности): "
+                                              "акт на скрытые работы не оформляется"),
+                             "work_type": None})
             continue
         hits = classify_work(" ".join(str(pos.get(k) or "") for k in ("name", "work")), matrix)
         if not hits:

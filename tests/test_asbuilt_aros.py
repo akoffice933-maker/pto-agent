@@ -109,7 +109,10 @@ def test_act_groups_split_by_hidden_work(doc):
     assert groups == ["shtroby", "prohodki", "shity", "osveschenie", "trassy"]
     shtroby = next(a for a in plan["acts"] if a["group"] == "shtroby")
     assert shtroby["positions_count"] == 2          # пробивка борозд + заделка борозд
-    assert plan["positions_excluded"] == 3          # демонтаж + погрузка + перевозка
+    # демонтаж + погрузка + перевозка (не скрытые работы) и открытая прокладка:
+    # розетки/выключатели неутопленного типа при открытой проводке в АОСР не идут
+    assert plan["positions_excluded"] == 4
+    assert any("открытые работы" in e["reason"] for e in plan["excluded"])
 
 
 def test_demolition_and_waste_are_out_of_acts(doc):
@@ -194,8 +197,12 @@ def test_real_estimate_1166n_parses_and_splits():
     plan = plan_acts(aros_positions(doc), act_prefix="АОСР-1166/Н", act_date="2026-11-04")
     assert len(plan["acts"]) == 5
     assert plan["positions_total"] == 33
-    assert plan["positions_in_acts"] == 19
-    assert plan["positions_excluded"] == 14
+    # 19 было до ревью: три позиции «неутопленного типа при открытой проводке» — открытые
+    # работы, акт на скрытые работы на них не оформляется
+    assert plan["positions_in_acts"] == 16
+    open_works = [e for e in plan["excluded"] if "открытые работы" in e["reason"]]
+    assert len(open_works) == 3
+    assert plan["positions_excluded"] == 17         # было 14: + 3 открытые работы
     assert {a["group"] for a in plan["acts"]} == {"shtroby", "prohodki", "shity",
                                                  "osveschenie", "trassy"}
 

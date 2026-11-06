@@ -10,9 +10,14 @@
 требует объект confirm {by, role, comment}.
 """
 import argparse
+import hmac
 import json
+import os
+import re
+import secrets
 import sys
 import traceback
+import uuid
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -329,6 +334,22 @@ def t_apply_operations(args, ctx):
         _append_history(ctx, history_entry(res, d, tpl, args.get("confirm"),
                                            (args.get("confirm") or {}).get("by") or "agent:cad"))
     return res
+
+
+def _append_history(ctx: dict, entry: dict) -> dict:
+    """Дописать запись истории изменений чертежа (тот же формат, что у CLI).
+
+    Раньше эта функция вызывалась, но не была определена: файл и запись аудита
+    создавались, а клиент получал NameError с трейсбеком.
+    """
+    path = Path(ctx.get("history_path") or (Path(ctx.get("base_dir") or ".") /
+                                            "out" / "cad" / "history.jsonl"))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+    entry = dict(entry)
+    entry["journal"] = str(path)
+    return entry
 
 
 @tool("cad_takeoff",
@@ -668,6 +689,14 @@ def t_history(args, ctx):
 
 
 # ─────────────────────────── JSON-RPC ────────────────────────────────────
+def _public_message(exc: Exception) -> str:
+    """Текст ошибки без путей файловой системы и без деталей окружения."""
+    text = str(exc)
+    text = re.sub(r"(/[\w.\-]+){2,}", "<путь>", text)          # POSIX-пути
+    text = re.sub(r"[A-Za-z]:\\[^\s:]+", "<путь>", text)       # Windows-пути
+    return text[:300] or type(exc).__name__
+
+
 def _tools_public():
     return [{"name": t["name"], "description": t["description"], "inputSchema": t["inputSchema"]}
             for t in TOOLS]
@@ -710,22 +739,81 @@ def handle_rpc(req: dict, ctx: dict) -> dict | None:
         if t is None:
             return err(-32602, f"неизвестный инструмент: {name}")
         try:
-            result = t["fn"](params.get("arguments") or {}, ctx)
+            arguments = params.get("arguments") or {}
+            check_paths(arguments, ctx)          # песочница до выполнения инструмента
+            result = t["fn"](arguments, ctx)
             payload = json.dumps(result, ensure_ascii=False, indent=2, default=str)
             is_error = bool(isinstance(result, dict) and result.get("ok") is False)
             return ok({"content": [{"type": "text", "text": payload}], "isError": is_error})
         except Exception as exc:
+            # клиенту — короткая ошибка с идентификатором; трейсбек и абсолютные пути
+            # остаются в stderr сервера (иначе они утекают наружу вместе с текстом)
+            error_id = uuid.uuid4().hex[:8]
+            sys.stderr.write(f"[{error_id}] tools/call {name}: {traceback.format_exc()}\n")
             return ok({"content": [{"type": "text",
-                                    "text": f"{type(exc).__name__}: {exc}\n{traceback.format_exc(limit=2)}"}],
+                                    "text": f"{type(exc).__name__}: {_public_message(exc)} "
+                                            f"(id {error_id})"}],
                        "isError": True})
     if method in ("resources/list", "prompts/list"):
         return ok({method.split("/")[0]: []})
     return err(-32601, f"метод не поддерживается: {method}")
 
 
-def make_ctx(base_dir: str | Path = ".", audit_path: str | Path = "out/cad/audit.jsonl") -> dict:
+# Ключи аргументов, которые являются путями ЗАПИСИ: писать вне корня нельзя никогда.
+WRITE_PATH_KEYS = {"out_path", "out_dir", "history_path", "audit_path", "output_path",
+                   "target_path", "save_path", "xlsx_path"}
+
+
+def safe_path(value, base_dir: str | Path, *, write: bool = False) -> Path:
+    """Разрешить путь внутри корня; выход за корень — отказ, а не «попробуем».
+
+    Читать файл вне `base_dir` агенту не нужно (он работает с проектом), а запись вне
+    корня — это запись в чужие каталоги от имени сервиса. Отдельно: клиент не должен
+    получать в ответе абсолютные пути файловой системы.
+    """
+    base = Path(base_dir).resolve()
+    raw = Path(str(value)).expanduser()
+    resolved = (base / raw).resolve() if not raw.is_absolute() else raw.resolve()
+    if resolved != base and base not in resolved.parents:
+        raise ValueError(f"путь вне рабочего каталога запрещён: {raw.name}")
+    if write:
+        parent = resolved.parent
+        if not parent.exists():
+            parent.mkdir(parents=True, exist_ok=True)
+    return resolved
+
+
+def check_paths(arguments: dict, ctx: dict) -> None:
+    """Проверить аргументы-пути вызова. Бросает ValueError — до выполнения инструмента.
+
+    Граница безопасности — транспорт. Для `http` (сервис в сети) песочница включена
+    всегда; для `stdio` (локальный клиент того же пользователя) её надо включить явно:
+    `PTO_MCP_SANDBOX=1` или `make_ctx(..., sandbox=True)`.
+    """
+    base = ctx.get("base_dir") or "."
+    force = os.environ.get("PTO_MCP_SANDBOX") == "1"
+    sandbox_writes = bool(ctx.get("sandbox_writes")) or force
+    sandbox_reads = bool(ctx.get("sandbox_reads")) or force
+    for key, value in (arguments or {}).items():
+        if not isinstance(value, str) or not value:
+            continue
+        if not (key.endswith("_path") or key in WRITE_PATH_KEYS):
+            continue
+        if key in WRITE_PATH_KEYS:
+            if sandbox_writes:
+                safe_path(value, base, write=True)
+        elif sandbox_reads:
+            safe_path(value, base)
+
+
+def make_ctx(base_dir: str | Path = ".", audit_path: str | Path = "out/cad/audit.jsonl",
+             *, sandbox: bool = False, token: str | None = None,
+             allow_origin: str | None = None) -> dict:
     base = Path(base_dir)
-    return {"base_dir": str(base), "audit_path": str(base / audit_path)}
+    return {"base_dir": str(base), "audit_path": str(base / audit_path),
+            "history_path": str(base / "out" / "cad" / "history.jsonl"),
+            "sandbox_reads": sandbox, "sandbox_writes": sandbox,
+            "token": token, "allow_origin": allow_origin}
 
 
 # ─────────────────────────── транспорты ──────────────────────────────────
@@ -745,23 +833,70 @@ def serve_stdio(ctx):
             print(json.dumps(resp, ensure_ascii=False), flush=True)
 
 
-def serve_http(ctx, host="0.0.0.0", port=8765):
+LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def _resolve_http_security(ctx, host: str, token: str | None) -> tuple[str, str]:
+    """Решить, можно ли вообще поднимать HTTP и какой токен требовать.
+
+    Правила: (1) по умолчанию слушаем только localhost — сетевой доступ включается
+    осознанно; (2) без токена наружу не выходим; (3) нет токена в окружении — генерируем
+    случайный и печатаем его в stderr (клиент без токена не пройдёт).
+    """
+    token = token or ctx.get("token") or os.environ.get("PTO_MCP_TOKEN")
+    loopback = host in LOOPBACK_HOSTS
+    if not loopback and not token:
+        raise SystemExit(
+            f"отказ: --host {host} выставляет инструменты в сеть, но токен не задан. "
+            f"Задайте PTO_MCP_TOKEN (или --token) либо слушайте 127.0.0.1.")
+    if token is None:
+        token = secrets.token_urlsafe(24)
+        sys.stderr.write(f"токен не задан — сгенерирован на этот запуск: {token}\n"
+                         f"передайте его клиенту в заголовке Authorization: Bearer <токен>\n")
+    return token, ctx.get("allow_origin") or os.environ.get("PTO_MCP_ALLOW_ORIGIN") or ""
+
+
+def serve_http(ctx, host="127.0.0.1", port=8765, token: str | None = None):
+    token, allow_origin = _resolve_http_security(ctx, host, token)
+    # HTTP-транспорт: сервис доступен по сети, поэтому песочница путей включена всегда
+    ctx = dict(ctx, token=token, allow_origin=allow_origin,
+               sandbox_reads=True, sandbox_writes=True)
+
     class Handler(BaseHTTPRequestHandler):
         server_version = "pto-cad-mcp/0.1"
+
+        def _cors(self):
+            # CORS только для явно разрешённого origin; «*» не отдаём никогда —
+            # иначе любая страница в браузере может дёргать инструменты
+            if allow_origin:
+                self.send_header("Access-Control-Allow-Origin", allow_origin)
+                self.send_header("Vary", "Origin")
+                self.send_header("Access-Control-Allow-Headers",
+                                 "content-type, mcp-protocol-version, authorization")
+                self.send_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
 
         def _send(self, code, body: bytes, ctype="application/json; charset=utf-8"):
             self.send_response(code)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Access-Control-Allow-Headers", "content-type, mcp-protocol-version")
+            self.send_header("Cache-Control", "no-store")
+            self._cors()
             self.end_headers()
             self.wfile.write(body)
+
+        def _authorized(self) -> bool:
+            header = self.headers.get("Authorization") or ""
+            presented = header[7:].strip() if header.lower().startswith("bearer ") else ""
+            if not presented:
+                presented = self.headers.get("X-PTO-Token") or ""
+            return bool(presented) and hmac.compare_digest(presented, token)
 
         def log_message(self, fmt, *a):
             sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % a))
 
         def do_OPTIONS(self):
+            if allow_origin and (self.headers.get("Origin") or "") != allow_origin:
+                return self._send(403, b'{"error":"origin not allowed"}')
             self._send(204, b"")
 
         def do_GET(self):
@@ -771,11 +906,19 @@ def serve_http(ctx, host="0.0.0.0", port=8765):
                 return self._send(200, json.dumps({"tools": _tools_public()},
                                                   ensure_ascii=False).encode())
             if self.path in ("/", "/index.html"):
+                if not self._authorized():
+                    return self._send(401, b'{"error":"unauthorized"}')
                 return self._send(200, _inspector_html(ctx).encode("utf-8"),
                                   "text/html; charset=utf-8")
             self._send(404, b'{"error":"not found"}')
 
         def do_POST(self):
+            if not self._authorized():
+                return self._send(401, b'{"error":"unauthorized"}')
+            if allow_origin:
+                origin = self.headers.get("Origin") or ""
+                if origin and origin != allow_origin:
+                    return self._send(403, b'{"error":"origin not allowed"}')
             length = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(length) if length else b"{}"
             try:
@@ -791,7 +934,9 @@ def serve_http(ctx, host="0.0.0.0", port=8765):
             self._send(200, json.dumps(resp, ensure_ascii=False).encode("utf-8"))
 
     srv = ThreadingHTTPServer((host, port), Handler)
-    print(f"MCP (http) слушает http://{host}:{port}/mcp · инспектор: http://{host}:{port}/", flush=True)
+    print(f"MCP (http) слушает http://{host}:{port}/mcp · инспектор: http://{host}:{port}/ · "
+          f"токен: {'требуется' if token else 'нет'} · CORS: {allow_origin or 'закрыт'}",
+          flush=True)
     srv.serve_forever()
 
 
@@ -1155,14 +1300,17 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="pto_agent.cad.mcp_server",
                                  description="MCP-сервер CAD-модуля ИИ-агента ПТО")
     ap.add_argument("--transport", choices=["stdio", "http"], default="stdio")
-    ap.add_argument("--host", default="0.0.0.0")
+    ap.add_argument("--host", default="127.0.0.1",
+                    help="по умолчанию только localhost; наружу — осознанно и с токеном")
+    ap.add_argument("--token", default=None,
+                    help="токен доступа (или переменная окружения PTO_MCP_TOKEN)")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--base-dir", default=".")
     ap.add_argument("--audit", default="out/cad/audit.jsonl")
     args = ap.parse_args(argv)
     ctx = make_ctx(args.base_dir, args.audit)
     if args.transport == "http":
-        serve_http(ctx, args.host, args.port)
+        serve_http(ctx, args.host, args.port, token=args.token)
     else:
         serve_stdio(ctx)
     return 0

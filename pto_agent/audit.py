@@ -16,10 +16,18 @@
 """
 import hashlib
 import json
+import os
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
 GENESIS = "0" * 64
+
+# Запись в журнал — операция «прочитать хвост, посчитать хэш, дописать». Два потока
+# (MCP-сервер многопоточный) или два процесса на одном файле дают разрыв цепочки,
+# поэтому критическая секция защищена дважды: внутри процесса — мьютексом, между
+# процессами — flock на отдельном lock-файле.
+_THREAD_LOCK = threading.Lock()
 
 
 def diff(before: dict, after: dict) -> dict:
@@ -68,8 +76,41 @@ class AuditLog:
             return GENESIS
         return json.loads(lines[-1])["hash"]
 
+    def _lock_path(self) -> Path:
+        return self.path.with_suffix(self.path.suffix + ".lock")
+
+    class _FileLock:
+        """Эксклюзивная блокировка файла журнала между процессами (POSIX flock)."""
+
+        def __init__(self, path: Path):
+            self.path = path
+            self.handle = None
+
+        def __enter__(self):
+            self.handle = self.path.open("a+")
+            try:
+                import fcntl
+                fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX)
+            except (ImportError, OSError):        # Windows или ФС без flock
+                pass
+            return self
+
+        def __exit__(self, *exc):
+            try:
+                import fcntl
+                fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
+            except (ImportError, OSError):
+                pass
+            self.handle.close()
+            return False
+
     def append(self, actor: str, actor_type: str, action: str, entity: str,
                payload: dict | None = None) -> dict:
+        with _THREAD_LOCK, self._FileLock(self._lock_path()):
+            return self._append_locked(actor, actor_type, action, entity, payload)
+
+    def _append_locked(self, actor: str, actor_type: str, action: str, entity: str,
+                       payload: dict | None = None) -> dict:
         prev = self.last_hash()
         rec = {
             "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -133,6 +174,46 @@ class AuditLog:
             if str(rec.get("hash", "")).startswith(digest):
                 return rec
         return None
+
+    def anchor_path(self) -> Path:
+        return self.path.with_suffix(self.path.suffix + ".head")
+
+    def anchor(self) -> dict:
+        """Записать «якорь» хвоста журнала: последний хэш и число записей.
+
+        Зачем: хэш-цепочка ловит правку записи, но не удаление последних записей —
+        цепочка из оставшихся остаётся целой. Якорь хранится отдельно от журнала и
+        фиксирует, где журнал заканчивался; `verify()` сравнивает с ним.
+        """
+        ok, count, message = self.verify()
+        head = self.last_hash()
+        body = {"schema": "pto-agent/audit-anchor@1",
+                "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "entries": count, "head_hash": head, "verify": message, "chain_ok": ok}
+        target = self.anchor_path()
+        tmp = target.with_suffix(target.suffix + ".tmp")
+        tmp.write_text(json.dumps(body, ensure_ascii=False, indent=1), encoding="utf-8")
+        os.replace(tmp, target)             # атомарная замена: якорь не бывает «полузаписан»
+        return body
+
+    def verify_anchored(self) -> tuple[bool, int, str]:
+        """Проверка цепочки + сверка с якорем: усечение хвоста видно."""
+        ok, count, message = self.verify()
+        if not ok:
+            return ok, count, message
+        anchor_file = self.anchor_path()
+        if not anchor_file.exists():
+            return True, count, message + "; якоря нет — усечение хвоста не проверялось"
+        anchor = json.loads(anchor_file.read_text(encoding="utf-8"))
+        if count < anchor["entries"]:
+            return (False, count,
+                    f"журнал короче якоря: записей {count}, в якоре {anchor['entries']} — "
+                    f"последние записи удалены")
+        if anchor["entries"] and self.last_hash() != anchor["head_hash"]:
+            return (False, count,
+                    f"хвост журнала не совпадает с якорем (якорь от "
+                    f"{anchor.get('ts')}) — записи переписаны или удалены")
+        return True, count, f"{message}; хвост совпадает с якорем ({anchor['entries']} записей)"
 
     def verify(self) -> tuple[bool, int, str]:
         prev = GENESIS
