@@ -1,0 +1,189 @@
+{
+ "schema": "pto-agent/tk-ppr-oss@1",
+ "checked_at": "2026-11-06",
+ "checked_via": "GitHub REST API: /repos/{owner}/{repo}, /repos/{repo}/git/trees/HEAD?recursive=1, raw README/LICENSE/settings.py (не по описаниям в статьях)",
+ "our_license": "MIT",
+ "question": "Чем закрыть разработку ТК и ППР (не только ИД) из открытого кода: есть ли готовый OSS, который делает техкарты и ППР на все виды работ, включая нестандартные",
+ "layers": {
+  "id": "Исполнительная документация",
+  "tk": "Технологические карты",
+  "ppr": "Проект производства работ",
+  "norm": "Нормативная база и методика"
+ },
+ "verdict": {
+  "tk_ppr_ready_oss": false,
+  "id_ready_oss": "частично (наш pto-agent + skills-наборы, не движок)",
+  "evidence": [
+   "search «ППР строительство» → 0 репозиториев",
+   "search «проект производства работ» → 0",
+   "search «технологическая карта строительство» → 0",
+   "search «КС-2 смета» → 0",
+   "search «АОСР» → 2 репозитория, оба без лицензии, ★0",
+   "construction-ai-core: в коде ТК/ППР — вызов внешнего `../tk-generator` (Node.js), которого в репозитории нет; в самом репозитории только шаблоны DOCX и docxtpl-обёртка"
+  ],
+  "conclusion": "готового OSS на ТК/ППР нет ни в русской, ни в английской части GitHub; закрывать надо своими правилами + нормативной базой, а из OSS брать идеи структуры документов и методики (CC0/MIT)"
+ },
+ "rules": {
+  "copy_code": "MIT / Apache-2.0 / BSD / ISC / CC0-1.0 — с сохранением уведомления, где оно есть",
+  "weak_copyleft": "LGPL / MPL / EPL: отдельной зависимостью, код внутрь пакета не копируем",
+  "strong_copyleft": "GPL / AGPL: только идеи и внешний сервис по сети",
+  "no_license": "без лицензии = все права защищены: читаем README и код как идею, копировать нельзя",
+  "claims": "заявление README («генерирует ППР») не считается фактом: проверяется по дереву файлов и вызовам в коде"
+ },
+ "projects": [
+  {
+   "repo": "akoffice933-maker/pto-agent",
+   "url": "https://github.com/akoffice933-maker/pto-agent",
+   "license": "MIT",
+   "stars": 1,
+   "pushed": "2026-11-06",
+   "language": "Python",
+   "layer": "id",
+   "priority": "высокий",
+   "integration": "pattern-and-code",
+   "copy_allowed": true,
+   "role": "наш проект: АОСР (черновики), распознавание выпуска ИД, схемы из DXF, реестр и матрица требований по видам работ, деньги под риском, MCP-инструменты",
+   "verified": [
+    "каталог pto_agent/asbuilt, cad/vision, portfolio.py; 22 MCP-инструмента"
+   ],
+   "we_take": [
+    "— (свой код)"
+   ],
+   "we_do_not_take": [
+    "ТК и ППР не делает: в матрице требований есть виды работ, но не технология производства"
+   ]
+  },
+  {
+   "repo": "ivanpetrov19960407-afk/construction-ai-core",
+   "url": "https://github.com/ivanpetrov19960407-afk/construction-ai-core",
+   "license": "нет лицензии",
+   "stars": 0,
+   "pushed": "2026-04-26",
+   "language": "Python",
+   "layer": "ppr",
+   "priority": "средний",
+   "integration": "reference-only",
+   "copy_allowed": false,
+   "role": "ИИ-обёртка над документами стройки: DOCX через docxtpl, оркестратор агентов, чеклист разделов ИД, интеграции (КриптоПро, 1С, ИСУП)",
+   "verified": [
+    "README заявляет «ТК, ППР, письма — DOCX + PDF»",
+    "core/tk_bridge.py — это subprocess-вызов внешнего Node.js `../tk-generator` (config/settings.py: tk_generator_path = \"../tk-generator\"), самого генератора в репозитории нет",
+    "templates/README.md: бинарные .docx не хранятся, создаются scripts/generate_templates.py (tk_template.docx, ppr_template.docx, letter_template.docx, ks_template.docx)",
+    "core/docx_generator.py — 2,3 КБ, обёртка docxtpl + автогенерация шаблонов",
+    "файлов в репозитории: 297"
+   ],
+   "we_take": [
+    "идею «шаблон DOCX + словарь полей» вместо генерации вёрстки кодом (docxtpl/Jinja2) — для наших черновиков ТК/ППР это дешевле, чем рисовать документ python-docx",
+    "мысль о внешнем процессе-генераторе с JSON на входе и каталогом артефактов на выходе: генератор можно заменить, не трогая агента",
+    "структуру чеклиста разделов ИД (AR, KZh, KM, OV, VK, EM, SS, APS/PS) как форму реестра"
+   ],
+   "we_do_not_take": [
+    "код (лицензии нет — все права защищены)",
+    "заявление README о генерации ППР как факт: в репозитории его нет",
+    "«юридический эксперт» и нормативные выводы без пункта и редакции — у нас правило: норма только с номером пункта, редакцией и датой, иначе помечается непроверенной"
+   ]
+  },
+  {
+   "repo": "proovcme/ru-aec-skills",
+   "url": "https://github.com/proovcme/ru-aec-skills",
+   "license": "CC0-1.0",
+   "stars": 0,
+   "pushed": "2026-10-03",
+   "language": "Python",
+   "layer": "norm",
+   "priority": "высокий",
+   "integration": "pattern-and-code",
+   "copy_allowed": true,
+   "role": "53 скилла под российский AEC: ИД (aec-manage-rf-executive-records), проектная документация, изыскания, экспертиза, объёмы работ, локальная смета",
+   "verified": [
+    "LICENSE: SPDX-License-Identifier: CC0-1.0 (public domain dedication)",
+    "aec-manage-rf-executive-records/SKILL.md: матрица «работа → контроль → исполнительный документ → подписанты → срок до сокрытия», требование подтверждать нормативный вывод пунктом и редакцией",
+    "прямой запрет: «не создавай исполнительную схему без фактических данных и не имитируй акты, испытания или подписи»",
+    "ТК и ППР в списке скиллов отсутствуют"
+   ],
+   "we_take": [
+    "формулировку матрицы ИД с колонкой «срок до сокрытия» — у нас в матрице этого нет",
+    "явный запрет выдавать акт/схему без факта (совпадает с нашим правилом, годится как формулировка в промпте и в отчёте)",
+    "протокол нормативной работы: пункт + редакция + проверка; без этого — не утверждать",
+    "CC0 позволяет переносить текст скиллов в наш репозиторий — сверить формулировки правил"
+   ],
+   "we_do_not_take": [
+    "расчёты ОВиК/ЭОМ/ВК — не наш предмет",
+    "привязку к их формату скиллов"
+   ]
+  },
+  {
+   "repo": "datadrivenconstruction/DDC_Skills_for_AI_Agents_in_Construction",
+   "url": "https://github.com/datadrivenconstruction/DDC_Skills_for_AI_Agents_in_Construction",
+   "license": "MIT",
+   "stars": 394,
+   "pushed": "2026-10-19",
+   "language": "Python",
+   "layer": "id",
+   "priority": "средний",
+   "integration": "schema-reference",
+   "copy_allowed": true,
+   "role": "221 skill для агентов в стройке: 1_DDC_Toolkit/Closeout/as-built-tracker, Document-Control/as-built-documentation, submittal-tracker, rfi-management",
+   "verified": [
+    "дерево репозитория: 1026 файлов, 29 путей по as-built/handover/submittal/rfi",
+    "as-built-tracker и as-built-documentation — это SKILL.md + instructions.md + claw.json, то есть методика для агента, а не движок и не API",
+    "лицензия MIT (GitHub API: MIT License)"
+   ],
+   "we_take": [
+    "структуру closeout-трекера: ревизия листа → статус → кто подписал → что в комплекте",
+    "термины handover/submittal tracker для сравнения с нашим реестром ИД"
+   ],
+   "we_do_not_take": [
+    "англоязычную практику (AIA/shop drawings) как норму для РФ",
+    "готовые тексты на английском"
+   ]
+  },
+  {
+   "repo": "Ramil66/technorm",
+   "url": "https://github.com/Ramil66/technorm",
+   "license": "нет лицензии",
+   "stars": 0,
+   "pushed": "2026-07-01",
+   "language": "HTML",
+   "layer": "tk",
+   "priority": "низкий",
+   "integration": "reference-only",
+   "copy_allowed": false,
+   "role": "АС «ТехНорм»: нормативно-справочная информация производственного предприятия, маршрутные технологические карты, нормы времени и материалов",
+   "verified": [
+    "описание репозитория: производственные предприятия, НСИ, маршрутные ТК",
+    "HTML, 13,8 МБ, лицензии нет"
+   ],
+   "we_take": [
+    "идею маршрутной карты: операция → норма времени → материал → исполнитель; переносится на строительную ТК как скелет без их кода"
+   ],
+   "we_do_not_take": [
+    "код (нет лицензии)",
+    "производственную НСИ как норматив для стройки"
+   ]
+  },
+  {
+   "repo": "ash-kirill/aosr-pdf-generator-python",
+   "url": "https://github.com/ash-kirill/aosr-pdf-generator-python",
+   "license": "нет лицензии",
+   "stars": 0,
+   "pushed": "2026-06-26",
+   "language": "Python",
+   "layer": "id",
+   "priority": "низкий",
+   "integration": "reference-only",
+   "copy_allowed": false,
+   "role": "прототип генератора АОСР (Python + Tkinter), найден поиском «АОСР»",
+   "verified": [
+    "описание репозитория; ★0; лицензии нет"
+   ],
+   "we_take": [
+    "ничего сверх нашего: у нас АОСР уже формируется из матрицы требований"
+   ],
+   "we_do_not_take": [
+    "код",
+    "PDF-вёрстку формы без сверки с приказом Минстроя № 344/пр"
+   ]
+  }
+ ]
+}

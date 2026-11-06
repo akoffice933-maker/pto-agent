@@ -35,14 +35,28 @@ LIST = ROOT / "data" / "reference" / "platform_oss.json"
 REQUIRED = ("repo", "url", "license", "stars", "layer", "priority", "role", "we_take",
             "we_do_not_take", "integration", "copy_allowed")
 
-# код можно копировать только из этих лицензий (и с сохранением уведомления об авторстве)
-COPY_LICENSES = {"MIT", "Apache-2.0", "BSD-3-Clause", "BSD-2-Clause", "ISC"}
+# код можно копировать только из этих лицензий (и с сохранением уведомления об авторстве;
+# CC0 — посвящение в общественное достояние, уведомление не требуется)
+COPY_LICENSES = {"MIT", "Apache-2.0", "BSD-3-Clause", "BSD-2-Clause", "ISC", "CC0-1.0"}
 
 INTEGRATIONS = {"reference-only", "external-mcp-server", "pattern-and-code",
                 "schema-reference", "data-source", "library", "dependency"}
 PRIORITIES = {"высокий", "средний", "низкий"}
-# слои платформы, у каждого должен быть хотя бы один разобранный проект
+# обязательные слои платформы (для реестров с другой структурой слои берутся из самого файла)
 PLATFORM_LAYERS = {"2", "3", "4", "5", "6", "7", "8", "9"}
+
+
+def required_layers(doc: dict) -> set[str]:
+    """Какие слои обязаны быть покрыты.
+
+    У реестра платформы — 2…9. У других реестров (ТК/ППР/ИД) свой набор слоёв, и требовать
+    от них платформенные нельзя: список слоёв берётся из самого файла, кроме помеченных
+    в `optional_layers`.
+    """
+    layers = set((doc.get("layers") or {}).keys())
+    if layers & PLATFORM_LAYERS:
+        return PLATFORM_LAYERS
+    return layers - set(doc.get("optional_layers") or [])
 
 # ожидаемое семейство лицензии по нашей пометке → как это видит GitHub API
 LICENSE_API = {
@@ -50,6 +64,7 @@ LICENSE_API = {
     "Apache-2.0": {"Apache-2.0"},
     "BSD-3-Clause": {"BSD-3-Clause"},
     "BSD-2-Clause": {"BSD-2-Clause"},
+    "CC0-1.0": {"CC0-1.0", "NOASSERTION", "Other"},
     "LGPL-3.0": {"LGPL-3.0", "NOASSERTION"},
     "MPL-2.0": {"MPL-2.0"},
     "EPL-1.0": {"EPL-1.0"},
@@ -92,7 +107,7 @@ def check_structure(doc: dict) -> list[str]:
         if key in seen:
             problems.append(f"{name}: дубликат в слое {item.get('layer')}")
         seen[key] = i
-    for layer in sorted(PLATFORM_LAYERS):
+    for layer in sorted(required_layers(doc)):
         if not any(p.get("layer") == layer for p in projects):
             problems.append(f"слой {layer} ({doc.get('layers', {}).get(layer, '?')}) без проектов")
     return problems
@@ -128,7 +143,8 @@ def _api(path: str, token: str | None) -> dict:
         return json.load(response)
 
 
-def check_online(doc: dict, token: str | None, *, write: bool = False) -> tuple[list[str], int]:
+def check_online(doc: dict, token: str | None, *, write: bool = False,
+                 path: Path | None = None) -> tuple[list[str], int]:
     problems: list[str] = []
     updated = 0
     today = date.today().isoformat()
@@ -161,7 +177,9 @@ def check_online(doc: dict, token: str | None, *, write: bool = False) -> tuple[
             problems.append(f"{repo}: звёзд в реестре {item.get('stars')}, на GitHub {stars}")
     if write:
         doc["checked_at"] = today
-        LIST.write_text(json.dumps(doc, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+        doc.pop("_file", None)
+        target = path or LIST
+        target.write_text(json.dumps(doc, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
     return problems, updated
 
 
@@ -183,12 +201,16 @@ def summarize(doc: dict) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--offline", action="store_true", help="без сети: структура и лицензии")
+    parser.add_argument("--list", dest="list_path", default=str(LIST),
+                        help="файл реестра (по умолчанию data/reference/platform_oss.json)")
     parser.add_argument("--refresh", action="store_true",
                         help="сверить с GitHub и обновить звёзды/даты в JSON")
-    parser.add_argument("--path", default=str(LIST))
+    parser.add_argument("--path", default="", help="то же, что --list (прежний ключ)")
     args = parser.parse_args(argv)
 
-    doc = load(Path(args.path))
+    list_path = Path(args.path or args.list_path)
+    doc = load(list_path)
+    doc["_file"] = list_path.name
     print(summarize(doc))
 
     structural = check_structure(doc)
@@ -201,7 +223,8 @@ def main(argv: list[str] | None = None) -> int:
     online: list[str] = []
     updated = 0
     if not args.offline:
-        online, updated = check_online(doc, os.environ.get("GH_TOKEN"), write=args.refresh)
+        online, updated = check_online(doc, os.environ.get("GH_TOKEN"), write=args.refresh,
+                                      path=list_path)
         for problem in online:
             print("  github:", problem)
         if updated:

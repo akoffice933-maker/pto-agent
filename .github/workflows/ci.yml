@@ -36,9 +36,10 @@ jobs:
           python scripts/make_demo_redline.py
       - name: Сверка КС-2 (создаёт out/summary.json для тестов)
         run: python -m pto_agent run --data data/demo --out out
-      - name: Реестры OSS (платформа и takeoff) — офлайн, без сети
+      - name: Реестры OSS (платформа, takeoff, ТК/ППР) — офлайн, без сети
         run: |
           python scripts/check_platform_oss.py --offline
+          python scripts/check_platform_oss.py --offline --list data/reference/tk_ppr_oss.json
           python scripts/check_takeoff_oss.py
       - name: Тесты
         run: pytest tests -q
