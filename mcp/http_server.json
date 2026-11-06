@@ -4,8 +4,10 @@
       "type": "http",
       "url": "http://localhost:8765/mcp",
       "headers": {
-        "mcp-protocol-version": "2025-06-18"
+        "mcp-protocol-version": "2025-06-18",
+        "Authorization": "Bearer ${PTO_MCP_TOKEN}"
       }
     }
-  }
+  },
+  "_note": "HTTP-транспорт требует токен: задайте PTO_MCP_TOKEN на сервере и тот же токен в заголовке Authorization. CORS закрыт; один разрешённый origin задаётся переменной PTO_MCP_ALLOW_ORIGIN."
 }

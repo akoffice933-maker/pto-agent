@@ -976,6 +976,7 @@ def _inspector_html(ctx) -> str:
  <h2>Проверка вызова</h2>
  <p class="hint">Запрос уходит на <code>POST /mcp</code>. Пример: <code>{{"jsonrpc":"2.0","id":1,"method":"tools/list"}}</code></p>
  <textarea id="q">{{"jsonrpc":"2.0","id":1,"method":"tools/list"}}</textarea>
+ <div><label class="hint">Токен доступа: <input id="tok" placeholder="PTO_MCP_TOKEN" size="34"></label></div>
  <button onclick="send()">Отправить</button>
  <div class="out" id="out">—</div>
 </div>
@@ -984,7 +985,10 @@ async function send(){{
   const q=document.getElementById('q').value, out=document.getElementById('out');
   out.textContent='…';
   try{{
-    const r=await fetch('mcp',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:q}});
+    const tok=(document.getElementById('tok')||{{}}).value||'';
+    const r=await fetch('mcp',{{method:'POST',
+      headers:{{'Content-Type':'application/json',...(tok?{{'Authorization':'Bearer '+tok}}:{{}})}},
+      body:q}});
     const t=await r.text(); try{{out.textContent=JSON.stringify(JSON.parse(t),null,2);}}catch(e){{out.textContent=t;}}
   }}catch(e){{out.textContent='ошибка: '+e;}}
 }}

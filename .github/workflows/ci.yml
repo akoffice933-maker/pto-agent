@@ -121,9 +121,20 @@ jobs:
         run: docker build -t pto-agent-mcp:ci .
       - name: Запуск и проверка /health
         run: |
-          docker run -d --name mcp -p 8765:8765 pto-agent-mcp:ci
+          # без токена контейнер обязан отказаться слушать 0.0.0.0
+          if docker run --rm --name mcp-notoken -p 8766:8765 pto-agent-mcp:ci; then
+            echo "контейнер поднялся без токена — это дефект"; exit 1
+          fi
+          docker run -d --name mcp -p 8765:8765 -e PTO_MCP_TOKEN=ci-token pto-agent-mcp:ci
           for i in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:8765/health; then echo; exit 0; fi
+            if curl -fsS http://127.0.0.1:8765/health; then echo; break; fi
             sleep 2
           done
-          docker logs mcp; exit 1
+          # инструменты под токеном доступны, без токена — 401
+          code=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://127.0.0.1:8765/mcp \
+            -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"ping"}')
+          test "$code" = "401" || { echo "ожидали 401 без токена, получили $code"; docker logs mcp; exit 1; }
+          code=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://127.0.0.1:8765/mcp \
+            -H 'authorization: Bearer ci-token' -H 'content-type: application/json' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"ping"}')
+          test "$code" = "200" || { echo "ожидали 200 с токеном, получили $code"; docker logs mcp; exit 1; }

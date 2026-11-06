@@ -10,6 +10,10 @@ services:
     environment:
       PTO_MCP_BASE_DIR: /app
       PTO_MCP_TRANSPORT: http
+      # обязателен: без токена сервер не поднимется на 0.0.0.0
+      PTO_MCP_TOKEN: ${PTO_MCP_TOKEN:?задайте PTO_MCP_TOKEN (например: openssl rand -hex 24)}
+      # CORS закрыт; при необходимости укажите один разрешённый origin
+      PTO_MCP_ALLOW_ORIGIN: ${PTO_MCP_ALLOW_ORIGIN:-}
     volumes:
       # журнал аудита и отчёты — на хосте, чтобы их видел инженер
       - ../out:/app/out
