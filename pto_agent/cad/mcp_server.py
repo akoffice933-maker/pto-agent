@@ -2106,6 +2106,47 @@ def t_correspondence(args, ctx):
     return payload
 
 
+@tool("object_pack",
+      "Комплект объекта одной командой: собирает все разделы (общий журнал работ, журнал "
+      "верификации, документы качества, выдача РД, согласование ИД, письма, лаборатории и "
+      "геодезисты, дни качества, чек-листы) в одну папку и считает **один вердикт** — можно ли "
+      "предъявлять комплект. Отсутствующий раздел — «нет данных», а не «пройдено»; любая ошибка "
+      "в любом разделе блокирует сдачу; сдаётся только подписанное человеком. Готовый "
+      "подписанный реестр можно передать ссылкой (`registry`), тогда подпись проверяется, а не "
+      "пересобирается. Возвращает разделы, блокеры по разделам с кодами и файлы описи.",
+      {"type": "object", "properties": {
+          "config": {"type": "object",
+                     "description": "{object_name, number, sections: {раздел: {источники}}} "
+                                    "— либо передайте config_path"},
+          "config_path": {"type": "string"},
+          "base_dir": {"type": "string"},
+          "out_dir": {"type": "string"},
+          "format": {"type": "string", "enum": ["json", "markdown"], "default": "json"}},
+       "required": []})
+def t_object_pack(args, ctx):
+    from ..pack import build_pack, to_markdown
+    base = Path(args.get("base_dir") or ctx.get("base_dir") or ".")
+    config = args.get("config") or {}
+    problems: list = []
+    if not config and args.get("config_path"):
+        path = Path(_p(args, "config_path"))
+        try:
+            config = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            return {"ok": False, "error": f"{path.name}: не читается ({exc.__class__.__name__})"}
+    out_dir = Path(args.get("out_dir") or base / "out" / "pack")
+    pack = build_pack(config, base_dir=base, out_dir=out_dir)
+    payload = {"ok": pack["can_submit"]["allowed"], "kind": pack["schema"],
+               "object_name": pack["object_name"], "number": pack["number"],
+               "totals": pack["totals"], "sections": pack["sections"],
+               "can_submit": pack["can_submit"], "checks": pack["checks"],
+               "problems": problems, "files": pack["files"],
+               "disclaimer": pack["disclaimer"]}
+    if (args.get("format") or "json") == "markdown":
+        payload["markdown"] = to_markdown(pack)
+    return payload
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="pto_agent.cad.mcp_server",
                                  description="MCP-сервер CAD-модуля ИИ-агента ПТО")

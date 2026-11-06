@@ -1,0 +1,16 @@
+{
+ "object_name": "ЖК «Северный», корпус 2",
+ "number": "К-38",
+ "note": "Конфиг комплекта по объекту: где лежат источники каждого раздела. Раздел без источника — «нет данных», а не «пройдено».",
+ "sections": {
+  "journals_work": {"entries": "data/demo/journals/work_entries.json", "acts": "data/demo/acts/acts.json", "number": "ОЖР-1"},
+  "journals_verification": {"records": "data/demo/journals/verification.json", "writeoffs": "data/demo/consumption/writeoffs.csv", "number": "ВК-1"},
+  "quality_docs": {"documents": "data/demo/quality_docs/documents.json", "requirements": "data/demo/quality_docs/requirements.json", "usage": "data/demo/quality_docs/usage.json", "verification": "data/demo/journals/verification.json", "number": "ДК-1"},
+  "rd": {"transmittals": "data/demo/docflow/transmittals.json", "revisions": "data/demo/docflow/revisions.json", "works": "data/demo/docflow/works_rd.json", "number": "РД-1"},
+  "submittals": {"submittals": "data/demo/docflow/submittals.json", "number": "СГ-1"},
+  "letters": {"letters": "data/demo/correspondence/letters.json", "number": "ПИС-1"},
+  "involvement": {"records": "data/demo/correspondence/involvement.json", "number": "ЛАБ-1"},
+  "quality_days": {"events": "data/demo/correspondence/quality_days.json", "number": "ДК-1"},
+  "checklists": {"enabled": false, "reason": "чек-листы по этому акту выпускаются отдельно, в комплект К-38 не входят (письмо № 231)"}
+ }
+}

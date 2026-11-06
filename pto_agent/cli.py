@@ -1340,6 +1340,46 @@ def cmd_correspondence(args) -> int:
     return 2 if totals["errors"] else 0
 
 
+
+def cmd_pack(args) -> int:
+    """Комплект объекта: все разделы одной командой и один вердикт «можно ли предъявлять»."""
+    from .pack import build_pack, write
+
+    out_dir = Path(args.out)
+    config_path = Path(args.config)
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    base = Path(args.base_dir or ".")
+    pack = build_pack(config, base_dir=base, out_dir=out_dir)
+    files = pack["files"]
+    totals = pack["totals"]
+    print(f"{pack['title']}: {pack['object_name'] or 'объект не указан'} · "
+          f"комплект {pack['number'] or 'б/н'}")
+    print(f"  разделов: {totals['sections']} · без ошибок: {totals['ok']} · с ошибками: "
+          f"{totals['with_errors']} · нет данных: {totals['missing']} · исключено: "
+          f"{totals['disabled']} · подписано: {totals['signed']}")
+    for section in pack["sections"]:
+        mark = {"ошибок нет": "✓", "есть предупреждения": "⚠", "есть ошибки": "✗",
+                "нет данных": "·", "исключён человеком": "–"}.get(section["status"], "?")
+        tail = f" · {section['why'][:60]}" if section.get("why") else ""
+        print(f"  {mark} {section['title'][:46]:46} {section['status']}"
+              f"{' · подписан' if section['signed'] else ''}{tail}")
+    close = pack["can_submit"]
+    if close["allowed"]:
+        print("  КОМПЛЕКТ МОЖНО ПРЕДЪЯВЛЯТЬ")
+    else:
+        print("  предъявлять нельзя:")
+        for reason in close["reasons"]:
+            print(f"     · {reason}")
+    unsigned = [s["title"] for s in pack["sections"] if not s["signed"]
+                and s["status"] not in ("исключён человеком", "нет данных")]
+    if unsigned:
+        print("  подписать (ФИО, роль, дата): " + ", ".join(unsigned))
+    print(f"  файлы: {files['json']}, {files['markdown']}, {files['xlsx']}, {files['docx']}")
+    print(f"  разделы лежат в: {out_dir}")
+    print("  вердикт считает агент, решение принимает ИТР: подписи ставит человек")
+    return 0 if close["allowed"] else 2
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     # подкоманды CAD и MCP живут в своих пакетах: делегируем до разбора argparse,
@@ -1430,6 +1470,15 @@ def main(argv=None):
     mtr.add_argument("--act", nargs="*", default=[], help="материалы КС-2 построчно (csv, xlsx)")
     mtr.add_argument("--object-name", default="")
     mtr.set_defaults(func=cmd_materials)
+
+    pk = sub.add_parser("pack",
+                        help="комплект объекта: все разделы одной командой и один вердикт")
+    pk.add_argument("--out", default="out/pack")
+    pk.add_argument("--base-dir", default=".")
+    pksub = pk.add_subparsers(dest="pack_action", required=True)
+    pkb = pksub.add_parser("build", help="собрать комплект по конфигу")
+    pkb.add_argument("--config", required=True, help="JSON конфига комплекта")
+    pkb.set_defaults(func=cmd_pack)
 
     dfl = sub.add_parser("docflow",
                          help="РД «В производство работ» и согласование ИД до подписи")
@@ -1764,6 +1813,6 @@ def main(argv=None):
     result = args.func(args)
     if args.cmd in ("audit-verify", "approve", "prices", "materials", "procure", "audit",
                     "takeoff", "tk", "cumulative", "atn", "consumption", "checklist",
-                    "journal", "quality", "docflow", "correspondence"):
+                    "journal", "quality", "docflow", "correspondence", "pack"):
         return result
     return 0
