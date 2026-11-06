@@ -723,6 +723,69 @@ def cmd_audit(args) -> int:
     return 2
 
 
+
+def cmd_tk(args) -> int:
+    """Черновик ТК или ППР: что известно — заполняем, чего нет — запрашиваем с адресатом."""
+    from .tk import build_ppr_draft, build_tk_draft, confirm as confirm_tk, to_markdown, write
+
+    out_dir = Path(getattr(args, "out", "out/tk"))
+    object_name = getattr(args, "object_name", "") or ""
+    positions = None
+    if getattr(args, "estimate", ""):
+        from .parsers import read_estimate_ex
+        items, problems = read_estimate_ex(Path(args.estimate))
+        positions = [{"name": i.name, "qty": i.qty, "unit": i.unit,
+                      "source": f"смета {Path(args.estimate).name}"} for i in items]
+        if problems:
+            print(f"   ⚠ замечаний чтения сметы: {len(problems)}")
+
+    audit = AuditLog(out_dir / "audit.jsonl") if getattr(args, "audit", None) else None
+    action = args.tk_action
+
+    if action == "draft":
+        draft = build_tk_draft(work_type_id=args.work_type or None,
+                               work_text=getattr(args, "text", "") or None,
+                               object_name=object_name,
+                               positions=positions, norms_dir=getattr(args, "norms", None))
+    else:                                        # ppr
+        draft = build_ppr_draft(object_name=object_name, positions=positions)
+
+    if action == "confirm":
+        draft_path = Path(args.draft)
+        draft = json.loads(draft_path.read_text(encoding="utf-8"))
+        filled = json.loads(Path(args.filled).read_text(encoding="utf-8")) if args.filled else {}
+        draft = confirm_tk(draft, by=args.by, role=args.role, filled=filled, reason=args.reason,
+                           audit_log=audit)
+        if draft.get("confirm_problems"):
+            print("   ОСТАНОВЛЕНО:", "; ".join(draft["confirm_problems"]))
+            return 2
+        files = write(draft, out_dir)
+        print(f"проверено человеком: {args.by} ({args.role}) · внесено пунктов: "
+              f"{len(draft['confirmed_by']['filled_items'])}")
+        print(f"осталось запросить: {draft['totals']['needs_input']} разделов")
+        print(f"файлы: {files['json']}, {files['docx']}")
+        return 0
+
+    files = write(draft, out_dir)
+    totals = draft["totals"]
+    print(f"{draft['title']}: {draft.get('object_name') or 'объект не указан'}")
+    if draft.get("work_type"):
+        print(f"  вид работ: {draft['work_type']['name']}")
+    print(f"  разделов: {totals['sections']} · заполнено: {totals['filled_items']} · "
+          f"требуют данных: {totals['needs_input']}")
+    print(f"  нормы: проверено {totals['norms_verified']} из {totals['norms_total']}")
+    for need in draft["needs_input"][:6]:
+        print(f"    ⚠ {need['what']} → {need['ask']}")
+    print(f"  файлы: {files['json']}, {files['docx']}")
+    print("  это черновик: не утверждённая ТК, подписывает ИТР после проверки")
+    if audit is not None:
+        audit.append("agent:tk", "agent", f"{draft['kind']}.draft_built",
+                     f"{draft['kind']}:{object_name or 'без объекта'}",
+                     {"sections": totals["sections"], "needs_input": totals["needs_input"],
+                      "norms_verified": totals["norms_verified"]})
+    return 0
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     # подкоманды CAD и MCP живут в своих пакетах: делегируем до разбора argparse,
@@ -813,6 +876,32 @@ def main(argv=None):
     mtr.add_argument("--act", nargs="*", default=[], help="материалы КС-2 построчно (csv, xlsx)")
     mtr.add_argument("--object-name", default="")
     mtr.set_defaults(func=cmd_materials)
+
+    tkc = sub.add_parser("tk", help="черновик технологической карты или ППР (без выдуманных норм)")
+    tkc.add_argument("--out", default="out/tk")
+    tkc.add_argument("--audit", default=None, help="журнал аудита (по умолчанию не пишем)")
+    tkcsub = tkc.add_subparsers(dest="tk_action", required=True)
+    for name, help_text in (("draft", "черновик ТК по виду работ"),
+                            ("ppr", "черновик ППР по объекту")):
+        sub_p = tkcsub.add_parser(name, help=help_text)
+        sub_p.add_argument("--object-name", default="")
+        sub_p.add_argument("--estimate", default="", help="смета (xlsx): что учтено сметой")
+        sub_p.add_argument("--norms", default=None, help="каталог нормативной базы")
+        if name == "draft":
+            sub_p.add_argument("--work-type", default="", help="id вида работ из матрицы")
+            sub_p.add_argument("--text", default="", help="текст работы (классификатор)")
+        else:
+            sub_p.add_argument("--work-type", default="", help=argparse.SUPPRESS)
+            sub_p.add_argument("--text", default="", help=argparse.SUPPRESS)
+        sub_p.set_defaults(func=cmd_tk)
+    tkc_confirm = tkcsub.add_parser("confirm", help="отметить проверку человеком")
+    tkc_confirm.add_argument("--draft", required=True, help="JSON черновика")
+    tkc_confirm.add_argument("--by", required=True, help="ФИО проверившего")
+    tkc_confirm.add_argument("--role", required=True, help="должность/роль")
+    tkc_confirm.add_argument("--filled", default=None,
+                             help="JSON {раздел: [что вписал инженер]}")
+    tkc_confirm.add_argument("--reason", default="")
+    tkc_confirm.set_defaults(func=cmd_tk)
 
     tk = sub.add_parser("takeoff", help="объёмы из чертежей (BOQ) → ведомость с ценами из базы")
     tk.add_argument("--out", default="out/takeoff")
@@ -945,6 +1034,6 @@ def main(argv=None):
     args = p.parse_args(argv)
     result = args.func(args)
     if args.cmd in ("audit-verify", "approve", "prices", "materials", "procure", "audit",
-                    "takeoff"):
+                    "takeoff", "tk"):
         return result
     return 0
