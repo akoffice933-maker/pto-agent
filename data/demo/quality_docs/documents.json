@@ -1,0 +1,15 @@
+{
+ "object": "ЖК «Северный», корпус 2",
+ "note": "Реестр документов качества. Часть документов намеренно с дефектами: без основания соответствия, без файла, дубль, на другую партию, с истёкшим сроком — так видно, что реестр их не прячет.",
+ "documents": [
+  {"kind": "паспорт качества", "number": "П-118", "issue_date": "2026-09-28", "material": "Бетон B25", "batch": "партия 14", "manufacturer": "ООО «БетонСервис»", "standard": "ГОСТ 7473-2010", "pages": 2, "file": "quality/beton_P-118.pdf", "attested_by": {"by": "Иванов И.И.", "role": "инженер ПТО", "at": "2026-10-01"}},
+  {"kind": "протокол испытаний", "number": "ПИ-14", "issue_date": "2026-10-02", "valid_until": "2026-12-31", "material": "Бетон B25", "batch": "партия 14", "manufacturer": "Лаборатория «СтройТест»", "standard": "ГОСТ 10180-2012", "pages": 1, "file": "quality/beton_PI-14.pdf", "attested_by": {"by": "Иванов И.И.", "role": "инженер ПТО", "at": "2026-10-02"}},
+  {"kind": "сертификат", "number": "С-77", "issue_date": "2025-09-01", "valid_until": "2026-09-01", "material": "Мастика битумная", "batch": "п-3", "manufacturer": "ООО «СтройХим»", "standard": "ТР ТС 014/2011", "pages": 1, "file": "quality/mastika_S-77.pdf", "attested_by": {"by": "Петров П.П.", "role": "инженер ПТО", "at": "2026-10-03"}},
+  {"kind": "сертификат соответствия", "number": "С-77", "issue_date": "2025-09-01", "valid_until": "2026-09-01", "material": "Мастика битумная", "batch": "п-3", "manufacturer": "ООО «СтройХим»", "standard": "ТР ТС 014/2011", "pages": 1, "file": "quality/mastika_S-77_copy.pdf", "attested_by": {"by": "Петров П.П.", "role": "инженер ПТО", "at": "2026-10-03"}},
+  {"kind": "протокол испытаний", "number": "ПИ-9", "issue_date": "2026-09-25", "valid_until": "2026-11-30", "material": "Песок строительный", "batch": "п-11", "manufacturer": "ООО «Карьер»", "standard": "ГОСТ 8736-2014", "pages": 2, "file": "quality/pesok_PI-9.pdf", "attested_by": {"by": "Иванов И.И.", "role": "инженер ПТО", "at": "2026-10-04"}},
+  {"kind": "паспорт качества", "number": "П-3", "issue_date": "2026-09-20", "material": "Керамзит фр. 5-10", "batch": "п-11", "manufacturer": "ООО «Керамзит-Плюс»", "standard": "ГОСТ 9757-90", "pages": 1},
+  {"kind": "товарный чек", "number": "Ч-5", "issue_date": "2026-10-01", "material": "Сетка кладочная", "batch": "п-5", "manufacturer": "ИП Смирнов", "file": "quality/cheque_5.pdf"},
+  {"kind": "декларация о соответствии", "issue_date": "2026-09-10", "material": "Грунтовка глубокого проникновения", "batch": "п-1", "manufacturer": "ООО «Краски»", "file": "quality/grunt_EAC.pdf"},
+  {"kind": "паспорт качества", "number": "П-7", "issue_date": "2026-09-15", "material": "Арматура A500", "batch": "партия 7", "manufacturer": "ООО «МеталлТорг»", "standard": "ГОСТ 5781-82", "pages": 2, "file": "quality/armatura_P-7.pdf"}
+ ]
+}

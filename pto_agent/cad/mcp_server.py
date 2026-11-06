@@ -1834,6 +1834,102 @@ def t_journals(args, ctx):
     return payload
 
 
+@tool("quality_docs",
+      "Документы качества на материалы и оборудование: реестр с привязкой к партиям. "
+      "Документ проверяется по трём вещам: тот ли материал (наименование, марка, фракция), та ли "
+      "партия, действовал ли документ на дату применения. Тип документа вне рабочего перечня "
+      "(товарный чек, счёт) документом качества не считается; копия без отметки «копия верна» в "
+      "комплект не идёт. Состав требуемых документов берётся из файла требований (проект, "
+      "договор, ТУ) — агент его не выдумывает: нет требования, материал показывается как "
+      "«требование не заявлено». Стык с журналом входного контроля: допуск по документу, "
+      "которого нет в реестре, — ошибка. `action=sign` — подпись человека с ФИО и ролью, при "
+      "ошибках отказ.",
+      {"type": "object", "properties": {
+          "action": {"type": "string", "enum": ["build", "sign"], "default": "build"},
+          "documents": {"type": "array", "items": {"type": "object"},
+                        "description": "[{kind, number, issue_date, valid_until, material, "
+                                       "batch, manufacturer, standard, pages, file, "
+                                       "attested_by{by, role, at}}]"},
+          "documents_path": {"type": "string"},
+          "requirements": {"type": "array", "items": {"type": "object"},
+                           "description": "[{material, required: [типы документов], basis}]"},
+          "requirements_path": {"type": "string"},
+          "usage": {"type": "array", "items": {"type": "object"},
+                    "description": "применение партий: [{material, batch, qty, unit, "
+                                   "applied_from, applied_to}]"},
+          "usage_path": {"type": "string"},
+          "verification": {"type": "array", "items": {"type": "object"},
+                           "description": "записи журнала входного контроля (круг 7)"},
+          "verification_path": {"type": "string"},
+          "registry_path": {"type": "string", "description": "для sign: JSON реестра"},
+          "object_name": {"type": "string"}, "number": {"type": "string"},
+          "by": {"type": "string", "description": "ФИО (для sign)"},
+          "role": {"type": "string", "description": "должность (для sign)"},
+          "reason": {"type": "string"},
+          "out_dir": {"type": "string"}, "audit_path": {"type": "string"},
+          "format": {"type": "string", "enum": ["json", "markdown"], "default": "json"}},
+       "required": []})
+def t_quality_docs(args, ctx):
+    from ..quality_docs import build_registry, load_json, sign, to_markdown, write
+    base = Path(ctx.get("base_dir") or ".")
+    out_dir = Path(args.get("out_dir") or base / "out" / "quality")
+    audit = None
+    if args.get("audit_path"):
+        from ..audit import AuditLog
+        audit = AuditLog(Path(args["audit_path"]))
+
+    if (args.get("action") or "build") == "sign":
+        path = Path(_p(args, "registry_path"))
+        registry = json.loads(path.read_text(encoding="utf-8"))
+        registry = sign(registry, by=args.get("by") or "", role=args.get("role") or "",
+                        reason=args.get("reason") or "", audit_log=audit)
+        if registry.get("sign_problems"):
+            return {"ok": False, "error": "подпись не принята",
+                    "problems": registry["sign_problems"],
+                    "can_transfer": registry.get("can_transfer")}
+        files = write(registry, out_dir, stem=path.stem)
+        return {"ok": True, "kind": registry["schema"], "status": registry["status"],
+                "totals": registry["totals"], "confirmed_by": registry["confirmed_by"],
+                "can_transfer": registry["can_transfer"], "files": files,
+                "disclaimer": registry["disclaimer"]}
+
+    problems: list = []
+    documents = args.get("documents") or []
+    if not documents and args.get("documents_path"):
+        documents, problems = load_json(Path(_p(args, "documents_path")), "documents")
+    requirements = args.get("requirements") or []
+    if not requirements and args.get("requirements_path"):
+        more, extra = load_json(Path(_p(args, "requirements_path")), "requirements")
+        requirements, problems = more, problems + extra
+    usage = args.get("usage") or []
+    if not usage and args.get("usage_path"):
+        more, extra = load_json(Path(_p(args, "usage_path")), "usage")
+        usage, problems = more, problems + extra
+    verification = args.get("verification") or []
+    if not verification and args.get("verification_path"):
+        more, extra = load_json(Path(_p(args, "verification_path")), "records")
+        verification, problems = more, problems + extra
+
+    registry = build_registry(documents, object_name=args.get("object_name") or "",
+                              number=args.get("number") or "", requirements=requirements,
+                              usage=usage, verification=verification)
+    files = write(registry, out_dir)
+    if audit is not None:
+        audit.append("agent:quality", "agent", "quality.built",
+                     f"quality:{registry.get('number') or 'б/н'}",
+                     {"documents": registry["totals"]["documents"],
+                      "materials": registry["totals"]["materials"]})
+    payload = {"ok": registry["totals"]["errors"] == 0, "kind": registry["schema"],
+               "status": registry["status"], "totals": registry["totals"],
+               "documents": registry["documents"], "materials": registry["materials"],
+               "rejected": registry["rejected"], "checks": registry["checks"],
+               "can_transfer": registry["can_transfer"], "problems": problems,
+               "files": files, "disclaimer": registry["disclaimer"]}
+    if (args.get("format") or "json") == "markdown":
+        payload["markdown"] = to_markdown(registry)
+    return payload
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="pto_agent.cad.mcp_server",
                                  description="MCP-сервер CAD-модуля ИИ-агента ПТО")

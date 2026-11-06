@@ -12,7 +12,7 @@ import json
 
 # производные от содержания поля: вердикты и находки, а не сам документ
 SKIP_KEYS = ("confirmed_by", "status", "confirm_problems", "sign_problems", "registry",
-             "can_close", "problems", "checks")
+             "can_close", "can_transfer", "problems", "checks")
 
 
 def content_fingerprint(document: dict) -> str:

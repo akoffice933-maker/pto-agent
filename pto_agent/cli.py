@@ -1146,6 +1146,73 @@ def cmd_journal(args) -> int:
     return 2 if totals["errors"] else 0
 
 
+
+def cmd_quality(args) -> int:
+    """Документы качества на материалы: реестр, привязка к партиям, опись и подпись."""
+    from .journals import load_json
+    from .quality_docs import (build_registry, load_json as load_list, sign, to_markdown, write)
+
+    out_dir = Path(args.out)
+    audit = AuditLog(out_dir / "audit.jsonl") if getattr(args, "audit", None) else None
+    action = args.quality_action
+
+    if action == "sign":
+        path = Path(args.registry)
+        registry = json.loads(path.read_text(encoding="utf-8"))
+        registry = sign(registry, by=args.by, role=args.role, reason=args.reason or "",
+                        audit_log=audit)
+        if registry.get("sign_problems"):
+            print("   ПОДПИСЬ НЕ ПРИНЯТА:")
+            for problem in registry["sign_problems"]:
+                print(f"     ✗ {problem}")
+            return 2
+        files = write(registry, out_dir, stem=path.stem)
+        print(f"подписал: {args.by} ({args.role}) · статус: {registry['status']}")
+        close = registry["can_transfer"]
+        print("  комплект можно передавать" if close["allowed"] else
+              "  передавать нельзя: " + "; ".join(close["reasons"]))
+        print(f"  файлы: {files['json']}, {files['docx']}")
+        return 0
+
+    documents, problems = load_list(Path(args.documents), "documents")
+    requirements: list[dict] = []
+    if getattr(args, "requirements", None):
+        requirements, more = load_list(Path(args.requirements), "requirements")
+        problems += more
+    usage: list[dict] = []
+    if getattr(args, "usage", None):
+        usage, more = load_list(Path(args.usage), "usage")
+        problems += more
+    verification: list[dict] = []
+    if getattr(args, "verification", None):
+        verification, more = load_json(Path(args.verification), "records")
+        problems += more
+    for problem in problems:
+        print(f"   ⚠ {problem}")
+
+    registry = build_registry(documents, object_name=args.object_name or "",
+                              number=args.number or "", requirements=requirements,
+                              usage=usage, verification=verification)
+    files = write(registry, out_dir)
+    totals = registry["totals"]
+    print(f"{registry['title']}: {registry['object_name'] or 'объект не указан'}")
+    print(f"  документов: {totals['documents']} · отклонено: {totals['rejected']} · "
+          f"материалов: {totals['materials']} · партий с документом: "
+          f"{totals['covered_batches']} из {totals['batches']}")
+    for card in registry["materials"]:
+        print(f"  {card['material']}: {card['status']}"
+              + (f" · не хватает: {', '.join(card['missing'])}" if card["missing"] else ""))
+    for check in registry["checks"]:
+        mark = "✗" if check["level"] == "error" else "⚠"
+        print(f"  {mark} {check['code']}: {check['message']}")
+    print("  статус: " + registry["status"])
+    for reason in registry["can_transfer"]["reasons"]:
+        print(f"     · {reason}")
+    print(f"  файлы: {files['json']}, {files['markdown']}, {files['xlsx']}, {files['docx']}")
+    print("  комплект закрывает человек: агент проверяет полноту, партии и сроки")
+    return 2 if totals["errors"] else 0
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     # подкоманды CAD и MCP живут в своих пакетах: делегируем до разбора argparse,
@@ -1236,6 +1303,28 @@ def main(argv=None):
     mtr.add_argument("--act", nargs="*", default=[], help="материалы КС-2 построчно (csv, xlsx)")
     mtr.add_argument("--object-name", default="")
     mtr.set_defaults(func=cmd_materials)
+
+    qua = sub.add_parser("quality",
+                         help="документы качества на материалы: реестр, привязка к партиям, опись")
+    qua.add_argument("--out", default="out/quality")
+    qua.add_argument("--audit", default=None)
+    quasub = qua.add_subparsers(dest="quality_action", required=True)
+    quab = quasub.add_parser("build", help="собрать реестр документов качества")
+    quab.add_argument("--documents", required=True, help="JSON документов качества")
+    quab.add_argument("--requirements", default=None,
+                      help="JSON требований к составу документов по материалам")
+    quab.add_argument("--usage", default=None, help="JSON применения материалов по партиям")
+    quab.add_argument("--verification", default=None,
+                      help="журнал входного контроля (JSON) для стыка с кругом 7")
+    quab.add_argument("--object-name", default="")
+    quab.add_argument("--number", default="")
+    quab.set_defaults(func=cmd_quality)
+    quas = quasub.add_parser("sign", help="подписать комплект (ФИО и роль обязательны)")
+    quas.add_argument("--registry", required=True)
+    quas.add_argument("--by", required=True)
+    quas.add_argument("--role", required=True)
+    quas.add_argument("--reason", default="")
+    quas.set_defaults(func=cmd_quality)
 
     jrn = sub.add_parser("journal",
                          help="общий журнал работ и журнал верификации закупленной продукции")
@@ -1503,6 +1592,6 @@ def main(argv=None):
     result = args.func(args)
     if args.cmd in ("audit-verify", "approve", "prices", "materials", "procure", "audit",
                     "takeoff", "tk", "cumulative", "atn", "consumption", "checklist",
-                    "journal"):
+                    "journal", "quality"):
         return result
     return 0
