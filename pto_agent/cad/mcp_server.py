@@ -1562,6 +1562,82 @@ def t_atn_draft(args, ctx):
     return payload
 
 
+@tool("consumption_report",
+      "Материалы в цифрах: потребность по нормам расхода (объём работ × норма), списание по "
+      "актам против нормы, лимит закупки против факта, давальческие материалы. Норма без "
+      "документа, пункта и редакции НЕ применяется; норма с источником сверяется с нормативной "
+      "базой, и если документа в базе нет — расчёт идёт как «справочный» и в подтверждённый итог "
+      "не входит, пока норму не примет человек (`confirm_norms` + ФИО и роль). Перерасход без "
+      "причины — ошибка, списание без нормы не проверяется вообще, нет цены — лимит в деньгах не "
+      "считается (не ноль). Давальческий материал, попавший и в собственные закупки, — двойной "
+      "счёт. Закупку и списание решает человек: агент считает и показывает расхождения.",
+      {"type": "object", "properties": {
+          "works_path": {"type": "string", "description": "ведомость объёмов работ (JSON)"},
+          "norms_path": {"type": "string", "description": "нормы расхода (JSON, с источником)"},
+          "writeoffs_path": {"type": "string", "description": "списание по актам (xlsx, csv)"},
+          "purchases_path": {"type": "string", "description": "закупки (xlsx, csv)"},
+          "daval_path": {"type": "string", "description": "давальческие материалы (xlsx, csv)"},
+          "object_name": {"type": "string"},
+          "norms_dir": {"type": "string", "description": "каталог нормативной базы для сверки"},
+          "confirm_norms": {"type": "boolean", "default": False,
+                            "description": "true — нормы приняты человеком (нужны by и role)"},
+          "by": {"type": "string", "description": "ФИО того, кто принял нормы"},
+          "role": {"type": "string", "description": "должность"},
+          "out_dir": {"type": "string"}, "audit_path": {"type": "string"},
+          "format": {"type": "string", "enum": ["json", "markdown"], "default": "json"}},
+       "required": ["works_path", "norms_path"]})
+def t_consumption_report(args, ctx):
+    from ..consumption import build_report, load_json, load_table, to_markdown, write
+    base = Path(ctx.get("base_dir") or ".")
+    out_dir = Path(args.get("out_dir") or base / "out" / "consumption")
+
+    works, problems = load_json(Path(_p(args, "works_path")), "works")
+    norms, norm_problems = load_json(Path(_p(args, "norms_path")), "norms")
+    problems += norm_problems
+    if problems:
+        return {"ok": False, "error": "входные данные не прочитаны", "problems": problems}
+
+    writeoffs, p1 = (load_table(Path(_p(args, "writeoffs_path")), "writeoff")
+                     if args.get("writeoffs_path") else ([], []))
+    purchases, p2 = (load_table(Path(_p(args, "purchases_path")), "purchase")
+                     if args.get("purchases_path") else ([], []))
+    daval, p3 = (load_table(Path(_p(args, "daval_path")), "daval")
+                 if args.get("daval_path") else ([], []))
+    problems += p1 + p2 + p3
+
+    confirm = bool(args.get("confirm_norms"))
+    by, role = args.get("by") or "", args.get("role") or ""
+    if confirm and not (by.strip() and role.strip()):
+        return {"ok": False, "error": "принятие норм без человека не принимается",
+                "problems": ["confirm_norms требует ФИО (by) и роли (role): норму принимает "
+                             "человек, а не агент"]}
+
+    report = build_report(works, norms, writeoffs=writeoffs, purchases=purchases, daval=daval,
+                          object_name=args.get("object_name") or "",
+                          folder=args.get("norms_dir") or None,
+                          confirmed_by=by, role=role, confirm_norms=confirm)
+    files = write(report, out_dir)
+    if args.get("audit_path"):
+        from ..audit import AuditLog
+        AuditLog(Path(args["audit_path"])).append(
+            "agent:materials", "agent", "materials.consumption_built",
+            f"object:{report['object_name'] or 'без объекта'}",
+            {"need_confirmed_rub": report["totals"]["need_confirmed_rub"],
+             "over_norms": report["totals"]["over_norms"],
+             "over_limit": report["totals"]["over_limit"],
+             "norms_confirmed_by": (report["norm_confirmation"] or {}).get("by")})
+    payload = {"ok": not report["totals"]["errors"], "object_name": report["object_name"],
+               "norms": report["norms"], "totals": report["totals"],
+               "need": report["need"], "writeoff": report["writeoff"],
+               "limits": report["limits"], "daval": report["daval"],
+               "checks": report["checks"], "problems": problems,
+               "norm_confirmation": report["norm_confirmation"], "files": files,
+               "disclaimer": report["disclaimer"]}
+    if (args.get("format") or "json") == "markdown":
+        payload["markdown"] = to_markdown(report)
+    return payload
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="pto_agent.cad.mcp_server",
                                  description="MCP-сервер CAD-модуля ИИ-агента ПТО")

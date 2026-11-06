@@ -931,6 +931,61 @@ def cmd_atn(args) -> int:
     return 2 if (totals["needs_basis"] or totals["no_price"] or totals["rejected"]) else 0
 
 
+
+def cmd_consumption(args) -> int:
+    """Материалы: потребность по нормам, списание, лимит закупки, давальческие."""
+    from .consumption import build_report, load_json, load_table, write
+
+    out_dir = Path(args.out)
+    audit = AuditLog(out_dir / "audit.jsonl") if getattr(args, "audit", None) else None
+    if bool(args.confirm_norms) != bool(args.by and args.role):
+        if args.confirm_norms:
+            print("   ✗ --confirm-norms требует --by и --role: норму принимает человек, "
+                  "а не агент", file=sys.stderr)
+            return 2
+
+    works, problems = load_json(Path(args.works), "works")
+    norms, norm_problems = load_json(Path(args.norms), "norms")
+    problems += norm_problems
+    writeoffs, p1 = (load_table(Path(args.writeoffs), "writeoff") if args.writeoffs else ([], []))
+    purchases, p2 = (load_table(Path(args.purchases), "purchase") if args.purchases else ([], []))
+    daval, p3 = (load_table(Path(args.daval), "daval") if args.daval else ([], []))
+    problems += p1 + p2 + p3
+    for problem in problems:
+        print(f"   ⚠ {problem}")
+
+    report = build_report(works, norms, writeoffs=writeoffs, purchases=purchases, daval=daval,
+                          object_name=args.object_name or "", folder=getattr(args, "norms_dir", None),
+                          confirmed_by=args.by or "", role=args.role or "",
+                          confirm_norms=bool(args.confirm_norms))
+    files = write(report, out_dir)
+    totals = report["totals"]
+    norms_total = report["norms"]
+
+    print(f"материалы: {report['object_name'] or 'объект не указан'} · позиций {totals['materials']} · "
+          f"норм применено {norms_total['applied']} из {norms_total['total']} "
+          f"(без источника {norms_total['no_source']}, источник не подтверждён "
+          f"{norms_total['unverified']})")
+    print(f"  потребность: подтверждённая {totals['need_confirmed_rub']:,.2f} ₽ · "
+          f"справочная {totals['need_reference_rub']:,.2f} ₽")
+    if report["norm_confirmation"]:
+        who = report["norm_confirmation"]
+        print(f"  нормы приняты для расчёта человеком: {who['by']} ({who['role']})")
+    for check in report["checks"]:
+        mark = "✗" if check["level"] == "error" else "⚠"
+        print(f"  {mark} {check['code']}: {check['message']}")
+    print(f"  файлы: {files['json']}, {files['markdown']}, {files['xlsx']}")
+    print("  отчёт считает потребность по нормам; закупку и списание решает человек")
+    if audit is not None:
+        audit.append("agent:materials", "agent", "materials.consumption_built",
+                     f"object:{report['object_name'] or 'без объекта'}",
+                     {"need_confirmed_rub": totals["need_confirmed_rub"],
+                      "over_norms": totals["over_norms"], "over_limit": totals["over_limit"],
+                      "errors": totals["errors"],
+                      "norms_confirmed_by": (report["norm_confirmation"] or {}).get("by")})
+    return 2 if totals["errors"] else 0
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     # подкоманды CAD и MCP живут в своих пакетах: делегируем до разбора argparse,
@@ -1021,6 +1076,23 @@ def main(argv=None):
     mtr.add_argument("--act", nargs="*", default=[], help="материалы КС-2 построчно (csv, xlsx)")
     mtr.add_argument("--object-name", default="")
     mtr.set_defaults(func=cmd_materials)
+
+    cons = sub.add_parser("consumption",
+                          help="материалы: потребность по нормам, списание, лимит, давальческие")
+    cons.add_argument("--works", required=True, help="ведомость объёмов работ (JSON)")
+    cons.add_argument("--norms", required=True, help="нормы расхода (JSON, с источником)")
+    cons.add_argument("--writeoffs", default=None, help="списание по актам (xlsx, csv)")
+    cons.add_argument("--purchases", default=None, help="закупки: лимит против факта (xlsx, csv)")
+    cons.add_argument("--daval", default=None, help="давальческие материалы (xlsx, csv)")
+    cons.add_argument("--object-name", default="")
+    cons.add_argument("--norms-dir", default=None, help="каталог нормативной базы для сверки")
+    cons.add_argument("--confirm-norms", action="store_true",
+                      help="человек принял нормы для расчёта (нужны --by и --role)")
+    cons.add_argument("--by", default="", help="ФИО того, кто принял нормы")
+    cons.add_argument("--role", default="", help="должность того, кто принял нормы")
+    cons.add_argument("--out", default="out/consumption")
+    cons.add_argument("--audit", default=None)
+    cons.set_defaults(func=cmd_consumption)
 
     cum = sub.add_parser("cumulative",
                          help="накопительная ведомость выполненных работ (нарастающим итогом)")
@@ -1218,6 +1290,6 @@ def main(argv=None):
     args = p.parse_args(argv)
     result = args.func(args)
     if args.cmd in ("audit-verify", "approve", "prices", "materials", "procure", "audit",
-                    "takeoff", "tk", "cumulative", "atn"):
+                    "takeoff", "tk", "cumulative", "atn", "consumption"):
         return result
     return 0
