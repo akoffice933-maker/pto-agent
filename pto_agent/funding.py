@@ -594,7 +594,7 @@ def write(plan: dict, out_dir: str | Path) -> dict:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     tail = str(plan.get("name") or "график")
-    for bad in (" ", "/", ",", "«", "»", '"', "\\"):
+    for bad in (" ", "/", ",", ":", "«", "»", '"', "\\"):
         tail = tail.replace(bad, "_" if bad == " " else "-")
     tail = tail.strip("_-")[:40] or "график"
     (out / f"funding_{tail}.json").write_text(json.dumps(plan, ensure_ascii=False, indent=1),

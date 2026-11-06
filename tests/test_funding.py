@@ -309,7 +309,7 @@ def test_mcp_funding_plan_is_designed():
     assert "config" in tool["inputSchema"]["properties"]
     schema = json.loads((ROOT / "prompts" / "tools_schema.json").read_text(encoding="utf-8"))
     designed = next(t for t in schema["tools"] if t["name"] == "funding_plan")
-    assert schema["version"] == "2.6.0"
+    assert schema["version"] == "2.7.0"
     assert any("не заявлена" in g for g in designed["guardrails"])
 
 

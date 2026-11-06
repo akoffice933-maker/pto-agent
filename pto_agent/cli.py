@@ -1470,6 +1470,62 @@ def cmd_funding(args) -> int:
     return 0 if not totals["errors"] else 2
 
 
+def cmd_monthly(args) -> int:
+    """Месячный план: работы месяца, нужные документы, что готово к предъявлению."""
+    from .monthly import build_plan
+
+    def money(value) -> str:
+        return "не оценено" if value is None else f"{value:,.2f} ₽".replace(",", " ")
+
+    out_dir = Path(args.out)
+    config = json.loads(Path(args.config).read_text(encoding="utf-8"))
+    base = Path(args.base_dir or ".")
+    plan = build_plan(config, base_dir=base, out_dir=out_dir)
+    files = plan["files"]
+    totals = plan["totals"]
+    print(f"{plan['title']}: {plan['name']} · на {plan['built_at']}")
+    if plan.get("matrix"):
+        profile = plan["matrix"]["profile"]
+        print(f"  требования: матрица «{profile.get('name')}» v{profile.get('version')}, "
+              f"{plan['matrix']['work_types']} видов работ")
+    print(f"  актов: {totals['acts']} · видов работ: {totals['works']} · готово: "
+          f"{totals['ready']} · не готово: {totals['not_ready']} · без требований в матрице: "
+          f"{totals['no_requirements']}")
+    print(f"  документов нужно: {totals['docs_required']} · не хватает: "
+          f"{totals['docs_missing']} · без подписи: {totals['docs_unsigned']}")
+    print(f"  ГОТОВО К ПРЕДЪЯВЛЕНИЮ: {money(totals['money_ready_rub'])} · держит документ: "
+          f"{money(totals['money_waiting_rub'])}")
+    for act in plan["acts"]:
+        deadline = act["submission_deadline"] or "срок не заявлен"
+        if act.get("days_to_deadline") is not None:
+            days = act["days_to_deadline"]
+            deadline += f" (просрочен {-days} дн.)" if days < 0 else f" (осталось {days} дн.)"
+        print(f"  {act['act_id']} · {act.get('object') or 'объект не указан'} · "
+              f"{money(act['amount_rub'])} · срок: {deadline}")
+        for work in act["works"]:
+            mark = {"готово к предъявлению": "✓", "не готово": "✗",
+                    "требований в матрице нет": "–"}.get(work["status"], "?")
+            gaps = len(work["missing"]) + len(work["unsigned"])
+            print(f"    {mark} {work['name'][:44]:46} {money(work['amount_rub']):>16}  "
+                  f"{work['status']}" + (f" · не хватает {gaps}" if gaps else ""))
+    if plan["actions"]:
+        print("  что сделать в первую очередь:")
+        for action in plan["actions"][:8]:
+            print(f"     · {action['what']}: {action['document'][:58]} — {action['work'][:34]} "
+                  f"({money(action['rub'])})")
+    blockers = [c for c in plan["checks"] if c["level"] == "error"]
+    for check in blockers[:12]:
+        print(f"  ✗ {check['code']}: {check['message'][:120]}")
+    if len(blockers) > 12:
+        print(f"  … ещё блокеров: {len(blockers) - 12} (полный список — в monthly_*.json)")
+    for check in [c for c in plan["checks"] if c["level"] == "warning"]:
+        print(f"  ⚠ {check['code']}: {check['message'][:120]}")
+    print("  вердикт: " + plan["verdict"]["summary"])
+    print(f"  файлы: {files['json']}, {files['markdown']}, {files['xlsx']}, {files['docx']}")
+    print("  требования — из матрицы, наличие — из переданных документов; подписи ставит человек")
+    return 0 if plan["verdict"]["ready_to_invoice"] else 2
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     # подкоманды CAD и MCP живут в своих пакетах: делегируем до разбора argparse,
@@ -1582,6 +1638,15 @@ def main(argv=None):
     finp = finsub.add_parser("plan", help="свести график платежей с портфелем комплектов")
     finp.add_argument("--config", required=True, help="JSON: график, договор, портфель")
     finp.set_defaults(func=cmd_funding)
+
+    mon = sub.add_parser("monthly",
+                         help="месячный план: работы, нужные документы, что готово к предъявлению")
+    mon.add_argument("--out", default="out/monthly")
+    mon.add_argument("--base-dir", default=".")
+    monsub = mon.add_subparsers(dest="monthly_action", required=True)
+    monp = monsub.add_parser("plan", help="собрать план месяца по актам и документам")
+    monp.add_argument("--config", required=True, help="JSON: месяц, акты, позиции, документы")
+    monp.set_defaults(func=cmd_monthly)
 
     dfl = sub.add_parser("docflow",
                          help="РД «В производство работ» и согласование ИД до подписи")
@@ -1916,6 +1981,7 @@ def main(argv=None):
     result = args.func(args)
     if args.cmd in ("audit-verify", "approve", "prices", "materials", "procure", "audit",
                     "takeoff", "tk", "cumulative", "atn", "consumption", "checklist",
-                    "journal", "quality", "docflow", "correspondence", "pack", "finance"):
+                    "journal", "quality", "docflow", "correspondence", "pack", "finance",
+                    "monthly"):
         return result
     return 0

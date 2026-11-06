@@ -602,7 +602,7 @@ def write(portfolio: dict, out_dir: str | Path) -> dict:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     tail = str(portfolio.get("name") or "портфель")
-    for bad in (" ", "/", ",", "«", "»", '"', "\\"):
+    for bad in (" ", "/", ",", ":", "«", "»", '"', "\\"):
         tail = tail.replace(bad, "_" if bad == " " else "-")
     tail = tail.strip("_-")[:40] or "портфель"
     (out / f"portfolio_{tail}.json").write_text(
