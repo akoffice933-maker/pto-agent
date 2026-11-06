@@ -28,6 +28,7 @@ from pathlib import Path
 from .asbuilt.requirements import (classify_work, get_work_type, hidden_work,
                                    work_type_requirements)
 from .norms import load_norms
+from .fingerprint import content_fingerprint as _fingerprint
 
 SCHEMA = "pto-agent/tk-draft@1"
 DEFAULT_MATRIX_NORMS_DIR = Path(__file__).resolve().parents[1] / "data" / "norms"
@@ -655,20 +656,8 @@ def _slug(text: str) -> str:
 
 
 def content_fingerprint(draft: dict) -> str:
-    """Отпечаток содержания черновика — без статуса и без отметки о проверке.
-
-    Нужен реестру: если после подтверждения кто-то поправил разделы, отпечаток изменится,
-    и проверка перестанет считаться действительной.
-    """
-    import hashlib
-
-    # служебные поля (статус, отметка о проверке, служебные ключи вида `_path`) в отпечаток
-    # не входят: они не про содержание документа
-    body = {k: v for k, v in draft.items()
-            if not k.startswith("_")
-            and k not in ("confirmed_by", "status", "confirm_problems", "registry")}
-    payload = json.dumps(body, ensure_ascii=False, sort_keys=True, default=str)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+    """Отпечаток содержания черновика — общая функция проекта (`fingerprint.py`)."""
+    return _fingerprint(draft)
 
 
 def write(draft: dict, out_dir: str | Path, *, stem: str | None = None) -> dict:

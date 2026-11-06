@@ -45,13 +45,15 @@ jobs:
         run: python scripts/check_tk_all_work_types.py
       - name: Реестр ТК (файлы не затираются, подпись не переживает правку, нет «готово»)
         run: python scripts/check_tk_registry.py
+      - name: Ведомость и АТН (сумма акта ≠ сумма позиций, АТН только с основанием и ценой)
+        run: python scripts/check_cumulative_atn.py
       - name: Тесты
         run: pytest tests -q
       - name: MCP-сервер отвечает по stdio
         run: |
           echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
             | python -m pto_agent.mcp_server --base-dir . \
-            | python -c "import json,sys; d=json.load(sys.stdin); n=len(d['result']['tools']); print('инструментов:', n); sys.exit(0 if n==24 else 1)"
+            | python -c "import json,sys; d=json.load(sys.stdin); n=len(d['result']['tools']); print('инструментов:', n); sys.exit(0 if n==26 else 1)"
 
   # Полный прогон: выпуск, деньги, портфель актов, дашборд — и все тесты на реальных артефактах.
   e2e:

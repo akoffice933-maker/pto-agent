@@ -831,6 +831,106 @@ def cmd_tk(args) -> int:
     return 0
 
 
+
+def cmd_cumulative(args) -> int:
+    """Накопительная ведомость выполненных работ: нарастающим итогом по актам."""
+    from .cumulative import build_ledger, load_acts, load_estimate, write
+
+    out_dir = Path(args.out)
+    acts_data, problems = load_acts(Path(args.acts))
+    if problems:
+        for problem in problems:
+            print(f"   ✗ {problem}", file=sys.stderr)
+        return 2
+    estimate = load_estimate(Path(args.estimate)) if args.estimate else {}
+    ledger = build_ledger(acts_data, estimate=estimate)
+    files = write(ledger, out_dir)
+    totals = ledger["totals"]
+
+    print(f"накопительная ведомость: {ledger['object'] or 'объект не указан'} · "
+          f"актов {totals['acts']} · периодов {totals['periods']} · позиций {totals['rows']}")
+    print(f"  сумма актов {totals['amount_acts_rub']:,.2f} ₽ · сумма по позициям "
+          f"{totals['amount_positions_rub']:,.2f} ₽ · расхождение "
+          f"{totals['difference_rub']:,.2f} ₽")
+    for check in ledger["checks"]:
+        mark = "✗" if check["level"] == "error" else "⚠"
+        print(f"  {mark} {check['code']}: {check['message']}")
+    print(f"  файлы: {files['json']}, {files['markdown']}, {files['xlsx']}")
+    if totals["errors"]:
+        return 2
+    if args.strict and totals["warnings"]:
+        print(f"  ⚠ --strict: предупреждений {totals['warnings']}")
+        return 2
+    return 0
+
+
+def cmd_atn(args) -> int:
+    """АТН: акт на вновь возникающие и дополнительные работы (только с основанием)."""
+    from .atn import build_atn, confirm as confirm_atn, to_markdown, write
+    from .cumulative import build_ledger, load_acts, load_estimate
+
+    out_dir = Path(args.out)
+    audit = AuditLog(out_dir / "audit.jsonl") if getattr(args, "audit", None) else None
+
+    if getattr(args, "atn_action", None) == "confirm":
+        path = Path(args.atn)
+        atn = json.loads(path.read_text(encoding="utf-8"))
+        atn = confirm_atn(atn, by=args.by, role=args.role, reason=args.reason, audit_log=audit)
+        if atn.get("confirm_problems"):
+            print("   ОСТАНОВЛЕНО:", "; ".join(atn["confirm_problems"]))
+            return 2
+        files = write(atn, out_dir, stem=path.stem.replace("atn_", ""))
+        print(f"проверено человеком: {args.by} ({args.role}) · позиций "
+              f"{atn['confirmed_by']['positions']} · к предъявлению "
+              f"{atn['totals']['to_claim_rub']:,.2f} ₽")
+        print(f"   статус: {atn['status']}")
+        print(f"  файлы: {files['json']}, {files['docx']}")
+        return 0
+
+    items_path = Path(args.items)
+    try:
+        items = json.loads(items_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        print(f"   ✗ {items_path.name}: не читается ({exc.__class__.__name__})", file=sys.stderr)
+        return 2
+    if isinstance(items, dict):
+        items = items.get("items") or items.get("positions") or []
+
+    ledger = {}
+    if getattr(args, "acts", None):
+        acts_data, problems = load_acts(Path(args.acts))
+        for problem in problems:
+            print(f"   ⚠ {problem}")
+        if acts_data:
+            ledger = build_ledger(acts_data,
+                                  estimate=load_estimate(Path(args.estimate))
+                                  if getattr(args, "estimate", None) else {})
+    estimate = load_estimate(Path(args.estimate)) if getattr(args, "estimate", None) else {}
+
+    atn = build_atn(items, number=args.number, object_name=args.object_name or "",
+                    contract=args.contract or "", customer=args.customer or "",
+                    contractor=args.contractor or "", ledger=ledger, estimate=estimate,
+                    reason=args.reason or "")
+    files = write(atn, out_dir)
+    totals = atn["totals"]
+    print(f"АТН {atn['number'] or 'б/н'}: {atn['object_name'] or 'объект не указан'}")
+    print(f"  к предъявлению {totals['to_claim_rub']:,.2f} ₽ по {totals['included']} позициям")
+    for key, mark in (("needs_basis", "⚠"), ("no_price", "⚠"), ("rejected", "✗")):
+        for row in atn[key]:
+            print(f"  {mark} {key}: {row.get('code') or row.get('name') or '—'} — "
+                  f"{row.get('why')}")
+    if totals["needs_basis"]:
+        print(f"  требует основания: {totals['needs_basis']} поз. на "
+              f"{totals['needs_basis_rub']:,.2f} ₽ — в акт не вошли")
+    print(f"  файлы: {files['json']}, {files['docx']}")
+    print("  это черновик: акт подписывают заказчик и подрядчик, агент его не согласовывает")
+    if audit is not None:
+        audit.append("agent:atn", "agent", "atn.draft_built", f"atn:{atn['number'] or 'б/н'}",
+                     {"to_claim_rub": totals["to_claim_rub"], "included": totals["included"],
+                      "needs_basis": totals["needs_basis"]})
+    return 2 if (totals["needs_basis"] or totals["no_price"] or totals["rejected"]) else 0
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     # подкоманды CAD и MCP живут в своих пакетах: делегируем до разбора argparse,
@@ -921,6 +1021,38 @@ def main(argv=None):
     mtr.add_argument("--act", nargs="*", default=[], help="материалы КС-2 построчно (csv, xlsx)")
     mtr.add_argument("--object-name", default="")
     mtr.set_defaults(func=cmd_materials)
+
+    cum = sub.add_parser("cumulative",
+                         help="накопительная ведомость выполненных работ (нарастающим итогом)")
+    cum.add_argument("--acts", required=True, help="реестр актов объекта (acts.json)")
+    cum.add_argument("--estimate", default=None, help="смета (xlsx): остаток и цены по коду")
+    cum.add_argument("--out", default="out/cumulative")
+    cum.add_argument("--strict", action="store_true",
+                     help="код 2 и при предупреждениях, не только при ошибках")
+    cum.set_defaults(func=cmd_cumulative)
+
+    atn = sub.add_parser("atn", help="акт на вновь возникающие и дополнительные работы")
+    atn.add_argument("--out", default="out/atn")
+    atn.add_argument("--audit", default=None)
+    atnsub = atn.add_subparsers(dest="atn_action", required=True)
+    atnd = atnsub.add_parser("draft", help="собрать черновик АТН из позиций с основаниями")
+    atnd.add_argument("--items", required=True,
+                      help="JSON позиций: [{code, name, unit, qty, price, basis{kind, ref}}]")
+    atnd.add_argument("--acts", default=None, help="реестр актов: что уже предъявлено")
+    atnd.add_argument("--estimate", default=None, help="смета: цена и остаток по коду")
+    atnd.add_argument("--number", default="", help="номер акта")
+    atnd.add_argument("--object-name", default="")
+    atnd.add_argument("--contract", default="")
+    atnd.add_argument("--customer", default="")
+    atnd.add_argument("--contractor", default="")
+    atnd.add_argument("--reason", default="", help="основание выпуска акта")
+    atnd.set_defaults(func=cmd_atn)
+    atnc = atnsub.add_parser("confirm", help="отметить проверку человеком (ФИО и роль)")
+    atnc.add_argument("--atn", required=True, help="JSON черновика АТН")
+    atnc.add_argument("--by", required=True)
+    atnc.add_argument("--role", required=True)
+    atnc.add_argument("--reason", default="")
+    atnc.set_defaults(func=cmd_atn)
 
     tkc = sub.add_parser("tk", help="черновик технологической карты или ППР (без выдуманных норм)")
     tkc.add_argument("--out", default="out/tk")
@@ -1086,6 +1218,6 @@ def main(argv=None):
     args = p.parse_args(argv)
     result = args.func(args)
     if args.cmd in ("audit-verify", "approve", "prices", "materials", "procure", "audit",
-                    "takeoff", "tk"):
+                    "takeoff", "tk", "cumulative", "atn"):
         return result
     return 0

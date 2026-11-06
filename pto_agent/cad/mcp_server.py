@@ -1441,6 +1441,127 @@ def t_tk_registry(args, ctx):
     return payload
 
 
+@tool("cumulative_ledger",
+      "Накопительная ведомость выполненных работ: по позициям (код, наименование, единица) "
+      "количество и сумма по периодам, итог нарастающим итогом с начала работ и остаток к "
+      "смете. Проверяет то, что обычно прячется: сумма акта против суммы позиций, дубль акта, "
+      "одна позиция в двух актах одного периода, разные единицы под одним кодом, отрицательные "
+      "строки (сторно), позиции вне сметы и превышение сметы. Числа разбираются строго: `nan` "
+      "и мусор не становятся нулём, а попадают в проверки. Ведомость показывает предъявленное "
+      "и не подтверждает объёмы.",
+      {"type": "object", "properties": {
+          "acts_path": {"type": "string", "description": "реестр актов объекта (acts.json)"},
+          "estimate_path": {"type": "string", "description": "смета (xlsx): остаток и цены"},
+          "out_dir": {"type": "string"},
+          "format": {"type": "string", "enum": ["json", "markdown"], "default": "json"}},
+       "required": ["acts_path"]})
+def t_cumulative_ledger(args, ctx):
+    from ..cumulative import build_ledger, load_acts, load_estimate, to_markdown, write
+    base = Path(ctx.get("base_dir") or ".")
+    out_dir = Path(args.get("out_dir") or base / "out" / "cumulative")
+    acts_data, problems = load_acts(Path(_p(args, "acts_path")))
+    if problems:
+        return {"ok": False, "error": "акты не прочитаны", "problems": problems}
+    estimate = load_estimate(Path(_p(args, "estimate_path"))) if args.get("estimate_path") else {}
+    ledger = build_ledger(acts_data, estimate=estimate)
+    files = write(ledger, out_dir)
+    payload = {"ok": not ledger["totals"]["errors"], "object": ledger["object"],
+               "contract": ledger["contract"], "periods": ledger["periods"],
+               "totals": ledger["totals"], "rows": ledger["rows"], "acts": ledger["acts"],
+               "checks": ledger["checks"], "files": files,
+               "disclaimer": ledger["disclaimer"]}
+    if (args.get("format") or "json") == "markdown":
+        payload["markdown"] = to_markdown(ledger)
+    return payload
+
+
+@tool("atn_draft",
+      "Акт на вновь возникающие и дополнительные работы (АТН): собирает позиции, у которых есть "
+      "ОСНОВАНИЕ (лист РД, исполнительная схема, письмо, задание заказчика, протокол, расчёт) и "
+      "цена. Позиция без основания в акт не попадает — она уходит в `needs_basis` со своей "
+      "суммой; без цены — в `no_price` (сумма не считается, а не ноль рублей); количество не "
+      "число или ≤ 0 — в `rejected`. Повтор позиции в одном акте не считается дважды. "
+      "`action=confirm` принимает только ФИО и роль человека; статус после этого «проверен "
+      "инженером (не подписан заказчиком)» — акт подписывают заказчик и подрядчик.",
+      {"type": "object", "properties": {
+          "action": {"type": "string", "enum": ["draft", "confirm"], "default": "draft"},
+          "items": {"type": "array", "items": {"type": "object"},
+                    "description": "позиции: {code, name, unit, qty, price, "
+                                   "basis:{kind, ref, date}}"},
+          "items_path": {"type": "string", "description": "JSON позиций вместо items"},
+          "acts_path": {"type": "string", "description": "реестр актов: что уже предъявлено"},
+          "estimate_path": {"type": "string", "description": "смета: цена и остаток по коду"},
+          "number": {"type": "string"}, "object_name": {"type": "string"},
+          "contract": {"type": "string"}, "customer": {"type": "string"},
+          "contractor": {"type": "string"}, "reason": {"type": "string"},
+          "atn_path": {"type": "string", "description": "для confirm: JSON черновика АТН"},
+          "by": {"type": "string", "description": "ФИО проверившего (для confirm)"},
+          "role": {"type": "string", "description": "должность (для confirm)"},
+          "out_dir": {"type": "string"}, "audit_path": {"type": "string"},
+          "format": {"type": "string", "enum": ["json", "markdown"], "default": "json"}},
+       "required": []})
+def t_atn_draft(args, ctx):
+    from ..atn import build_atn, confirm as confirm_atn, to_markdown, write
+    from ..cumulative import build_ledger, load_acts, load_estimate
+    base = Path(ctx.get("base_dir") or ".")
+    out_dir = Path(args.get("out_dir") or base / "out" / "atn")
+    audit = None
+    if args.get("audit_path"):
+        from ..audit import AuditLog
+        audit = AuditLog(Path(_p(args, "audit_path")))
+    action = args.get("action") or "draft"
+
+    if action == "confirm":
+        path = Path(_p(args, "atn_path"))
+        atn = json.loads(path.read_text(encoding="utf-8"))
+        atn = confirm_atn(atn, by=args.get("by") or "", role=args.get("role") or "",
+                          reason=args.get("reason") or "", audit_log=audit)
+        if atn.get("confirm_problems"):
+            return {"ok": False, "error": "подтверждение не принято",
+                    "problems": atn["confirm_problems"]}
+        files = write(atn, out_dir, stem=path.stem.replace("atn_", ""))
+        return {"ok": True, "status": atn["status"], "totals": atn["totals"],
+                "confirmed_by": atn["confirmed_by"], "files": files,
+                "disclaimer": atn["disclaimer"]}
+
+    items = args.get("items") or []
+    if not items and args.get("items_path"):
+        raw = json.loads(Path(_p(args, "items_path")).read_text(encoding="utf-8"))
+        items = raw.get("items") if isinstance(raw, dict) else raw
+    if not isinstance(items, list):
+        return {"ok": False, "error": "позиции не прочитаны", "problems": ["ожидался список"]}
+
+    ledger = {}
+    problems: list = []
+    if args.get("acts_path"):
+        acts_data, problems = load_acts(Path(_p(args, "acts_path")))
+        if acts_data:
+            ledger = build_ledger(
+                acts_data,
+                estimate=load_estimate(Path(_p(args, "estimate_path")))
+                if args.get("estimate_path") else {})
+    estimate = load_estimate(Path(_p(args, "estimate_path"))) if args.get("estimate_path") else {}
+    atn = build_atn(items, number=args.get("number") or "",
+                    object_name=args.get("object_name") or "", contract=args.get("contract") or "",
+                    customer=args.get("customer") or "", contractor=args.get("contractor") or "",
+                    ledger=ledger, estimate=estimate, reason=args.get("reason") or "")
+    files = write(atn, out_dir)
+    if audit is not None:
+        audit.append("agent:atn", "agent", "atn.draft_built",
+                     f"atn:{atn.get('number') or 'б/н'}",
+                     {"to_claim_rub": atn["totals"]["to_claim_rub"],
+                      "included": atn["totals"]["included"],
+                      "needs_basis": atn["totals"]["needs_basis"]})
+    payload = {"ok": True, "status": atn["status"], "number": atn["number"],
+               "object_name": atn["object_name"], "totals": atn["totals"],
+               "positions": atn["positions"], "needs_basis": atn["needs_basis"],
+               "no_price": atn["no_price"], "rejected": atn["rejected"],
+               "problems": problems, "files": files, "disclaimer": atn["disclaimer"]}
+    if (args.get("format") or "json") == "markdown":
+        payload["markdown"] = to_markdown(atn)
+    return payload
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="pto_agent.cad.mcp_server",
                                  description="MCP-сервер CAD-модуля ИИ-агента ПТО")
