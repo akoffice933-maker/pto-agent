@@ -325,7 +325,7 @@ def test_mcp_pack_portfolio_is_designed():
     assert "config" in tool["inputSchema"]["properties"]
     schema = json.loads((ROOT / "prompts" / "tools_schema.json").read_text(encoding="utf-8"))
     designed = next(t for t in schema["tools"] if t["name"] == "pack_portfolio")
-    assert schema["version"] == "2.5.0"
+    assert schema["version"] == "2.6.0"
     assert any("не оценено" in g for g in designed["guardrails"])
 
 

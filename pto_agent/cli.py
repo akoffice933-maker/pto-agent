@@ -1423,6 +1423,53 @@ def cmd_pack_portfolio(args) -> int:
     return 0 if portfolio["verdict"]["any_releasable"] and not blockers else 2
 
 
+def cmd_funding(args) -> int:
+    """График финансирования: что попадёт в платёж, что переносится и по какой цене."""
+    from .funding import build_plan
+
+    def money(value) -> str:
+        return "не оценено" if value is None else f"{value:,.2f} ₽".replace(",", " ")
+
+    out_dir = Path(args.out)
+    config = json.loads(Path(args.config).read_text(encoding="utf-8"))
+    base = Path(args.base_dir or ".")
+    plan = build_plan(config, base_dir=base, out_dir=out_dir)
+    files = plan["files"]
+    totals = plan["totals"]
+    contract = plan["contract"]
+    print(f"{plan['title']}: {plan['name']} · договор {contract.get('number') or 'не указан'} "
+          f"· на {plan['built_at']}")
+    print(f"  строк графика: {totals['payments']} · запланировано: {money(totals['plan_rub'])}")
+    print(f"  В ПЛАТЁЖ: {money(totals['in_payment_rub'])} · переносится: "
+          f"{money(totals['transfer_rub'])} · пени: {money(totals['penalty_rub'])} · "
+          f"удержание: {money(totals['retention_rub'])}")
+    for month in plan["months"]:
+        print(f"  {month['label']:16} строк {month['payments']} · в платёж "
+              f"{money(month['in_payment_rub']):>16} · перенос {money(month['transfer_rub']):>16}"
+              f" · пени {money(month['penalty_rub']):>12} · пропущено сроков {month['missed']}")
+    for row in plan["payments"]:
+        mark = {"в платёж": "✓", "перенос": "✗", "не оценено": "·",
+                "не сверено с актом": "?"}.get(row["status"], "?")
+        deadline = row["submission_deadline"] or "срок не заявлен"
+        if row.get("days_overdue"):
+            deadline += f" (просрочен {row['days_overdue']} дн.)"
+        elif row.get("days_to_deadline") is not None:
+            deadline += f" (осталось {row['days_to_deadline']} дн.)"
+        print(f"  {mark} {row['month_label']:15} {row['act_id']:12} "
+              f"{money(row['amount_rub']):>16}  {deadline:34} {row['status']}")
+    for check in plan["checks"]:
+        if check["level"] != "error":
+            continue
+        print(f"  ✗ {check['code']}: {check['message'][:130]}")
+    warnings = [c for c in plan["checks"] if c["level"] == "warning"]
+    for check in warnings:
+        print(f"  ⚠ {check['code']}: {check['message'][:130]}")
+    print("  вердикт: " + plan["verdict"]["summary"])
+    print(f"  файлы: {files['json']}, {files['markdown']}, {files['xlsx']}, {files['docx']}")
+    print("  сроки и ставки — из графика и договора; чего в них нет, то «не заявлено», а не 0 ₽")
+    return 0 if not totals["errors"] else 2
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     # подкоманды CAD и MCP живут в своих пакетах: делегируем до разбора argparse,
@@ -1526,6 +1573,15 @@ def main(argv=None):
                                              "сколько денег это держит")
     pkp.add_argument("--config", required=True, help="JSON портфеля: объекты, комплекты, акты")
     pkp.set_defaults(func=cmd_pack_portfolio)
+
+    fin = sub.add_parser("finance",
+                         help="график финансирования: что попадёт в платёж, что переносится")
+    fin.add_argument("--out", default="out/finance")
+    fin.add_argument("--base-dir", default=".")
+    finsub = fin.add_subparsers(dest="finance_action", required=True)
+    finp = finsub.add_parser("plan", help="свести график платежей с портфелем комплектов")
+    finp.add_argument("--config", required=True, help="JSON: график, договор, портфель")
+    finp.set_defaults(func=cmd_funding)
 
     dfl = sub.add_parser("docflow",
                          help="РД «В производство работ» и согласование ИД до подписи")
@@ -1860,6 +1916,6 @@ def main(argv=None):
     result = args.func(args)
     if args.cmd in ("audit-verify", "approve", "prices", "materials", "procure", "audit",
                     "takeoff", "tk", "cumulative", "atn", "consumption", "checklist",
-                    "journal", "quality", "docflow", "correspondence", "pack"):
+                    "journal", "quality", "docflow", "correspondence", "pack", "finance"):
         return result
     return 0

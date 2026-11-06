@@ -2186,6 +2186,46 @@ def t_pack_portfolio(args, ctx):
     return payload
 
 
+@tool("funding_plan",
+      "График финансирования, сведённый с комплектами: **что попадёт в платёж, что переносится "
+      "и сколько стоит перенос**. Сроки предъявления и даты платежей берутся только из графика, "
+      "суммы — из актов КС-2 (расхождение с графиком показывается), пени считаются только по "
+      "заявленной в договоре ставке с пунктом-основанием, удержание — только из договора. Нет "
+      "ставки — «цена переноса не заявлена», а не 0 ₽. Возвращает платежи по месяцам, переносы с "
+      "причинами и файлы отчёта.",
+      {"type": "object", "properties": {
+          "config": {"type": "object",
+                     "description": "{name, portfolio или objects, contract{number, payment_terms, "
+                                    "retention, penalty}, payments[{month, act_id, amount_rub, "
+                                    "submission_deadline, payment_date}]} — либо config_path"},
+          "config_path": {"type": "string"},
+          "base_dir": {"type": "string"},
+          "out_dir": {"type": "string"},
+          "format": {"type": "string", "enum": ["json", "markdown"], "default": "json"}},
+       "required": []})
+def t_funding_plan(args, ctx):
+    from ..funding import build_plan, to_markdown
+    base = Path(args.get("base_dir") or ctx.get("base_dir") or ".")
+    config = args.get("config") or {}
+    if not config and args.get("config_path"):
+        path = Path(_p(args, "config_path"))
+        try:
+            config = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            return {"ok": False, "error": f"{path.name}: не читается ({exc.__class__.__name__})"}
+    out_dir = Path(args.get("out_dir") or base / "out" / "finance")
+    plan = build_plan(config, base_dir=base, out_dir=out_dir)
+    payload = {"ok": not plan["totals"]["errors"], "kind": plan["schema"],
+               "name": plan["name"], "contract": plan["contract"],
+               "totals": plan["totals"], "verdict": plan["verdict"],
+               "months": plan["months"], "payments": plan["payments"],
+               "checks": plan["checks"], "files": plan["files"],
+               "disclaimer": plan["disclaimer"]}
+    if (args.get("format") or "json") == "markdown":
+        payload["markdown"] = to_markdown(plan)
+    return payload
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="pto_agent.cad.mcp_server",
                                  description="MCP-сервер CAD-модуля ИИ-агента ПТО")

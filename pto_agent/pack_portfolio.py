@@ -231,9 +231,15 @@ def build_portfolio(config: dict, base_dir: str | Path = ".", out_dir: str | Pat
         blocked_sections = []
         blocked_codes = []
         if pack:
-            blocked_sections = [s["kind"] for s in pack["sections"]
-                                if s["status"] in (SECTION_MISSING, SECTION_DISABLED)
-                                or s["errors"] or not s["signed"]]
+            # блокирует только то, что действительно мешает сдаче: отсутствующий раздел,
+            # раздел с ошибками, неподписанный и исключённый БЕЗ причины. Исключённый
+            # с основанием раздел сдаче не мешает — иначе причина исключения ничего не значит.
+            blocked_sections = [
+                s["kind"] for s in pack["sections"]
+                if s["status"] == SECTION_MISSING
+                or (s["status"] == SECTION_DISABLED and not s.get("why"))
+                or s["errors"]
+                or (not s["signed"] and s["status"] not in (SECTION_MISSING, SECTION_DISABLED))]
             blocked_codes = sorted({c["code"] for c in pack["checks"] if c["level"] == LEVEL_ERROR})
         fix = _fix_label(pack) if pack else FIX_DATA
 
