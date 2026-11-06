@@ -221,19 +221,21 @@ def test_cli_draft_and_confirm(tmp_path):
                          env={**__import__("os").environ, "PYTHONPATH": str(ROOT)})
     assert run.returncode == 0, run.stderr
     assert "это черновик" in run.stdout
-    assert (out / "tk_draft.docx").exists()
+    # имя файлов привязано к виду работ: две карты в одном каталоге не затирают друг друга
+    assert (out / "tk_earthworks.docx").exists()
+    assert (out / "tk_earthworks.json").exists()
 
     filled = tmp_path / "filled.json"
     filled.write_text(json.dumps({"labour": ["Калькуляция по ГЭСН"]}, ensure_ascii=False),
                       encoding="utf-8")
     run = subprocess.run([sys.executable, "-m", "pto_agent", "tk", "--out", str(out), "confirm",
-                          "--draft", str(out / "tk_draft.json"), "--by", "Иванов И.И.",
+                          "--draft", str(out / "tk_earthworks.json"), "--by", "Иванов И.И.",
                           "--role", "инженер ПТО", "--filled", str(filled),
                           "--reason", "проверка"],
                          cwd=ROOT, capture_output=True, text=True,
                          env={**__import__("os").environ, "PYTHONPATH": str(ROOT)})
     assert run.returncode == 0, run.stderr
-    saved = json.loads((out / "tk_draft.json").read_text(encoding="utf-8"))
+    saved = json.loads((out / "tk_earthworks.json").read_text(encoding="utf-8"))
     assert saved["status"] == tk.STATUS_CONFIRMED
 
 
@@ -244,7 +246,7 @@ def test_cli_confirm_without_human_fails(tmp_path):
                    env={**__import__("os").environ, "PYTHONPATH": str(ROOT)},
                    capture_output=True, text=True)
     run = subprocess.run([sys.executable, "-m", "pto_agent", "tk", "--out", str(out), "confirm",
-                          "--draft", str(out / "ppr_draft.json"), "--by", " ", "--role", " "],
+                          "--draft", str(out / "ppr_школа.json"), "--by", " ", "--role", " "],
                          cwd=ROOT, capture_output=True, text=True,
                          env={**__import__("os").environ, "PYTHONPATH": str(ROOT)})
     assert run.returncode == 2
@@ -310,7 +312,12 @@ def test_tk_tool_is_in_design_schema_and_server():
 
     names = [t["name"] for t in schema["tools"]]
     assert len(names) == len(set(names)), "дубликаты в проектной схеме"
-    assert "tk_draft" in names
-    assert "tk_draft" in [t["name"] for t in TOOLS]
+    server_names = [t["name"] for t in TOOLS]
+    for tool in ("tk_draft", "tk_registry"):
+        assert tool in names, f"{tool} нет в проектной схеме"
+        assert tool in server_names, f"{tool} нет на сервере"
     entry = next(t for t in schema["tools"] if t["name"] == "tk_draft")
     assert entry["guardrails"] and "не проверено" in " ".join(entry["guardrails"])
+    registry_entry = next(t for t in schema["tools"] if t["name"] == "tk_registry")
+    assert registry_entry["guardrails"], "у реестра должны быть guardrails"
+    assert any("ФИО" in g for g in registry_entry["guardrails"])

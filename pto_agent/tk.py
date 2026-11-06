@@ -458,6 +458,8 @@ def confirm(draft: dict, *, by: str, role: str, filled: dict | None = None,
                              "sections_without_data": [n["what"] for n in remaining]}
     draft["totals"]["filled_items"] = sum(len(s["items"]) for s in draft["sections"])
     draft["totals"]["needs_input"] = len(draft["needs_input"])
+    # отпечаток считаем последним: всё, что инженер вписал, уже внутри документа
+    draft["confirmed_by"]["content_fingerprint"] = content_fingerprint(draft)
     if audit_log is not None:
         audit_log.append(by, "human", f"{draft.get('kind')}.confirmed",
                          f"{draft.get('kind')}:{draft.get('object_name') or 'без объекта'}",
@@ -634,11 +636,46 @@ def export_docx(draft: dict, path: str | Path) -> Path:
     return path
 
 
-def write(draft: dict, out_dir: str | Path) -> dict:
+def draft_stem(draft: dict) -> str:
+    """Имя файлов черновика: `tk_concrete`, `ppr_школа-на-550-мест`.
+
+    Раньше имя было общим (`tk_draft`) — вторая карта в том же каталоге затирала первую.
+    """
+    kind = draft.get("kind") or "tk"
+    work_type = draft.get("work_type") or {}
+    tail = work_type.get("id") or _slug(draft.get("object_name") or "") or "draft"
+    return f"{kind}_{tail}"
+
+
+def _slug(text: str) -> str:
+    table = {" ": "-", "/": "-", "«": "", "»": "", ".": "-", ",": ""}
+    for a, b in table.items():
+        text = str(text).replace(a, b)
+    return "".join(ch for ch in text.lower() if ch.isalnum() or ch == "-")[:40]
+
+
+def content_fingerprint(draft: dict) -> str:
+    """Отпечаток содержания черновика — без статуса и без отметки о проверке.
+
+    Нужен реестру: если после подтверждения кто-то поправил разделы, отпечаток изменится,
+    и проверка перестанет считаться действительной.
+    """
+    import hashlib
+
+    # служебные поля (статус, отметка о проверке, служебные ключи вида `_path`) в отпечаток
+    # не входят: они не про содержание документа
+    body = {k: v for k, v in draft.items()
+            if not k.startswith("_")
+            and k not in ("confirmed_by", "status", "confirm_problems", "registry")}
+    payload = json.dumps(body, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def write(draft: dict, out_dir: str | Path, *, stem: str | None = None) -> dict:
     """Сохранить черновик: JSON (машинный), Markdown (чтение), DOCX (для инженера)."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    stem = f"{draft.get('kind') or 'tk'}_draft"
+    stem = stem or draft_stem(draft)
     (out / f"{stem}.json").write_text(json.dumps(draft, ensure_ascii=False, indent=1),
                                       encoding="utf-8")
     (out / f"{stem}.md").write_text(to_markdown(draft), encoding="utf-8")

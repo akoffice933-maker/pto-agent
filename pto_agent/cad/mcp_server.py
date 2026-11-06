@@ -1321,7 +1321,8 @@ def t_takeoff(args, ctx):
                             "description": "смета (xlsx): позиции пойдут в раздел «Материалы»"},
           "norms_dir": {"type": "string", "description": "каталог нормативной базы"},
           "out_dir": {"type": "string"},
-          "draft_path": {"type": "string", "description": "для confirm: tk_draft.json"},
+          "draft_path": {"type": "string",
+                         "description": "для confirm: JSON черновика (tk_<вид работ>.json)"},
           "filled": {"type": "object",
                      "description": "для confirm: {ключ раздела: [что вписал инженер]}"},
           "by": {"type": "string", "description": "ФИО проверившего (обязательно для confirm)"},
@@ -1368,7 +1369,8 @@ def t_tk_draft(args, ctx):
                                object_name=args.get("object_name") or "",
                                positions=positions, norms_dir=args.get("norms_dir") or None)
 
-    files = write(draft, out_dir)
+    files = write(draft, out_dir,
+                  **({"stem": Path(_p(args, "draft_path")).stem} if action == "confirm" else {}))
     payload = {"ok": True, "kind": draft["kind"], "status": draft["status"],
                "work_type": draft.get("work_type"), "totals": draft["totals"],
                "needs_input": draft["needs_input"], "unverified_norms":
@@ -1376,6 +1378,66 @@ def t_tk_draft(args, ctx):
                "files": files, "disclaimer": draft["disclaimer"]}
     if (args.get("format") or "json") == "markdown":
         payload["markdown"] = to_markdown(draft)
+    return payload
+
+
+@tool("tk_registry",
+      "Реестр технологических карт объекта: объект → ТК/ППР → статус → кто проверил. Читает "
+      "готовые черновики (JSON) и собранный аудит, а не спрашивает заново. Статус «проверен "
+      "инженером» ставится только при ФИО и роли и только пока содержание совпадает с "
+      "проверенным (отпечаток): если после проверки правили разделы — «проверка "
+      "недействительна». Черновик без проверки человека — «не проверен», а не «готово». "
+      "Реестр ничего не утверждает и не даёт права применять карты на объекте.",
+      {"type": "object", "properties": {
+          "paths": {"type": "array", "items": {"type": "string"},
+                    "description": "каталоги или JSON черновиков (по умолчанию out/tk)"},
+          "out_dir": {"type": "string"},
+          "strict": {"type": "boolean", "default": False,
+                     "description": "true — считать провалом карты без проверки человеком"},
+          "audit_path": {"type": "string"},
+          "format": {"type": "string", "enum": ["json", "markdown"], "default": "json"}},
+       "required": []})
+def t_tk_registry(args, ctx):
+    from ..tk_registry import (build as build_registry, load_drafts, to_markdown, verify,
+                               write as write_registry)
+    base = Path(ctx.get("base_dir") or ".")
+    out_dir = Path(args.get("out_dir") or base / "out" / "tk")
+    paths = [Path(p) if Path(p).is_absolute() else base / p for p in (args.get("paths") or [])]
+    drafts, problems = load_drafts(paths or [out_dir])
+    registry = build_registry(drafts, problems=problems)
+    files = write_registry(registry, out_dir)
+    integrity = verify(registry)
+    totals = registry["totals"]
+
+    payload = {
+        "ok": not (problems or integrity),
+        "totals": totals,
+        "objects": [{"object_name": slot["object_name"], "state": slot["state"],
+                     "totals": slot["totals"], "waiting_for": slot["waiting_for"],
+                     "drafts": [{k: e[k] for k in ("kind", "work_type", "work_type_name",
+                                                   "status", "by", "role", "confirmed_at",
+                                                   "check_valid", "needs_input", "file")}
+                                for e in slot["drafts"]]}
+                    for slot in registry["objects"]],
+        "changed_after_confirm": registry["changed_after_confirm"],
+        "not_checked": registry["not_checked"],
+        "problems": problems,
+        "integrity_problems": integrity,
+        "files": files,
+        "disclaimer": registry["disclaimer"],
+    }
+    if args.get("strict") and registry["not_checked"]:
+        payload["ok"] = False
+        payload["strict_failed"] = True
+    if (args.get("format") or "json") == "markdown":
+        payload["markdown"] = to_markdown(registry)
+    if args.get("audit_path"):
+        from ..audit import AuditLog
+        AuditLog(Path(args["audit_path"])).append(
+            "agent:tk", "agent", "tk.registry_built", "tk:registry",
+            {"objects": totals["objects"], "drafts": totals["drafts"],
+             "confirmed": totals["confirmed"],
+             "changed_after_confirm": totals["changed_after_confirm"]})
     return payload
 
 

@@ -724,6 +724,48 @@ def cmd_audit(args) -> int:
 
 
 
+def _tk_registry(args, out_dir: Path, audit) -> int:
+    """Реестр ТК объекта: объект → карта → статус → кто проверил."""
+    from .tk_registry import build as build_registry, load_drafts, verify, write as write_registry
+
+    paths = list(getattr(args, "paths", None) or []) or [out_dir]
+    drafts, problems = load_drafts(paths)
+    registry = build_registry(drafts, problems=problems)
+    files = write_registry(registry, out_dir)
+    totals = registry["totals"]
+
+    print(f"реестр ТК: объектов {totals['objects']} · черновиков {totals['drafts']} · "
+          f"проверено инженером {totals['confirmed']} · не проверено {totals['not_checked']}")
+    for slot in registry["objects"]:
+        slot_totals = slot["totals"]
+        print(f"  · {slot['object_name']}: {slot['state']} "
+              f"(ТК {slot_totals['tk']}, ППР {slot_totals['ppr']}, "
+              f"запросов данных {slot_totals['needs_input']})")
+    for item in registry["changed_after_confirm"]:
+        print(f"  ⚠ {item['object_name']} · {item['file']}: содержание поправлено после проверки "
+              f"({item['by'] or 'ФИО нет'}) — проверка недействительна")
+    for problem in problems:
+        print(f"  ⚠ {problem}")
+    integrity = verify(registry)
+    for problem in integrity:
+        print(f"  ⚠ {problem}")
+    print(f"  файлы: {files['json']}, {files['markdown']}, {files['xlsx']}")
+    print("  реестр показывает состояние черновиков, а не право применять карты на объекте")
+
+    if audit is not None:
+        audit.append("agent:tk", "agent", "tk.registry_built", "tk:registry",
+                     {"objects": totals["objects"], "drafts": totals["drafts"],
+                      "confirmed": totals["confirmed"],
+                      "changed_after_confirm": totals["changed_after_confirm"]})
+
+    if registry["changed_after_confirm"] or problems or integrity:
+        return 2
+    if getattr(args, "strict", False) and totals["not_checked"]:
+        print(f"  ⚠ --strict: карт без проверки человеком — {totals['not_checked']}")
+        return 2
+    return 0
+
+
 def cmd_tk(args) -> int:
     """Черновик ТК или ППР: что известно — заполняем, чего нет — запрашиваем с адресатом."""
     from .tk import build_ppr_draft, build_tk_draft, confirm as confirm_tk, to_markdown, write
@@ -742,6 +784,9 @@ def cmd_tk(args) -> int:
     audit = AuditLog(out_dir / "audit.jsonl") if getattr(args, "audit", None) else None
     action = args.tk_action
 
+    if action == "registry":
+        return _tk_registry(args, out_dir, audit)
+
     if action == "draft":
         draft = build_tk_draft(work_type_id=args.work_type or None,
                                work_text=getattr(args, "text", "") or None,
@@ -759,7 +804,7 @@ def cmd_tk(args) -> int:
         if draft.get("confirm_problems"):
             print("   ОСТАНОВЛЕНО:", "; ".join(draft["confirm_problems"]))
             return 2
-        files = write(draft, out_dir)
+        files = write(draft, out_dir, stem=draft_path.stem)
         print(f"проверено человеком: {args.by} ({args.role}) · внесено пунктов: "
               f"{len(draft['confirmed_by']['filled_items'])}")
         print(f"осталось запросить: {draft['totals']['needs_input']} разделов")
@@ -894,6 +939,13 @@ def main(argv=None):
             sub_p.add_argument("--work-type", default="", help=argparse.SUPPRESS)
             sub_p.add_argument("--text", default="", help=argparse.SUPPRESS)
         sub_p.set_defaults(func=cmd_tk)
+    tkc_reg = tkcsub.add_parser("registry",
+                                help="реестр ТК объекта: объект → ТК → статус → кто проверил")
+    tkc_reg.add_argument("--paths", nargs="*", default=[],
+                         help="каталоги или JSON черновиков (по умолчанию --out)")
+    tkc_reg.add_argument("--strict", action="store_true",
+                         help="код 2, если есть карты без проверки человеком")
+    tkc_reg.set_defaults(func=cmd_tk)
     tkc_confirm = tkcsub.add_parser("confirm", help="отметить проверку человеком")
     tkc_confirm.add_argument("--draft", required=True, help="JSON черновика")
     tkc_confirm.add_argument("--by", required=True, help="ФИО проверившего")
