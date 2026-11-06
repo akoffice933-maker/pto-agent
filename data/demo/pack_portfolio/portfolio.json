@@ -1,0 +1,37 @@
+{
+ "portfolio": "Портфель ПТО, ноябрь 2026",
+ "note": "Портфель комплектов: по каждому объекту — комплект (путь или конфиг) и акты КС-2, которые он держит. Сумма акта берётся из файла, а не задаётся словами.",
+ "objects": [
+  {
+   "object_name": "ЖК «Северный», корпус 2",
+   "pack_number": "К-38",
+   "pack": "data/demo/pack/pack.json",
+   "acts": [
+    {"act_id": "КС-2 №38", "period": "октябрь 2026", "amount_rub": 34106600.0,
+     "source": "data/demo/acts/acts.json",
+     "covered_by": ["submittals", "quality_docs", "journals_verification"]},
+    {"act_id": "КС-2 №37", "period": "сентябрь 2026", "amount_rub": 248000.0,
+     "source": "data/demo/acts/acts.json", "covered_by": ["rd"]}
+   ]
+  },
+  {
+   "object_name": "Склад комплектации, Шушары",
+   "pack_number": "К-12",
+   "pack": "data/demo/pack_portfolio/warehouse_pack.json",
+   "acts": [
+    {"act_id": "КС-2 №5", "period": "октябрь 2026", "amount_rub": 2300000.0,
+     "source": "data/demo/pack_portfolio/acts_warehouse.json", "covered_by": ["journals_work"]}
+   ]
+  },
+  {
+   "object_name": "Детский сад, Колпино",
+   "pack_number": "К-3",
+   "acts": [
+    {"act_id": "КС-2 №2", "period": "сентябрь 2026", "amount_rub": 1870000.0,
+     "source": "data/demo/pack_portfolio/acts_kindergarten.json"},
+    {"act_id": "КС-2 №3", "period": "октябрь 2026",
+     "source": "data/demo/pack_portfolio/acts_kindergarten.json"}
+   ]
+  }
+ ]
+}

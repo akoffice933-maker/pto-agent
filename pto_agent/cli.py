@@ -1380,6 +1380,49 @@ def cmd_pack(args) -> int:
     return 0 if close["allowed"] else 2
 
 
+def cmd_pack_portfolio(args) -> int:
+    """Портфель комплектов: где можно предъявлять и сколько денег это держит."""
+    from .pack_portfolio import build_portfolio
+
+    def money(value) -> str:
+        return "не оценено" if value is None else f"{value:,.2f} ₽".replace(",", " ")
+
+    out_dir = Path(args.out)
+    config = json.loads(Path(args.config).read_text(encoding="utf-8"))
+    base = Path(args.base_dir or ".")
+    portfolio = build_portfolio(config, base_dir=base, out_dir=out_dir)
+    files = portfolio["files"]
+    totals, money_totals = portfolio["totals"], portfolio["money"]
+    print(f"{portfolio['title']}: {portfolio['name']} · на {portfolio['built_at']}")
+    print(f"  объектов: {totals['objects']} · можно предъявлять: {totals['allowed']} · "
+          f"с блокерами: {totals['blocked']} · без комплекта: {totals['without_pack']}")
+    for obj in portfolio["objects"]:
+        mark = "✓" if obj["can_submit"] else ("✗" if obj["pack_built"] else "·")
+        close = ("можно предъявлять" if obj["can_submit"]
+                 else "предъявлять нельзя" if obj["pack_built"] else "комплекта нет")
+        print(f"  {mark} {obj['object_name'][:34]:34} {obj['pack_number'] or 'б/н':>6} "
+              f"{close:18} под риском: {money(obj['at_risk_rub']):>16} · {obj['fix']}")
+        for act in obj["acts"]:
+            amount = "нет суммы в акте" if act["amount_rub"] is None else money(act["amount_rub"])
+            print(f"      {act['act_id']:14} {act['period'] or '—':16} {amount:>18}"
+                  f"  {act['status']}")
+    print(f"  актов: {totals['acts']} · под риском непредъявления: {totals['acts_at_risk']} · "
+          f"не оценено: {money_totals['unestimated_acts']}")
+    print(f"  ПОД РИСКОМ НЕПРЕДЪЯВЛЕНИЯ: {money(money_totals['at_risk_rub'])} · "
+          f"предъявлено: {money(money_totals['released_rub'])}")
+    for row in money_totals["by_fix"]:
+        print(f"     · {row['fix']}: {money(row['rub'])} по {row['acts']} актам")
+    for act in money_totals["unestimated"]:
+        print(f"     · не оценено: {act['act_id']} — {act['why']}")
+    blockers = [c for c in portfolio["checks"] if c["level"] == "error"]
+    for check in blockers:
+        print(f"  ✗ {check['code']}: {check['message'][:120]}")
+    print("  вердикт: " + portfolio["verdict"]["summary"])
+    print(f"  файлы: {files['json']}, {files['markdown']}, {files['xlsx']}, {files['docx']}")
+    print("  вердикт считает агент, решение о предъявлении принимает ИТР: подписи ставит человек")
+    return 0 if portfolio["verdict"]["any_releasable"] and not blockers else 2
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     # подкоманды CAD и MCP живут в своих пакетах: делегируем до разбора argparse,
@@ -1479,6 +1522,10 @@ def main(argv=None):
     pkb = pksub.add_parser("build", help="собрать комплект по конфигу")
     pkb.add_argument("--config", required=True, help="JSON конфига комплекта")
     pkb.set_defaults(func=cmd_pack)
+    pkp = pksub.add_parser("portfolio", help="портфель комплектов: где можно предъявлять и "
+                                             "сколько денег это держит")
+    pkp.add_argument("--config", required=True, help="JSON портфеля: объекты, комплекты, акты")
+    pkp.set_defaults(func=cmd_pack_portfolio)
 
     dfl = sub.add_parser("docflow",
                          help="РД «В производство работ» и согласование ИД до подписи")

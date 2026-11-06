@@ -2147,6 +2147,45 @@ def t_object_pack(args, ctx):
     return payload
 
 
+@tool("pack_portfolio",
+      "Портфель комплектов по всем объектам: где можно предъявлять, где нет и **сколько денег "
+      "держит непредъявление**. Собирает комплект каждого объекта тем же кодом, что `object_pack`, "
+      "и привязывает к вердикту суммы актов КС-2 (amount_rub из реестра актов). Акт без суммы — "
+      "«не оценено», а не 0 ₽; акт, повторённый в портфеле, считается один раз. Итог разложен по "
+      "действию: подписи, ошибки в разделах, отсутствующие разделы. Возвращает объекты, акты, "
+      "разрез «раздел → деньги» и файлы сводки.",
+      {"type": "object", "properties": {
+          "config": {"type": "object",
+                     "description": "{portfolio, objects: [{object_name, pack, acts: "
+                                    "[{act_id, amount_rub, covered_by}]}]} — либо config_path"},
+          "config_path": {"type": "string"},
+          "base_dir": {"type": "string"},
+          "out_dir": {"type": "string"},
+          "format": {"type": "string", "enum": ["json", "markdown"], "default": "json"}},
+       "required": []})
+def t_pack_portfolio(args, ctx):
+    from ..pack_portfolio import build_portfolio, to_markdown
+    base = Path(args.get("base_dir") or ctx.get("base_dir") or ".")
+    config = args.get("config") or {}
+    if not config and args.get("config_path"):
+        path = Path(_p(args, "config_path"))
+        try:
+            config = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            return {"ok": False, "error": f"{path.name}: не читается ({exc.__class__.__name__})"}
+    out_dir = Path(args.get("out_dir") or base / "out" / "pack_portfolio")
+    portfolio = build_portfolio(config, base_dir=base, out_dir=out_dir)
+    payload = {"ok": portfolio["verdict"]["any_releasable"],
+               "kind": portfolio["schema"], "name": portfolio["name"],
+               "totals": portfolio["totals"], "money": portfolio["money"],
+               "verdict": portfolio["verdict"], "objects": portfolio["objects"],
+               "checks": portfolio["checks"], "files": portfolio["files"],
+               "disclaimer": portfolio["disclaimer"]}
+    if (args.get("format") or "json") == "markdown":
+        payload["markdown"] = to_markdown(portfolio)
+    return payload
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="pto_agent.cad.mcp_server",
                                  description="MCP-сервер CAD-модуля ИИ-агента ПТО")
