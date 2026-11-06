@@ -1729,6 +1729,111 @@ def t_checklist(args, ctx):
     return {"ok": False, "error": f"неизвестное действие: {action}"}
 
 
+@tool("journals",
+      "Два журнала комплекта ИД: общий журнал работ и журнал верификации закупленной продукции "
+      "(входной контроль). `action=work`: записи по сменам (дата, смена, работы, объём, "
+      "исполнитель, погода) — вид работ определяется классификатором матрицы, пустые записи "
+      "отклоняются, даты проверяются на хронологию, для земляных/бетонных/кровельных работ "
+      "требуется температура воздуха, объёмы сверяются с актом КС-2. `action=verification`: "
+      "партия → документ качества → решение → кто проверил; решение «допущен» невозможно без "
+      "документа качества и по документу с истёкшим на дату проверки сроком; материал, "
+      "списанный без входного контроля, показывается отдельно. `action=sign` — подпись человека "
+      "(ФИО и роль), при ошибках в журнале подпись не принимается; журнал закрывает ИТР.",
+      {"type": "object", "properties": {
+          "action": {"type": "string", "enum": ["work", "verification", "sign"],
+                     "default": "work"},
+          "entries": {"type": "array", "items": {"type": "object"},
+                      "description": "для work: [{date, shift, work, qty, unit, executor, zone, "
+                                     "weather{temp_c, precipitation}, supervision}]"},
+          "entries_path": {"type": "string"},
+          "records": {"type": "array", "items": {"type": "object"},
+                      "description": "для verification: [{date, material, unit, qty, batch, "
+                                     "quality_doc{kind, number, valid_until}, decision, "
+                                     "inspected_by, role}]"},
+          "records_path": {"type": "string"},
+          "writeoffs_path": {"type": "string",
+                             "description": "для verification: списание (xlsx, csv)"},
+          "acts_path": {"type": "string", "description": "для work: реестр актов КС-2"},
+          "journal_path": {"type": "string", "description": "для sign: JSON журнала"},
+          "object_name": {"type": "string"}, "number": {"type": "string"},
+          "by": {"type": "string", "description": "ФИО (для sign)"},
+          "role": {"type": "string", "description": "должность (для sign)"},
+          "reason": {"type": "string"},
+          "out_dir": {"type": "string"}, "audit_path": {"type": "string"},
+          "format": {"type": "string", "enum": ["json", "markdown"], "default": "json"}},
+       "required": []})
+def t_journals(args, ctx):
+    from ..journals import (build_verification_journal, build_work_journal, load_json, sign,
+                            to_markdown, write)
+    base = Path(ctx.get("base_dir") or ".")
+    out_dir = Path(args.get("out_dir") or base / "out" / "journals")
+    audit = None
+    if args.get("audit_path"):
+        from ..audit import AuditLog
+        audit = AuditLog(Path(args["audit_path"]))
+    action = args.get("action") or "work"
+
+    if action == "sign":
+        path = Path(_p(args, "journal_path"))
+        journal = json.loads(path.read_text(encoding="utf-8"))
+        journal = sign(journal, by=args.get("by") or "", role=args.get("role") or "",
+                       reason=args.get("reason") or "", audit_log=audit)
+        if journal.get("sign_problems"):
+            return {"ok": False, "error": "подпись не принята",
+                    "problems": journal["sign_problems"], "can_close": journal.get("can_close")}
+        files = write(journal, out_dir, stem=path.stem)
+        return {"ok": True, "kind": journal["schema"], "status": journal["status"],
+                "totals": journal["totals"], "confirmed_by": journal["confirmed_by"],
+                "can_close": journal["can_close"], "files": files,
+                "disclaimer": journal["disclaimer"]}
+
+    if action == "work":
+        entries = args.get("entries") or []
+        problems: list = []
+        if not entries and args.get("entries_path"):
+            entries, problems = load_json(Path(_p(args, "entries_path")), "entries")
+        acts = None
+        if args.get("acts_path"):
+            from ..cumulative import load_acts
+            acts_data, act_problems = load_acts(Path(_p(args, "acts_path")))
+            problems += act_problems
+            acts = acts_data or None
+        journal = build_work_journal(entries, object_name=args.get("object_name") or "",
+                                     number=args.get("number") or "", acts=acts)
+    else:
+        records = args.get("records") or []
+        problems = []
+        if not records and args.get("records_path"):
+            records, problems = load_json(Path(_p(args, "records_path")), "records")
+        writeoffs = []
+        if args.get("writeoffs_path"):
+            from ..consumption import load_table
+            writeoffs, more = load_table(Path(_p(args, "writeoffs_path")), "writeoff")
+            problems += more
+        journal = build_verification_journal(records, object_name=args.get("object_name") or "",
+                                             number=args.get("number") or "",
+                                             writeoffs=writeoffs)
+
+    files = write(journal, out_dir)
+    if audit is not None:
+        audit.append("agent:journal", "agent", "journal.built", f"journal:{journal.get('number')}",
+                     {"kind": journal["schema"], "records": journal["totals"].get("entries")
+                      or journal["totals"].get("records")})
+    payload = {"ok": journal["totals"]["errors"] == 0, "kind": journal["schema"],
+               "status": journal["status"], "totals": journal["totals"],
+               "checks": journal["checks"], "can_close": journal["can_close"],
+               "problems": problems, "files": files, "disclaimer": journal["disclaimer"]}
+    payload["entries" if action == "work" else "records"] = journal.get(
+        "entries" if action == "work" else "records")
+    if action == "verification":
+        payload["unverified_writeoffs"] = journal["unverified_writeoffs"]
+    if action == "work":
+        payload["by_work_type"] = journal["by_work_type"]
+    if (args.get("format") or "json") == "markdown":
+        payload["markdown"] = to_markdown(journal)
+    return payload
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="pto_agent.cad.mcp_server",
                                  description="MCP-сервер CAD-модуля ИИ-агента ПТО")

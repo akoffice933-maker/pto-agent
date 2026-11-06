@@ -1067,6 +1067,85 @@ def cmd_checklist(args) -> int:
     return 2
 
 
+
+def cmd_journal(args) -> int:
+    """Журналы: общий журнал работ и журнал верификации закупленной продукции."""
+    from .cumulative import load_acts
+    from .journals import (build_verification_journal, build_work_journal, load_json, sign,
+                           to_markdown, write)
+
+    out_dir = Path(args.out)
+    audit = AuditLog(out_dir / "audit.jsonl") if getattr(args, "audit", None) else None
+    action = args.journal_action
+
+    if action == "sign":
+        path = Path(args.journal)
+        journal = json.loads(path.read_text(encoding="utf-8"))
+        journal = sign(journal, by=args.by, role=args.role, reason=args.reason or "",
+                       audit_log=audit)
+        if journal.get("sign_problems"):
+            print("   ПОДПИСЬ НЕ ПРИНЯТА:")
+            for problem in journal["sign_problems"]:
+                print(f"     ✗ {problem}")
+            return 2
+        files = write(journal, out_dir, stem=path.stem)
+        print(f"подписал: {args.by} ({args.role}) · статус: {journal['status']}")
+        close = journal["can_close"]
+        print("  журнал можно закрывать" if close["allowed"] else
+              "  закрывать нельзя: " + "; ".join(close["reasons"]))
+        print(f"  файлы: {files['json']}, {files['xlsx']}")
+        return 0
+
+    acts = None
+    if getattr(args, "acts", None):
+        acts_data, problems = load_acts(Path(args.acts))
+        for problem in problems:
+            print(f"   ⚠ {problem}")
+        acts = acts_data or None
+
+    if action == "work":
+        entries, problems = load_json(Path(args.entries), "entries")
+        for problem in problems:
+            print(f"   ⚠ {problem}")
+        journal = build_work_journal(entries, object_name=args.object_name or "",
+                                     number=args.number or "", acts=acts)
+    else:
+        records, problems = load_json(Path(args.records), "records")
+        for problem in problems:
+            print(f"   ⚠ {problem}")
+        writeoffs = []
+        if getattr(args, "writeoffs", None):
+            from .consumption import load_table
+            writeoffs, more = load_table(Path(args.writeoffs), "writeoff")
+            for problem in more:
+                print(f"   ⚠ {problem}")
+        journal = build_verification_journal(records, object_name=args.object_name or "",
+                                             number=args.number or "", writeoffs=writeoffs)
+
+    files = write(journal, out_dir)
+    totals = journal["totals"]
+    print(f"{journal['title']}: {journal['object_name'] or 'объект не указан'}")
+    if action == "work":
+        print(f"  записей: {totals['entries']} · смен: {totals['shifts']} · видов работ: "
+              f"{totals['work_types']} · с погодой: {totals['with_weather']} · отклонено: "
+              f"{totals['rejected']}")
+    else:
+        print(f"  проверок партий: {totals['records']} · допущено: {totals['accepted']} · "
+              f"без документа качества: {totals['without_doc']} · списано без контроля: "
+              f"{totals['unverified_writeoffs']}")
+    for check in journal["checks"]:
+        mark = "✗" if check["level"] == "error" else "⚠"
+        print(f"  {mark} {check['code']}: {check['message']}")
+    close = journal["can_close"]
+    print("  статус: " + journal["status"])
+    if not close["allowed"]:
+        for reason in close["reasons"]:
+            print(f"     · {reason}")
+    print(f"  файлы: {files['json']}, {files['markdown']}, {files['xlsx']}")
+    print("  журнал ведёт и подписывает человек: агент проверяет полноту, хронологию и допуск")
+    return 2 if totals["errors"] else 0
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     # подкоманды CAD и MCP живут в своих пакетах: делегируем до разбора argparse,
@@ -1157,6 +1236,32 @@ def main(argv=None):
     mtr.add_argument("--act", nargs="*", default=[], help="материалы КС-2 построчно (csv, xlsx)")
     mtr.add_argument("--object-name", default="")
     mtr.set_defaults(func=cmd_materials)
+
+    jrn = sub.add_parser("journal",
+                         help="общий журнал работ и журнал верификации закупленной продукции")
+    jrn.add_argument("--out", default="out/journals")
+    jrn.add_argument("--audit", default=None)
+    jrnsub = jrn.add_subparsers(dest="journal_action", required=True)
+    jrnw = jrnsub.add_parser("work", help="общий журнал работ по записям смен")
+    jrnw.add_argument("--entries", required=True, help="JSON записей журнала")
+    jrnw.add_argument("--object-name", default="")
+    jrnw.add_argument("--number", default="")
+    jrnw.add_argument("--acts", default=None, help="реестр актов КС-2 для сверки объёмов")
+    jrnw.set_defaults(func=cmd_journal)
+    jrnv = jrnsub.add_parser("verification",
+                             help="журнал верификации закупленной продукции (входной контроль)")
+    jrnv.add_argument("--records", required=True, help="JSON записей входного контроля")
+    jrnv.add_argument("--object-name", default="")
+    jrnv.add_argument("--number", default="")
+    jrnv.add_argument("--writeoffs", default=None,
+                      help="списание (xlsx, csv): что применено без входного контроля")
+    jrnv.set_defaults(func=cmd_journal)
+    jrns = jrnsub.add_parser("sign", help="подписать журнал (ФИО и роль обязательны)")
+    jrns.add_argument("--journal", required=True)
+    jrns.add_argument("--by", required=True)
+    jrns.add_argument("--role", required=True)
+    jrns.add_argument("--reason", default="")
+    jrns.set_defaults(func=cmd_journal)
 
     chk = sub.add_parser("checklist",
                          help="чек-лист выполненных работ: пункты с источником, результат, подпись")
@@ -1397,6 +1502,7 @@ def main(argv=None):
     args = p.parse_args(argv)
     result = args.func(args)
     if args.cmd in ("audit-verify", "approve", "prices", "materials", "procure", "audit",
-                    "takeoff", "tk", "cumulative", "atn", "consumption", "checklist"):
+                    "takeoff", "tk", "cumulative", "atn", "consumption", "checklist",
+                    "journal"):
         return result
     return 0
