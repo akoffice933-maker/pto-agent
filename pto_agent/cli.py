@@ -986,6 +986,87 @@ def cmd_consumption(args) -> int:
     return 2 if totals["errors"] else 0
 
 
+
+def cmd_checklist(args) -> int:
+    """Чек-лист выполненных работ: пункты с источником, результат, подпись человека."""
+    from .checklist import (RESULT_FAIL, RESULT_OK, RESULT_UNCHECKED, build_checklist, fill,
+                            sign, to_markdown, write)
+
+    out_dir = Path(args.out)
+    audit = AuditLog(out_dir / "audit.jsonl") if getattr(args, "audit", None) else None
+    action = args.checklist_action
+
+    if action == "build":
+        items = None
+        if getattr(args, "items", None):
+            from .consumption import load_json
+            items, problems = load_json(Path(args.items), "items")
+            for problem in problems:
+                print(f"   ⚠ {problem}")
+        checklist = build_checklist(work_type_id=args.work_type or "",
+                                    object_name=args.object_name or "", number=args.number or "",
+                                    act_ref=args.act_ref or "", items=items)
+        files = write(checklist, out_dir)
+        totals = checklist["totals"]
+        print(f"чек-лист {checklist['number'] or 'б/н'}: {checklist['object_name'] or 'объект не указан'}")
+        if checklist.get("work_type"):
+            print(f"  вид работ: {checklist['work_type'].get('name') or checklist['work_type'].get('id')}")
+        print(f"  пунктов: {totals['items']} · источников сверено {totals['source_verified']} · "
+              f"отклонено пунктов без источника: {totals['rejected']}")
+        for check in checklist["checks"]:
+            mark = "✗" if check["level"] == "error" else "⚠"
+            print(f"  {mark} {check['code']}: {check['message']}")
+        print(f"  статус: {checklist['status']}")
+        print(f"  файлы: {files['json']}, {files['docx']}")
+        print("  работы принимает человек: подписывает только полностью проверенный чек-лист")
+        return 2 if totals["rejected"] else 0
+
+    path = Path(args.checklist)
+    checklist = json.loads(path.read_text(encoding="utf-8"))
+
+    if action == "fill":
+        from .consumption import load_json
+        results, problems = load_json(Path(args.results), "results")
+        for problem in problems:
+            print(f"   ⚠ {problem}")
+        checklist = fill(checklist, results, by=args.by or "")
+        for problem in checklist.get("problems") or []:
+            print(f"   ⚠ {problem}")
+        files = write(checklist, out_dir, stem=path.stem.replace("checklist_", ""))
+        totals = checklist["totals"]
+        print(f"заполнено: проверено {totals['checked']} из {totals['items']} · соответствует "
+              f"{totals['ok']} · не соответствует {totals['failed']} · не проверено "
+              f"{totals['unchecked']}")
+        print(f"  статус: {checklist['status']}")
+        print(f"  файлы: {files['json']}, {files['docx']}")
+        bad = [c for c in checklist.get("checks") or [] if c["level"] == "error"]
+        return 2 if (bad or checklist.get("problems")) else 0
+
+    if action == "sign":
+        checklist = sign(checklist, by=args.by, role=args.role, reason=args.reason or "",
+                         audit_log=audit)
+        if checklist.get("sign_problems"):
+            print("   ПОДПИСЬ НЕ ПРИНЯТА:")
+            for problem in checklist["sign_problems"]:
+                print(f"     ✗ {problem}")
+            return 2
+        files = write(checklist, out_dir, stem=path.stem.replace("checklist_", ""))
+        print(f"подписал: {args.by} ({args.role}) · статус: {checklist['status']}")
+        close = checklist["can_close"]
+        if close["allowed"]:
+            print("  работы по чек-листу можно предъявлять: все пункты проверены, "
+                  "несоответствий нет")
+        else:
+            print("  работы предъявлять нельзя:")
+            for reason in close["reasons"]:
+                print(f"     · {reason}")
+        print(f"  файлы: {files['json']}, {files['docx']}")
+        return 0
+
+    print("неизвестное действие", file=sys.stderr)
+    return 2
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     # подкоманды CAD и MCP живут в своих пакетах: делегируем до разбора argparse,
@@ -1076,6 +1157,32 @@ def main(argv=None):
     mtr.add_argument("--act", nargs="*", default=[], help="материалы КС-2 построчно (csv, xlsx)")
     mtr.add_argument("--object-name", default="")
     mtr.set_defaults(func=cmd_materials)
+
+    chk = sub.add_parser("checklist",
+                         help="чек-лист выполненных работ: пункты с источником, результат, подпись")
+    chk.add_argument("--out", default="out/checklists")
+    chk.add_argument("--audit", default=None)
+    chksub = chk.add_subparsers(dest="checklist_action", required=True)
+    chkb = chksub.add_parser("build", help="собрать чек-лист по виду работ")
+    chkb.add_argument("--work-type", default="", help="id вида работ из матрицы")
+    chkb.add_argument("--object-name", default="")
+    chkb.add_argument("--number", default="")
+    chkb.add_argument("--act-ref", default="", help="акт КС-2, к которому относится чек-лист")
+    chkb.add_argument("--items", default=None,
+                      help="JSON пунктов организации: [{requirement, control, source{doc,point,edition}}]")
+    chkb.set_defaults(func=cmd_checklist)
+    chkf = chksub.add_parser("fill", help="внести результаты по пунктам")
+    chkf.add_argument("--checklist", required=True, help="JSON чек-листа")
+    chkf.add_argument("--results", required=True,
+                      help="JSON результатов: [{no, result, note, measured}]")
+    chkf.add_argument("--by", default="", help="кто заполнил")
+    chkf.set_defaults(func=cmd_checklist)
+    chks = chksub.add_parser("sign", help="подписать чек-лист (ФИО и роль обязательны)")
+    chks.add_argument("--checklist", required=True)
+    chks.add_argument("--by", required=True)
+    chks.add_argument("--role", required=True)
+    chks.add_argument("--reason", default="")
+    chks.set_defaults(func=cmd_checklist)
 
     cons = sub.add_parser("consumption",
                           help="материалы: потребность по нормам, списание, лимит, давальческие")
@@ -1290,6 +1397,6 @@ def main(argv=None):
     args = p.parse_args(argv)
     result = args.func(args)
     if args.cmd in ("audit-verify", "approve", "prices", "materials", "procure", "audit",
-                    "takeoff", "tk", "cumulative", "atn", "consumption"):
+                    "takeoff", "tk", "cumulative", "atn", "consumption", "checklist"):
         return result
     return 0

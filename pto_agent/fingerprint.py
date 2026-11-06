@@ -10,7 +10,9 @@ from __future__ import annotations
 import hashlib
 import json
 
-SKIP_KEYS = ("confirmed_by", "status", "confirm_problems", "registry")
+# производные от содержания поля: вердикты и находки, а не сам документ
+SKIP_KEYS = ("confirmed_by", "status", "confirm_problems", "sign_problems", "registry",
+             "can_close", "problems", "checks")
 
 
 def content_fingerprint(document: dict) -> str:

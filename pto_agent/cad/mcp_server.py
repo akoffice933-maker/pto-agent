@@ -1638,6 +1638,97 @@ def t_consumption_report(args, ctx):
     return payload
 
 
+@tool("checklist",
+      "Чек-лист выполненных работ: пункты контроля с источником (норма + пункт + редакция "
+      "или чек-лист организации), результат «соответствует / не соответствует / не проверено», "
+      "примечание и подпись человека. Пункт без источника не создаётся. `action=sign` "
+      "принимается только при ФИО и роли, только когда все пункты проверены и у каждого "
+      "несоответствия есть описание: непроверенное не подписывается. Возвращает `can_close` — "
+      "можно ли предъявлять работы, с причинами; при несоответствиях работы не приняты. "
+      "Правка результатов после подписи аннулирует подпись (отпечаток содержания).",
+      {"type": "object", "properties": {
+          "action": {"type": "string", "enum": ["build", "fill", "sign"], "default": "build"},
+          "work_type": {"type": "string", "description": "id вида работ из матрицы"},
+          "object_name": {"type": "string"}, "number": {"type": "string"},
+          "act_ref": {"type": "string", "description": "акт КС-2, к которому относится чек-лист"},
+          "items": {"type": "array", "items": {"type": "object"},
+                    "description": "пункты организации: {requirement, control, "
+                                   "source:{doc, point, edition}}"},
+          "items_path": {"type": "string", "description": "JSON пунктов вместо items"},
+          "checklist_path": {"type": "string", "description": "для fill/sign: JSON чек-листа"},
+          "results": {"type": "array", "items": {"type": "object"},
+                      "description": "для fill: [{no, result, note, measured}]"},
+          "results_path": {"type": "string"},
+          "by": {"type": "string", "description": "ФИО (для fill — заполнил, для sign — подписал)"},
+          "role": {"type": "string", "description": "должность (обязательна для sign)"},
+          "reason": {"type": "string"},
+          "out_dir": {"type": "string"}, "audit_path": {"type": "string"},
+          "format": {"type": "string", "enum": ["json", "markdown"], "default": "json"}},
+       "required": []})
+def t_checklist(args, ctx):
+    from ..checklist import build_checklist, fill, sign, to_markdown, write
+    base = Path(ctx.get("base_dir") or ".")
+    out_dir = Path(args.get("out_dir") or base / "out" / "checklists")
+    audit = None
+    if args.get("audit_path"):
+        from ..audit import AuditLog
+        audit = AuditLog(Path(args["audit_path"]))
+    action = args.get("action") or "build"
+
+    if action == "build":
+        items = args.get("items") or []
+        if not items and args.get("items_path"):
+            raw = json.loads(Path(_p(args, "items_path")).read_text(encoding="utf-8"))
+            items = raw.get("items") if isinstance(raw, dict) else raw
+        checklist = build_checklist(work_type_id=args.get("work_type") or "",
+                                    object_name=args.get("object_name") or "",
+                                    number=args.get("number") or "",
+                                    act_ref=args.get("act_ref") or "", items=items or None)
+        files = write(checklist, out_dir)
+        payload = {"ok": checklist["totals"]["rejected"] == 0, "status": checklist["status"],
+                   "work_type": checklist.get("work_type"), "totals": checklist["totals"],
+                   "items": checklist["items"], "rejected": checklist["rejected"],
+                   "checks": checklist["checks"], "can_close": checklist["can_close"],
+                   "files": files, "disclaimer": checklist["disclaimer"]}
+        if (args.get("format") or "json") == "markdown":
+            payload["markdown"] = to_markdown(checklist)
+        return payload
+
+    path = Path(_p(args, "checklist_path"))
+    checklist = json.loads(path.read_text(encoding="utf-8"))
+
+    if action == "fill":
+        results = args.get("results") or []
+        if not results and args.get("results_path"):
+            raw = json.loads(Path(_p(args, "results_path")).read_text(encoding="utf-8"))
+            results = raw.get("results") if isinstance(raw, dict) else raw
+        checklist = fill(checklist, results or [], by=args.get("by") or "")
+        files = write(checklist, out_dir, stem=path.stem.replace("checklist_", ""))
+        payload = {"ok": not (checklist.get("problems") or
+                              [c for c in checklist.get("checks") or [] if c["level"] == "error"]),
+                   "status": checklist["status"], "totals": checklist["totals"],
+                   "items": checklist["items"], "problems": checklist.get("problems") or [],
+                   "checks": checklist["checks"], "can_close": checklist["can_close"],
+                   "files": files}
+        if (args.get("format") or "json") == "markdown":
+            payload["markdown"] = to_markdown(checklist)
+        return payload
+
+    if action == "sign":
+        checklist = sign(checklist, by=args.get("by") or "", role=args.get("role") or "",
+                         reason=args.get("reason") or "", audit_log=audit)
+        if checklist.get("sign_problems"):
+            return {"ok": False, "error": "подпись не принята",
+                    "problems": checklist["sign_problems"],
+                    "status": checklist.get("status")}
+        files = write(checklist, out_dir, stem=path.stem.replace("checklist_", ""))
+        return {"ok": True, "status": checklist["status"], "totals": checklist["totals"],
+                "confirmed_by": checklist["confirmed_by"], "can_close": checklist["can_close"],
+                "files": files, "disclaimer": checklist["disclaimer"]}
+
+    return {"ok": False, "error": f"неизвестное действие: {action}"}
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="pto_agent.cad.mcp_server",
                                  description="MCP-сервер CAD-модуля ИИ-агента ПТО")
