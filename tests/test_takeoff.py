@@ -162,7 +162,8 @@ def test_empty_price_base_means_no_prices(tmp_path):
 
 # ─────────────────────────────── подтверждение ───────────────────────────────
 def test_confirm_records_change_in_audit(prices_dir, tmp_path):
-    draft = build_draft([_line("Арматура А500С — каркасы", 5.48, unit="kg", confidence="MEDIUM")],
+    # единица — как её отдаёт read_boq после пересчёта кг→т (цена в базе за тонну)
+    draft = build_draft([_line("Арматура А500С — каркасы", 5.48, unit="т", confidence="MEDIUM")],
                         mapping=load_map(), prices_dir=prices_dir, as_of="2025-10-01")
     log = AuditLog(tmp_path / "audit.jsonl")
     draft = confirm(draft, {"Арматура А500С — каркасы": {"qty": 5.20, "norm": "ФЕР 06-01-001-01"}},

@@ -25,6 +25,7 @@ import re
 from pathlib import Path
 
 from .takeoff import CONFIDENCE_HIGH, CONFIDENCE_LOW, CONFIDENCE_MEDIUM, unit_ru
+from .numeric import parse_number
 
 TOL_KG = 1.0          # допуск на округление в ведомости стали, кг
 TOL_M3 = 0.05
@@ -42,12 +43,28 @@ def read_schedules(path: str | Path) -> dict:
 
 
 def _num(value) -> float | None:
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
+    """Конечное число или `None`: «nan» из ведомости не должно дойти до объёма.
+
+    Раньше `float()` принимал «nan», и проверка суммы «Итого» против суммы по диаметрам
+    молчала: `abs(nan - x) > допуск` всегда `False`.
+    """
+    return parse_number(value)
+
+
+def _diameters(raw: dict) -> tuple[dict, list[str]]:
+    """Диаметры → (разобранные значения, ключи, которые не число).
+
+    Неразобранное значение нельзя превращать в 0.0: сумма по диаметрам тогда «сходится»
+    с испорченной цифрой, а не с ведомостью.
+    """
+    values, broken = {}, []
+    for key, value in (raw or {}).items():
+        number = _num(value)
+        if number is None:
+            broken.append(f"{key}: {value!r}")
+            continue
+        values[key] = number
+    return values, broken
 
 
 def marks_of(mark: str) -> set[str]:
@@ -66,12 +83,22 @@ def validate_schedules(doc: dict, facts: dict | None = None) -> dict:
             name = table.get("name") or f"лист {sheet.get('sheet')}"
             steel = table.get("steel")
             if steel:
-                diameters = {k: _num(v) or 0.0 for k, v in (steel.get("diameters") or {}).items()}
+                diameters, broken = _diameters(steel.get("diameters"))
+                steel["_broken"] = broken
                 total = _num(steel.get("total_kg"))
                 computed = round(sum(diameters.values()), 2)
                 steel["_computed_kg"] = computed
+                if broken:
+                    findings.append(_finding(
+                        "VALUE_UNPARSED", name,
+                        f"значения по диаметрам не числа: {', '.join(broken)} — в сумму не "
+                        f"вошли (иначе ошибка переноса цифр замаскировалась бы)",
+                        expected=None, found=", ".join(broken)))
                 if total is None:
-                    findings.append(_finding(CONFLICT_SUM, name, "в ведомости нет «Итого»",
+                    raw_total = steel.get("total_kg")
+                    detail = ("в ведомости нет «Итого»" if raw_total in (None, "")
+                              else f"«Итого» {raw_total!r} не число")
+                    findings.append(_finding(CONFLICT_SUM, name, detail,
                                              expected=computed, found=None))
                 elif abs(computed - total) > TOL_KG:
                     findings.append(_finding(
@@ -81,9 +108,15 @@ def validate_schedules(doc: dict, facts: dict | None = None) -> dict:
                         f"{_money(round(computed - total, 2))} кг)",
                         expected=computed, found=total))
             concrete = table.get("concrete") or {}
-            if concrete and not _num(concrete.get("qty")):
+            if concrete and _num(concrete.get("qty")) is None:
+                raw_qty = concrete.get("qty")
+                detail = ("в строке бетона нет количества" if raw_qty in (None, "")
+                          else f"количество бетона {raw_qty!r} не число")
+                findings.append(_finding("QTY_MISSING", name, detail, expected=None, found=None))
+            elif concrete and _num(concrete.get("qty")) == 0:
                 findings.append(_finding("QTY_MISSING", name,
-                                         "в строке бетона нет количества", expected=None, found=None))
+                                         "объём бетона 0 м3 — незаполненная или испорченная "
+                                         "ячейка", expected=None, found=0))
 
     # конфликт марок бетона между листами (и с пояснительной запиской, если она разобрана)
     by_element: dict[str, list[dict]] = {}
@@ -174,6 +207,8 @@ def to_boq(doc: dict, validation: dict | None = None) -> dict:
     validation = validation or validate_schedules(doc)
     suspicious = {f["where"] for f in validation["findings"] if f["type"] == CONFLICT_SUM}
     lines: list[dict] = []
+    skipped: list[str] = []          # строки, где количество не разобралось
+    note_missing = ""
 
     for sheet in doc.get("sheets") or []:
         for table in sheet.get("tables") or []:
@@ -183,12 +218,17 @@ def to_boq(doc: dict, validation: dict | None = None) -> dict:
             element = _element_key(name)
 
             if steel:
-                diameters = {k: _num(v) or 0.0 for k, v in (steel.get("diameters") or {}).items()}
+                diameters, broken = _diameters(steel.get("diameters"))
                 computed = round(sum(diameters.values()), 2)
-                # берём «Итого» из ведомости; если оно не сходится — берём сумму по диаметрам,
-                # но помечаем, что цифру надо сверить
-                total_kg = _num(steel.get("total_kg")) or computed
-                mismatch = name in suspicious
+                printed = _num(steel.get("total_kg"))
+                # берём «Итого» из ведомости; нет или не число — сумма по диаметрам, но тогда
+                # цена считается по расчётной цифре, а не по напечатанной
+                total_kg = printed if printed is not None else computed
+                if printed is None:
+                    mismatch = True
+                    note_missing = ("«Итого» не число" if broken or steel.get("total_kg")
+                                    else "«Итого» нет")
+                mismatch = name in suspicious or printed is None
                 # берём «Итого», напечатанное в ведомости: это итог конструктора. Сумма по
                 # диаметрам остаётся рядом (by_diameter / alt_qty), чтобы сверка была видна.
                 qty_t = round(total_kg / 1000, 3)
@@ -201,9 +241,11 @@ def to_boq(doc: dict, validation: dict | None = None) -> dict:
                     "source": f"ведомость расхода стали, лист {sheet.get('sheet')} "
                               f"({sheet.get('file')})",
                     "formula": f"«Итого {_money(total_kg)} кг» / 1000 = {qty_t:g} т",
-                    "caveat": ("«Итого» не сходится с суммой по диаметрам: "
-                               f"{_money(total_kg)} кг против {_money(computed)} кг — нужна "
-                               f"сверка с PDF; в итог строка не идёт") if mismatch else "",
+                    "caveat": (f"{note_missing}, взята сумма по диаметрам {_money(computed)} кг — "
+                               f"нужна сверка с PDF; в итог строка не идёт" if printed is None
+                               else ("«Итого» не сходится с суммой по диаметрам: "
+                                     f"{_money(printed)} кг против {_money(computed)} кг — нужна "
+                                     f"сверка с PDF; в итог строка не идёт")) if mismatch else "",
                     "by_diameter": diameters,
                 })
 
@@ -220,7 +262,8 @@ def to_boq(doc: dict, validation: dict | None = None) -> dict:
 
             for row in table.get("rows") or []:
                 qty = _num(row.get("qty"))
-                if not qty:
+                if qty is None or qty == 0:
+                    skipped.append(f"{row.get('name')}: количество {row.get('qty')!r}")
                     continue
                 lines.append({
                     "description": row["name"], "unit": row.get("unit") or "",
@@ -230,7 +273,8 @@ def to_boq(doc: dict, validation: dict | None = None) -> dict:
                 })
             for extra in table.get("other") or []:
                 qty = _num(extra.get("qty"))
-                if not qty:
+                if qty is None or qty == 0:
+                    skipped.append(f"{extra.get('name')}: количество {extra.get('qty')!r}")
                     continue
                 lines.append({
                     "description": f"{extra['name']} — {element}",
@@ -240,8 +284,13 @@ def to_boq(doc: dict, validation: dict | None = None) -> dict:
                     "formula": "объём из ведомости", "caveat": "", "by_diameter": None,
                 })
     lines = _dedupe_concrete(lines)
+    if skipped:
+        validation["findings"].append(_finding(
+            "QTY_MISSING", "ведомости",
+            f"строки без количества не вошли в BOQ: {'; '.join(skipped[:6])}"
+            + (" …" if len(skipped) > 6 else ""), expected=None, found=None))
     return {"lines": lines, "findings": validation["findings"],
-            "totals_by_kind": _totals_by_kind(lines)}
+            "totals_by_kind": _totals_by_kind(lines), "skipped": skipped}
 
 
 def _dedupe_concrete(lines: list[dict]) -> list[dict]:
@@ -255,10 +304,20 @@ def _dedupe_concrete(lines: list[dict]) -> list[dict]:
     others = [l for l in lines if not l["description"].startswith("Бетон")]
     kept: list[dict] = []
     for line in concrete:
+        # сливать можно только одну и ту же конструкцию: плита и стены подвала по 100 м3 —
+        # это 200 м3, а не «дубль» (раньше сравнивалось только количество — терялся объём)
         duplicate = next((k for k in kept
                           if line["unit"] == k["unit"]
+                          and _same_element(line, k)
                           and abs((line["qty"] or 0) - (k["qty"] or 0)) < 0.05), None)
         if duplicate is None:
+            similar = next((k for k in kept
+                            if line["unit"] == k["unit"]
+                            and not _same_element(line, k)
+                            and abs((line["qty"] or 0) - (k["qty"] or 0)) < 0.05), None)
+            if similar is not None:
+                line.setdefault("note", f"то же количество, что у «{similar['description']}», но "
+                                        f"другая конструкция — обе строки оставлены")
             kept.append(line)
             continue
         # оставляем ту, где указана конструкция (ведомость), спецификацию — в примечание
@@ -270,6 +329,27 @@ def _dedupe_concrete(lines: list[dict]) -> list[dict]:
             duplicate.setdefault("note", f"то же количество есть как «{line['description']}» — "
                                          f"не суммируется")
     return kept + others
+
+
+def _same_element(a: dict, b: dict) -> bool:
+    """Одна и та же конструкция или одна из строк без указания конструкции.
+
+    Спецификация пишет «Бетон В25 W6 F50», ведомость — «Бетон В25 W6 F150 — Плита»: это один
+    объём, конструкция известна только в одной строке. А «— Плита» и «— Стены подвала» —
+    разные конструкции даже при одинаковом количестве.
+    """
+    left, right = _concrete_element(a), _concrete_element(b)
+    return left == right or not left or not right
+
+
+def _concrete_element(line: dict) -> str:
+    """«Бетон В25 — плита» → «плита»: по чему отличать конструкции при дедупликации."""
+    text = str(line.get("description") or "")
+    return _norm(text.split("—")[-1].strip()) if "—" in text else ""
+
+
+def _norm(text: str) -> str:
+    return " ".join(str(text or "").lower().replace("ё", "е").split())
 
 
 def _totals_by_kind(lines: list[dict]) -> dict:

@@ -25,6 +25,7 @@ import hashlib
 import json
 from datetime import date
 from pathlib import Path
+from .numeric import is_number, parse_number
 
 REQUIRED_COLUMNS = ("code", "name", "unit", "price")
 COLUMN_ALIASES = {
@@ -40,13 +41,9 @@ DEFAULT_INDEX = Path("data/prices/index.json")
 
 
 def _num(value) -> float | None:
-    if value in (None, ""):
-        return None
-    text = str(value).replace("\xa0", " ").replace(" ", "").replace(",", ".")
-    try:
-        return round(float(text), 4)
-    except ValueError:
-        return None
+    """Конечное число или `None`; «nan»/«inf» в базу цен не попадают."""
+    number = parse_number(value)
+    return None if number is None else round(number, 4)
 
 
 def _norm_header(text: str) -> str:
@@ -90,6 +87,10 @@ def read_rows(path: str | Path) -> tuple[list[dict], list[str]]:
         name = str(get("name") or "").strip()
         if not code or price is None:
             problems.append(f"строка пропущена: код={code or '—'}, цена={get('price')!r}")
+            continue
+        if price <= 0:
+            # нулевая или отрицательная цена в базе — не «дёшево», а испорченная выгрузка
+            problems.append(f"строка пропущена: код={code}, цена={get('price')!r} ≤ 0")
             continue
         items.append({"code": code, "name": name, "unit": str(get("unit") or "").strip(),
                       "price": price, "vat": _num(get("vat")),
@@ -188,6 +189,8 @@ def lookup(code: str = "", name: str = "", *, as_of: str | None = None,
     for version in reversed(versions):            # свежая подходящая версия первой
         doc = load_version(version, out_dir)
         for item in doc["items"]:
+            if not is_number(item.get("price")):
+                continue                     # цена-не-число не должна дойти до сметы
             if (code and item["code"] == code) or (name and item["name"] == name):
                 return {"found": True, "price": item["price"], "unit": item["unit"],
                         "name": item["name"], "code": item["code"], "vat": item.get("vat"),

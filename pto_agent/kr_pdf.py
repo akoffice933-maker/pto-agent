@@ -34,6 +34,7 @@ from datetime import date
 from pathlib import Path
 
 from .takeoff import CONFIDENCE_HIGH, CONFIDENCE_LOW, CONFIDENCE_MEDIUM, unit_ru
+from .numeric import parse_number, positive
 
 # ─────────────────────────── чтение PDF ───────────────────────────
 def read_pdf_text(path: str | Path, cache: str | Path | None = None) -> dict:
@@ -189,13 +190,8 @@ def extract_levels(doc: dict) -> dict:
 
 
 def _num(text: str) -> float | None:
-    if text is None:
-        return None
-    text = str(text).strip().replace("\u00a0", "").replace(" ", "").replace(",", ".")
-    try:
-        return float(text)
-    except ValueError:
-        return None
+    """Конечное число или `None`. `positive()` — когда ноль означает «не заполнено»."""
+    return parse_number(text)
 
 
 # ─────────────────────────── расчёт по габаритам ───────────────────────────
@@ -216,7 +212,7 @@ def derive_boq(facts: dict, *, levels: dict | None = None,
     if gab:
         parts = [p for p in re.split(r"[хx×]", gab["value"]) if p.strip()]
         if len(parts) == 2:
-            length, width = _num(parts[0]), _num(parts[1])
+            length, width = positive(parts[0]), positive(parts[1])
             if length and width:
                 area = round(length * width, 2)
                 formulas.append({"what": "площадь в габаритах по осям",
@@ -225,24 +221,34 @@ def derive_boq(facts: dict, *, levels: dict | None = None,
                                  "caveat": "габаритный прямоугольник: фактическая площадь "
                                            "меньше (здание из двух объёмов многоугольной формы)"})
     if area is None:
-        needs.append({"what": "площадь застройки/этажа", "why": "в тексте нет габаритов по осям",
+        if gab:
+            why = (f"габариты в томе есть («{gab['value']}», стр. {gab['page']}), но не разобраны "
+                   f"как два положительных размера — считать по ним нельзя")
+        else:
+            why = "в тексте нет габаритов по осям"
+        needs.append({"what": "площадь застройки/этажа", "why": why,
                       "ask": "габариты по осям или обмер плана"})
 
-    t_plate = _num((by.get("толщина фундаментной плиты") or {}).get("value"))
+    t_plate = positive((by.get("толщина фундаментной плиты") or {}).get("value"))
     if area and t_plate:
         qty = round(area * t_plate / 1000, 1)
-        lines.append({
-            "description": "Бетон В25 W6 F150 — фундаментная плита",
-            "unit": "m3", "qty": qty, "confidence": CONFIDENCE_MEDIUM,
-            "source": f"расчёт по том КР1, стр. {(by['габариты здания'])['page']} "
-                      f"(габариты) и стр. {by['толщина фундаментной плиты']['page']} "
-                      f"(толщина {t_plate:g} мм)",
-            "derived": True,
-            "formula": f"{area:g} м2 × {t_plate:g} мм = {qty:g} м3",
-            "caveat": "верхняя оценка: без вычетов проёмов, приямков и участков без плиты",
-        })
+        if qty > 0:
+            lines.append({
+                "description": "Бетон В25 W6 F150 — фундаментная плита",
+                "unit": "m3", "qty": qty, "confidence": CONFIDENCE_MEDIUM,
+                "source": f"расчёт по том КР1, стр. {(by['габариты здания'])['page']} "
+                          f"(габариты) и стр. {by['толщина фундаментной плиты']['page']} "
+                          f"(толщина {t_plate:g} мм)",
+                "derived": True,
+                "formula": f"{area:g} м2 × {t_plate:g} мм = {qty:g} м3",
+                "caveat": "верхняя оценка: без вычетов проёмов, приямков и участков без плиты",
+            })
+        else:
+            needs.append({"what": "объём бетона фундаментной плиты",
+                          "why": "расчёт по габаритам дал 0 м3 — один из размеров не заполнен",
+                          "ask": "габариты по осям и толщина плиты"})
 
-    t_basement = _num((by.get("толщина стен подвала") or {}).get("value"))
+    t_basement = positive((by.get("толщина стен подвала") or {}).get("value"))
     if t_basement:
         marks = ", ".join(f"{m['mark']} (стр. {m['page']})"
                           for m in (levels or {}).get("marks", [])[:6]) or "отметок не найдено"
@@ -254,20 +260,21 @@ def derive_boq(facts: dict, *, levels: dict | None = None,
             "ask": "высота подвала по разрезу (или подтвердите пару отметок)",
         })
 
-    t_floor = _num((by.get("толщина перекрытия") or {}).get("value"))
+    t_floor = positive((by.get("толщина перекрытия") or {}).get("value"))
     floors = (levels or {}).get("levels_count") or 0
     if area and t_floor and floors:
         qty = round(area * t_floor / 1000 * floors, 1)
-        lines.append({
-            "description": "Бетон В25 — перекрытия (подвал + 3 этажа)",
-            "unit": "m3", "qty": qty, "confidence": CONFIDENCE_LOW,
-            "source": f"расчёт по том КР1, стр. {by['толщина перекрытия']['page']}; "
-                      f"перекрытия в томе: {', '.join((levels or {}).get('levels') or [])}",
-            "derived": True,
-            "formula": f"{area:g} м2 × {t_floor:g} мм × {floors} перекрытия = {qty:g} м3",
-            "caveat": f"перекрытий в томе {floors}; проёмы, лестницы и балки не вычтены — "
-                      f"объём завышен",
-        })
+        if qty > 0:
+            lines.append({
+                "description": "Бетон В25 — перекрытия (подвал + 3 этажа)",
+                "unit": "m3", "qty": qty, "confidence": CONFIDENCE_LOW,
+                "source": f"расчёт по том КР1, стр. {by['толщина перекрытия']['page']}; "
+                          f"перекрытия в томе: {', '.join((levels or {}).get('levels') or [])}",
+                "derived": True,
+                "formula": f"{area:g} м2 × {t_floor:g} мм × {floors} перекрытия = {qty:g} м3",
+                "caveat": f"перекрытий в томе {floors}; проёмы, лестницы и балки не вычтены — "
+                          f"объём завышен",
+            })
 
     # колонны: нужна высота этажа — в томе её текстом нет
     if by.get("сечение колонн"):

@@ -29,6 +29,7 @@ import json
 from datetime import date
 from pathlib import Path
 
+from .numeric import parse_number
 from .prices import lookup as price_lookup
 
 # ─────────────────────────── единицы ───────────────────────────
@@ -79,18 +80,9 @@ def _pick(row: dict, key: str):
 
 
 def _num(value) -> float | None:
-    if value is None:
-        return None
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return float(value)
-    text = str(value).strip().replace("\u00a0", "").replace(" ", "").replace(",", ".")
-    text = text.replace("₽", "").strip()
-    if not text:
-        return None
-    try:
-        return float(text)
-    except ValueError:
-        return None
+    """Конечное число или `None`. «nan»/«inf» — не число: `float()` их принимает, а итог
+    с `nan` уже не сходится ни с чем."""
+    return parse_number(value)
 
 
 def _rows(path: str | Path) -> tuple[list[dict], list[str]]:
@@ -151,7 +143,10 @@ def read_boq(path: str | Path) -> tuple[list[dict], list[str]]:
                             f"строка пропущена")
             continue
         if qty is None:
-            problems.append(f"{Path(path).name}:{row.get('_row')}: нет количества — "
+            raw = _pick(row, "qty")
+            what = ("нет количества" if raw in (None, "")
+                    else f"количество «{raw}» не число")
+            problems.append(f"{Path(path).name}:{row.get('_row')}: {what} — "
                             f"строка в «не включено»")
         unit_ru = UNIT_RU.get(_norm(unit_native))
         factor, unit_ru_final = 1.0, unit_ru
@@ -272,6 +267,14 @@ def build_draft(boq: list[dict], *, mapping: dict | None = None, prices_dir: str
             item["price"], item["amount"] = None, None
             lines.append(item)
             continue
+        if float(line["qty"]) < 0:
+            item["status"] = STATUS_REVIEW
+            item["reason"] = (f"отрицательный объём {line['qty']:g}: это либо возврат, либо "
+                              f"ошибка знака — в итог строка не идёт до подтверждения")
+            item["amount"] = None
+            review.append(item)
+            lines.append(item)
+            continue
         if not price.get("found"):
             item["status"] = STATUS_NO_PRICE
             item["reason"] = price.get("reason") or "цены нет в базе"
@@ -296,13 +299,19 @@ def build_draft(boq: list[dict], *, mapping: dict | None = None, prices_dir: str
             item["reason"] = "объём средней уверенности: сумма посчитана, но требует проверки"
             review.append(item)
         if (item["price_unit"] and _norm(unit_ru(item["price_unit"])) != _norm(item["unit"])):
+            # деньги в другой единице в «итого» попасть не должны: шт × ₽/м3 — не сумма
+            item["amount_wrong_unit"] = item["amount"]
+            item["amount"] = None
             item["reason"] = (f"единица объёма «{item['unit']}» не совпадает с единицей цены "
-                              f"«{item['price_unit']}» — проверить пересчёт")
+                              f"«{item['price_unit']}» — сумма {item['amount_wrong_unit']:,.2f} ₽ "
+                              f"в итог не идёт, нужен пересчёт")
+            item["amount_placeholder"] = True
             item["status"] = STATUS_REVIEW
             review.append(item)
         lines.append(item)
 
     priced = [l for l in lines if l.get("amount") is not None]
+    duplicated = _mark_duplicates(lines)
     return {
         "schema": "pto-agent/takeoff-draft@1",
         "object_name": object_name, "section": section,
@@ -317,14 +326,50 @@ def build_draft(boq: list[dict], *, mapping: dict | None = None, prices_dir: str
             "lines": len(lines),
             "priced_lines": len(priced),
             "amount_rub": round(sum(l["amount"] for l in priced), 2) if priced else None,
+            # в «высокую» сумму не идут строки, помеченные как возможный дубль
             "amount_high_rub": round(sum(l["amount"] for l in priced
-                                         if l["confidence"] == CONFIDENCE_HIGH), 2) if priced else None,
+                                         if l["confidence"] == CONFIDENCE_HIGH
+                                         and not l.get("duplicate_of")), 2) if priced else None,
+            "amount_duplicates_rub": round(sum(l["amount"] for l in priced
+                                               if l.get("duplicate_of")), 2) if priced else None,
             "review_lines": len({i["element"] for i in review}),
             "excluded_lines": len(excluded),
             "no_price_lines": len([l for l in lines if l["status"] == STATUS_NO_PRICE]),
+            "duplicate_lines": duplicated,
+            "negative_lines": len([l for l in lines if "отрицательный объём" in (l.get("reason") or "")]),
+            "wrong_unit_lines": len([l for l in lines if l.get("amount_placeholder")]),
         },
         "confirmed_by": None,
     }
+
+
+def _norm_key(text) -> str:
+    return " ".join(str(text or "").lower().replace("ё", "е").split())
+
+
+def _mark_duplicates(lines: list[dict]) -> int:
+    """Одинаковые строки (элемент + единица + количество) в одной ведомости.
+
+    Выгрузки склеивают из нескольких листов, и одна и та же работа попадает дважды. Сумма при
+    этом удваивается, поэтому такие строки помечаются и человек решает, а не «итого».
+    """
+    seen: dict[tuple, list[dict]] = {}
+    for line in lines:
+        if line.get("qty") is None:
+            continue
+        key = (_norm_key(line.get("element")), _norm_key(line.get("unit")), round(float(line["qty"]), 6))
+        seen.setdefault(key, []).append(line)
+    groups = 0
+    for key, group in seen.items():
+        if len(group) < 2:
+            continue
+        groups += 1
+        for line in group:
+            line["duplicate_of"] = len(group)
+            line["status"] = STATUS_REVIEW
+            line.setdefault("reason", f"такая же строка встречается {len(group)} раза: "
+                                      f"сумма удвоится — проверить, не склеены ли листы")
+    return groups
 
 
 def confirm(draft: dict, changes: dict | None = None, *, by: str, role: str = "инженер ПТО",
@@ -390,8 +435,12 @@ def _recount(draft: dict) -> None:
     totals["priced_lines"] = len(counted)
     totals["amount_rub"] = round(sum(l["amount"] for l in counted), 2) if counted else None
     totals["amount_high_rub"] = (round(sum(l["amount"] for l in counted
-                                           if l["confidence"] == CONFIDENCE_HIGH), 2)
+                                           if l["confidence"] == CONFIDENCE_HIGH
+                                           and not l.get("duplicate_of")), 2)
                                  if counted else None)
+    totals["amount_duplicates_rub"] = (round(sum(l["amount"] for l in counted
+                                                 if l.get("duplicate_of")), 2)
+                                       if counted else None)
     totals["confirmed_lines"] = len([l for l in draft["lines"] if l.get("confirmed")])
 
 
@@ -407,7 +456,14 @@ def draft_to_markdown(draft: dict) -> str:
              f"- **итог по строкам с известной ценой: "
              f"{_money(totals.get('amount_rub'))} ₽**"
              + (f" (из них высокая уверенность: {_money(totals.get('amount_high_rub'))} ₽)"
-                if totals.get("amount_high_rub") is not None else ""), "",
+                if totals.get("amount_high_rub") is not None else "")
+             + (f" · \n- **под сомнением (повторяющиеся строки, в высокую уверенность не "
+                f"вошли): {_money(totals.get('amount_duplicates_rub'))} ₽**"
+                if totals.get("amount_duplicates_rub") else "")
+             + (f" · \n- строк с несовпадением единицы или отрицательным объёмом: "
+                f"{(totals.get('wrong_unit_lines') or 0) + (totals.get('negative_lines') or 0)} "
+                f"— их суммы в итог не включены" if (totals.get("wrong_unit_lines")
+                                                     or totals.get("negative_lines")) else ""), "",
              "| Элемент | Кол-во | Ед. | Ресурс | Цена | Сумма | Уверенность | Статус |",
              "|---|---|---|---|---|---|---|---|"]
     for line in draft.get("lines") or []:
@@ -420,6 +476,14 @@ def draft_to_markdown(draft: dict) -> str:
         for item in draft["excluded"]:
             lines.append(f"- {item['element'][:70]} — {item['qty'] or '—'} "
                          f"{item.get('unit') or ''}: {item.get('reason')}")
+    to_check = [l for l in draft.get("lines") or []
+                if l["status"] == STATUS_REVIEW and l.get("reason")]
+    if to_check:
+        lines += ["", "## На проверку", ""]
+        for item in to_check:
+            tail = ("" if item.get("amount") is not None
+                    else " — **в итог не вошла**")
+            lines.append(f"- {item['element'][:60]}: {item.get('reason')}{tail}")
     no_price = [l for l in draft.get("lines") or [] if l["status"] == STATUS_NO_PRICE]
     if no_price:
         lines += ["", "## Без цены (в итог не вошло)", ""]
