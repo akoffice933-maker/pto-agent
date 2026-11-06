@@ -8,6 +8,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from .reconcile import Reconciliation
+from .netguard import csv_row
 
 NAVY = "1F3864"
 HDR = Font(bold=True, color="FFFFFF", size=10)
@@ -162,7 +163,7 @@ def export_discrepancies_csv(rec: Reconciliation, path: Path) -> Path:
         w = csv.writer(f, delimiter=";")
         w.writerow(["severity", "type", "code", "name", "values", "sources", "action"])
         for d in rec.discrepancies:
-            w.writerow([d.severity, d.type, d.code or "", d.name,
+            w.writerow(csv_row([d.severity, d.type, d.code or "", d.name,
                         "; ".join(f"{k}={v}" for k, v in d.values.items()),
-                        " | ".join(d.sources), d.suggested_action])
+                        " | ".join(d.sources), d.suggested_action]))
     return path

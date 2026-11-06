@@ -34,11 +34,14 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+from ..netguard import (UnsafeEndpoint, log_decision, open_bounded, public_message,
+                        validate_url)
 from .one_c import (OneCError, _fmt, _num, acts_document, group_acts,
                     normalize_smeta_rows)
 
 DEFAULT_TIMEOUT = 30.0
 RETRY_STATUSES = {500, 502, 503, 504}
+DEFAULT_MAX_BYTES = 10 * 1024 * 1024      # ответ 1С больше 10 МБ — это не наш случай
 
 
 class OneCHttpError(OneCError):
@@ -64,14 +67,25 @@ class OneCHttpClient:
                  token: str | None = None, token_header: str = "Authorization",
                  token_prefix: str = "Bearer ", timeout: float = DEFAULT_TIMEOUT,
                  retries: int = 2, retry_delay: float = 0.5,
-                 headers: dict | None = None):
+                 headers: dict | None = None, max_bytes: int = DEFAULT_MAX_BYTES):
         if not base_url:
             raise OneCHttpError("не задан адрес HTTP-сервиса 1С")
-        self.base_url = base_url.rstrip("/")
+        # Схема и хост проверяются сразу: раньше принимался и file:///etc, а basic-auth
+        # мог уйти по открытому http на внешний хост.
+        try:
+            self.base_url = validate_url(base_url, purpose="1С HTTP-сервис",
+                                         allow_private=True,
+                                         allow_insecure_http=False).rstrip("/")
+        except UnsafeEndpoint as exc:
+            log_decision("1С", str(base_url), allowed=False, reason=exc.reason)
+            raise OneCHttpError(public_message(exc)) from exc
+        if self.base_url != base_url.rstrip("/"):
+            log_decision("1С", self.base_url, allowed=True)
         self.user, self.password = user, password
         self.token, self.token_header, self.token_prefix = token, token_header, token_prefix
         self.timeout, self.retries, self.retry_delay = float(timeout), int(retries), retry_delay
         self.extra_headers = dict(headers or {})
+        self.max_bytes = int(max_bytes)
         self.calls: list[dict] = []          # журнал вызовов: что и когда дернули
 
     # ── конфиг ──
@@ -118,17 +132,27 @@ class OneCHttpClient:
             if idempotency_key:
                 headers["Idempotency-Key"] = idempotency_key
 
+        # Повторять POST без Idempotency-Key нельзя: повтор создаст второй документ в 1С.
+        idempotent = method.upper() in ("GET", "HEAD") or bool(idempotency_key)
+        attempts = self.retries + 1 if idempotent else 1
+
         last_error = None
-        for attempt in range(self.retries + 1):
+        for attempt in range(attempts):
             req = urllib.request.Request(url, data=data, method=method, headers=headers)
             started = time.time()
             try:
-                with urllib.request.urlopen(req, timeout=self.timeout) as r:
-                    raw = r.read()
-                    status = r.status
+                raw, status, _resp_headers = open_bounded(
+                    req, timeout=self.timeout, max_bytes=self.max_bytes,
+                    purpose="1С HTTP-сервис")
                 self.calls.append({"method": method, "url": url, "status": status,
                                    "ms": round(1000 * (time.time() - started))})
                 return _parse_json(raw, url)
+            except UnsafeEndpoint as e:
+                # сетевой предохранитель: размер ответа, схема, редирект на другой хост
+                self.calls.append({"method": method, "url": url, "status": None,
+                                   "ms": round(1000 * (time.time() - started)),
+                                   "blocked": e.reason})
+                raise OneCHttpError(public_message(e)) from e
             except urllib.error.HTTPError as e:
                 body_text = ""
                 try:
@@ -138,19 +162,22 @@ class OneCHttpClient:
                 self.calls.append({"method": method, "url": url, "status": e.code,
                                    "ms": round(1000 * (time.time() - started))})
                 if e.code in (401, 403):
-                    raise OneCAuthError(f"1С отклонила доступ ({e.code}) на {url}: {body_text}") from e
-                if e.code in RETRY_STATUSES and attempt < self.retries:
-                    last_error = OneCServerError(f"1С ответила {e.code} на {url}: {body_text}")
+                    raise OneCAuthError(f"1С отклонила доступ ({e.code}): "
+                                        f"{_safe_body(body_text)}") from e
+                if e.code in RETRY_STATUSES and attempt < attempts - 1:
+                    last_error = OneCServerError(f"1С ответила {e.code}: "
+                                                 f"{_safe_body(body_text)}")
                     time.sleep(self.retry_delay * (attempt + 1))
                     continue
                 if e.code in RETRY_STATUSES:
-                    raise OneCServerError(f"1С ответила {e.code} на {url}: {body_text}") from e
-                raise OneCRequestError(f"запрос отклонён ({e.code}) {url}: {body_text}") from e
+                    raise OneCServerError(f"1С ответила {e.code}: {_safe_body(body_text)}") from e
+                raise OneCRequestError(f"запрос отклонён ({e.code}): "
+                                       f"{_safe_body(body_text)}") from e
             except (urllib.error.URLError, TimeoutError, OSError) as e:
                 self.calls.append({"method": method, "url": url, "status": None,
                                    "ms": round(1000 * (time.time() - started))})
-                last_error = OneCServerError(f"1С недоступна ({url}): {e}")
-                if attempt < self.retries:
+                last_error = OneCServerError(f"1С недоступна: {public_message(e)}")
+                if attempt < attempts - 1:
                     time.sleep(self.retry_delay * (attempt + 1))
                     continue
                 raise last_error from e
@@ -184,6 +211,17 @@ class OneCHttpClient:
         return self.request("POST", path, body=body, idempotency_key=key)
 
 
+def _safe_body(text: str) -> str:
+    """Тело ответа 1С для сообщения об ошибке: без адресов, токенов и длинных простыней.
+
+    Раньше в текст исключения попадали первые 500 символов ответа как есть — а ответ 1С
+    может содержать внутренние адреса, имена баз и учётные данные.
+    """
+    clean = re.sub(r"\s+", " ", str(text or "")).strip()
+    clean = re.sub(r"(?i)(password|passwd|pwd|token|secret)\s*[=:]\s*\S+", r"\1=***", clean)
+    return public_message(clean, limit=160)
+
+
 def _parse_json(raw: bytes, url: str) -> dict:
     text = raw.decode("utf-8", "replace").strip()
     if not text:
@@ -191,7 +229,7 @@ def _parse_json(raw: bytes, url: str) -> dict:
     try:
         data = json.loads(text)
     except json.JSONDecodeError as e:
-        raise OneCHttpError(f"ответ {url} не JSON: {text[:200]!r}") from e
+        raise OneCHttpError(f"ответ не JSON: {public_message(text[:200])!r}") from e
     if not isinstance(data, (dict, list)):
         raise OneCHttpError(f"ответ {url} не объект и не список: {type(data).__name__}")
     return data if isinstance(data, dict) else {"items": data}

@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -19,7 +20,14 @@ from pathlib import Path
 
 import yaml
 
+from ...netguard import (DEFAULT_MAX_BYTES, UnsafeEndpoint, log_decision, open_bounded,
+                         public_message, validate_url)
+
 CONFIG_PATH = Path("config/llm_providers.yaml")
+
+# Классы данных, для которых картинку нельзя отправлять за пределы контура: это листы
+# проектной документации заказчика.
+RESTRICTED_DATA_CLASSES = {"commercial_secret", "personal"}
 
 
 class ProviderUnavailable(RuntimeError):
@@ -93,14 +101,25 @@ def resolve_vision_provider(provider_id: str | None = None,
 
 
 def _base_is_reachable_shape(base: str) -> bool:
-    """Отличить «настоящий» адрес от заглушки внутреннего контура (10.x, localhost-пауза)."""
-    if not base or not base.startswith("http"):
+    """Годится ли адрес провайдера для вызова.
+
+    Раньше проверка была перевёрнутой: внутренний контур (10.x) считался недоступным, а
+    метаданные облака (169.254.169.254) и localhost — доступными. Теперь решение принимает
+    `netguard`: схема только http/https, метаданные облака запрещены всегда, внешний хост —
+    только по https. Внутренние адреса по умолчанию считаются «недоступными из этой среды»
+    (это подсказка разработчику), включаются `PTO_VL_ALLOW_PRIVATE=1`.
+    """
+    try:
+        url = validate_url(base, purpose="VL-провайдер", allow_private=True,
+                           allow_insecure_http=True)
+    except UnsafeEndpoint as exc:
+        log_decision("VL", str(base), allowed=False, reason=exc.reason)
         return False
-    host = re.sub(r"^https?://", "", base).split("/")[0].split(":")[0]
+    host = re.sub(r"^https?://", "", url).split("/")[0].split(":")[0]
     if os.getenv("PTO_VL_ALLOW_PRIVATE") == "1":
         return True
-    return not (host.startswith("10.") or host.startswith("192.168.")
-                or host.startswith("172.16."))
+    from ...netguard import _is_private_host
+    return not _is_private_host(host)
 
 
 def _strip_code_fences(text: str) -> str:
@@ -134,14 +153,26 @@ class OpenAIVisionProvider:
         return headers
 
     def _poster(self, url: str, body: dict) -> dict:
+        safe_url = validate_url(url, purpose="VL-провайдер", allow_private=True,
+                                allow_insecure_http=True)
         req = urllib.request.Request(
-            url, data=json.dumps(body).encode("utf-8"),
+            safe_url, data=json.dumps(body).encode("utf-8"),
             headers=self._headers(), method="POST")
-        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+        raw, _status, _headers = open_bounded(req, timeout=self.timeout,
+                                              max_bytes=DEFAULT_MAX_BYTES,
+                                              purpose="VL-провайдер")
+        return json.loads(raw.decode("utf-8"))
 
     # ── вызов ─────────────────────────────────────────────────────────────
     def analyze(self, request: VisionRequest) -> VisionResponse:
+        # Лист проектной документации — не «публичные данные»: провайдер с резидентностью
+        # вне контура для такого изображения не используется.
+        residency = (self.settings.get("residency") or "").lower()
+        data_class = str((self.settings.get("data_classes") or ["public"])[0])
+        if data_class in RESTRICTED_DATA_CLASSES and residency not in ("on_premise", "rf_cloud"):
+            raise ProviderError(
+                f"провайдер {self.id}: изображение с классом данных «{data_class}» нельзя "
+                f"отправлять за пределы контура (residency={residency or 'не задана'})")
         b64 = base64.b64encode(request.image_bytes).decode("ascii")
         body = {
             "model": self.model,
@@ -180,8 +211,10 @@ class OpenAIVisionProvider:
                     cost_rub=round(tin / 1000 * self.price_in + tout / 1000 * self.price_out, 4),
                     error=None if parsed is not None else last_error,
                     raw_usage=usage)
-            except (urllib.error.URLError, TimeoutError, ProviderError) as exc:
-                last_error = f"{type(exc).__name__}: {exc}"
+            except (urllib.error.URLError, TimeoutError, ProviderError,
+                    UnsafeEndpoint) as exc:
+                last_error = public_message(exc)
+                sys.stderr.write(f"[vl] {self.id}: {type(exc).__name__}: {exc}\n")
                 time.sleep(0.5 * (attempt + 1))
         raise ProviderError(f"провайдер {self.id} недоступен: {last_error}")
 

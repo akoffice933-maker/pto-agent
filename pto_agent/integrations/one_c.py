@@ -28,6 +28,7 @@ import csv
 import io
 import re
 from pathlib import Path
+from ..netguard import csv_safe
 
 ENCODINGS = ("utf-8-sig", "utf-8", "cp1251")
 DELIMITERS = (";", "\t", ",", "|")
@@ -203,7 +204,8 @@ def _write_csv(path: Path, columns, rows: list[dict]) -> None:
         writer = csv.DictWriter(f, fieldnames=list(columns), delimiter=";",
                                 quoting=csv.QUOTE_MINIMAL)
         writer.writeheader()
-        writer.writerows(rows)
+        # наименования приходят из внешней сметы: экранируем формулы для Excel/1С
+        writer.writerows([{k: csv_safe(v) for k, v in row.items()} for row in rows])
 
 
 # ─────────────────────────── чтение из 1С ────────────────────────────────

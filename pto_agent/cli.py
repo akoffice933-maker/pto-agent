@@ -11,7 +11,8 @@ from .export import (export_discrepancies, export_discrepancies_csv, export_ks2,
                      export_remainder)
 from .llm import describe_discrepancies, route
 from .norms import NormIndex, load_norms
-from .parsers import read_closed, read_estimate, read_journal
+from .parsers import (WorkbookTooLarge, read_closed_ex, read_estimate_ex,
+                      read_journal_ex)
 from .kr_pdf import (derive_boq, extract_facts, extract_levels, find_schedules, kr_report,
                      read_pdf_text)
 from .kr_schedules import (coverage as schedules_coverage, read_schedules, schedules_report,
@@ -40,14 +41,26 @@ def cmd_run(args):
     audit = AuditLog(out / "audit.jsonl")
 
     print("1. Чтение документов…")
-    items = read_estimate(data / "smeta_v1.xlsx")
-    entries = read_journal(data / "journal_2026_10.xlsx")
-    closed = read_closed(data / "acts_previous.xlsx")
+    try:
+        items, p_est = read_estimate_ex(data / "smeta_v1.xlsx")
+        entries, p_journal = read_journal_ex(data / "journal_2026_10.xlsx")
+        closed, p_closed = read_closed_ex(data / "acts_previous.xlsx")
+    except WorkbookTooLarge as exc:
+        print(f"   ОСТАНОВЛЕНО: {exc}")
+        return 2
+    read_problems = p_est + p_journal + p_closed
     audit.append("agent:parser", "agent", "documents.read", "dataset",
                  {"estimate_items": len(items), "journal_entries": len(entries),
-                  "closed_records": len(closed)})
+                  "closed_records": len(closed), "read_problems": len(read_problems),
+                  # битые ячейки — это факт о документе, а не «ноль»
+                  "problems": read_problems[:50]})
     print(f"   смета: {len(items)} позиций · журнал: {len(entries)} записей · "
           f"закрыто ранее: {len(closed)} записей")
+    if read_problems:
+        print(f"   ⚠ замечаний чтения: {len(read_problems)} — битые ячейки не приняты за 0")
+        for problem in read_problems[:5]:
+            print(f"     {problem['where']}, строка {problem['row']}: {problem['what']} "
+                  f"→ {problem['effect']}")
 
     print("2. Сверка объёмов и расхождения…")
     rec = reconcile(items, entries, closed, object_name=args.object_name, period=_period(entries))
