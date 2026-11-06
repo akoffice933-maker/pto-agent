@@ -249,3 +249,68 @@ def test_cli_confirm_without_human_fails(tmp_path):
                          env={**__import__("os").environ, "PYTHONPATH": str(ROOT)})
     assert run.returncode == 2
     assert "ОСТАНОВЛЕНО" in run.stdout
+
+
+# ─────────────────────────── MCP-инструмент ───────────────────────────
+def _mcp_call(name: str, arguments: dict) -> dict:
+    """Вызов инструмента через настоящий stdio-протокол, как это делает MCP-клиент."""
+    payload = "\n".join(json.dumps(x, ensure_ascii=False) for x in [
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+         "params": {"name": name, "arguments": arguments}},
+    ]) + "\n"
+    proc = subprocess.run([sys.executable, "-m", "pto_agent.mcp_server", "--base-dir", str(ROOT)],
+                          input=payload, capture_output=True, text=True, timeout=180, cwd=ROOT)
+    assert proc.returncode == 0, proc.stderr
+    answers = [json.loads(line) for line in proc.stdout.splitlines() if line.strip()]
+    return next(a for a in answers if a.get("id") == 2)["result"]
+
+
+def test_mcp_tool_is_registered():
+    from pto_agent.cad.mcp_server import TOOLS
+
+    names = [t["name"] for t in TOOLS]
+    assert "tk_draft" in names
+    tool = next(t for t in TOOLS if t["name"] == "tk_draft")
+    assert tool["inputSchema"]["type"] == "object"
+    assert set(tool["inputSchema"]["required"]) <= set(tool["inputSchema"]["properties"])
+
+
+def test_mcp_tk_draft_returns_draft_with_questions(tmp_path):
+    result = _mcp_call("tk_draft", {"action": "draft", "work_type": "earthworks",
+                                    "object_name": "Школа", "out_dir": str(tmp_path)})
+    payload = json.loads(result["content"][0]["text"])
+    assert payload["status"] == "draft_unapproved"
+    assert payload["totals"]["needs_input"] >= 3
+    assert payload["unverified_norms"], "у земляных работ нормы в базе не подтверждены"
+    assert "не является утверждённой" in payload["disclaimer"]
+    assert Path(payload["files"]["docx"]).exists()
+
+
+def test_mcp_tk_confirm_without_human_is_refused(tmp_path):
+    draft = _mcp_call("tk_draft", {"action": "ppr", "object_name": "Школа",
+                                   "out_dir": str(tmp_path)})
+    path = json.loads(draft["content"][0]["text"])["files"]["json"]
+    result = _mcp_call("tk_draft", {"action": "confirm", "draft_path": path, "by": "",
+                                    "role": "", "out_dir": str(tmp_path)})
+    payload = json.loads(result["content"][0]["text"])
+    assert payload["ok"] is False
+    assert any("анонимное подтверждение" in p for p in payload["problems"])
+
+
+def test_tk_tool_is_in_design_schema_and_server():
+    """`prompts/tools_schema.json` — проектная схема (свои имена), сервер — реализация.
+
+    Сверять списки один-в-один нельзя: в схеме есть проектные инструменты (`get_estimate`,
+    `render_document`), которых в реализации нет. Проверяем то, что действительно важно:
+    новый инструмент описан в обеих частях, и у него есть guardrails.
+    """
+    schema = json.loads((ROOT / "prompts" / "tools_schema.json").read_text(encoding="utf-8"))
+    from pto_agent.cad.mcp_server import TOOLS
+
+    names = [t["name"] for t in schema["tools"]]
+    assert len(names) == len(set(names)), "дубликаты в проектной схеме"
+    assert "tk_draft" in names
+    assert "tk_draft" in [t["name"] for t in TOOLS]
+    entry = next(t for t in schema["tools"] if t["name"] == "tk_draft")
+    assert entry["guardrails"] and "не проверено" in " ".join(entry["guardrails"])

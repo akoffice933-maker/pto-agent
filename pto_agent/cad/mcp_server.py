@@ -1300,6 +1300,85 @@ def t_takeoff(args, ctx):
     return {"ok": True, "draft": draft, "markdown": markdown}
 
 
+@tool("tk_draft",
+      "Черновик технологической карты (ТК) или проекта производства работ (ППР). Заполняется "
+      "только то, что есть в матрице требований (вид работ, скрываемость, комплект ИД, "
+      "протоколы), в нормативной базе (нормы — со сверкой и цитатой) и в переданной смете "
+      "(позиции с пометкой «проверить»). Состав операций с допусками, машины и механизмы, "
+      "охрана труда и калькуляция трудозатрат не выдумываются: возвращаются как `needs_input` "
+      "с адресатом запроса. Норма без сверки помечается «не проверено». Документ всегда "
+      "черновик: подтверждение принимается только с ФИО и ролью, и после него это «черновик "
+      "проверен инженером», а не утверждённая ТК.",
+      {"type": "object", "properties": {
+          "action": {"type": "string", "enum": ["draft", "ppr", "confirm"], "default": "draft",
+                     "description": "draft — ТК по виду работ; ppr — ППР по объекту; "
+                                    "confirm — отметить проверку человеком"},
+          "work_type": {"type": "string",
+                        "description": "id вида работ из матрицы (earthworks, electrical, …)"},
+          "text": {"type": "string", "description": "текст работы: вид работ определит классификатор"},
+          "object_name": {"type": "string"},
+          "estimate_path": {"type": "string",
+                            "description": "смета (xlsx): позиции пойдут в раздел «Материалы»"},
+          "norms_dir": {"type": "string", "description": "каталог нормативной базы"},
+          "out_dir": {"type": "string"},
+          "draft_path": {"type": "string", "description": "для confirm: tk_draft.json"},
+          "filled": {"type": "object",
+                     "description": "для confirm: {ключ раздела: [что вписал инженер]}"},
+          "by": {"type": "string", "description": "ФИО проверившего (обязательно для confirm)"},
+          "role": {"type": "string", "description": "должность (обязательно для confirm)"},
+          "reason": {"type": "string"},
+          "audit_path": {"type": "string"},
+          "format": {"type": "string", "enum": ["json", "markdown"], "default": "json"}},
+       "required": ["action"]})
+def t_tk_draft(args, ctx):
+    from ..tk import (build_ppr_draft, build_tk_draft, confirm as confirm_tk, to_markdown,
+                      write)
+    base = Path(ctx.get("base_dir") or ".")
+    out_dir = Path(args.get("out_dir") or base / "out" / "tk")
+    action = args.get("action") or "draft"
+    audit = None
+    if args.get("audit_path"):
+        from ..audit import AuditLog
+        audit = AuditLog(Path(args["audit_path"]))
+
+    positions = None
+    if args.get("estimate_path"):
+        from ..parsers import read_estimate_ex
+        items, problems = read_estimate_ex(Path(_p(args, "estimate_path")))
+        positions = [{"name": i.name, "qty": i.qty, "unit": i.unit,
+                      "source": f"смета {Path(_p(args, 'estimate_path')).name}"} for i in items]
+        if problems:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / "estimate_problems.json").write_text(
+                json.dumps(problems, ensure_ascii=False, indent=1), encoding="utf-8")
+
+    if action == "confirm":
+        draft = json.loads(Path(_p(args, "draft_path")).read_text(encoding="utf-8"))
+        draft = confirm_tk(draft, by=args.get("by") or "", role=args.get("role") or "",
+                           filled=args.get("filled") or {}, reason=args.get("reason") or "",
+                           audit_log=audit)
+        if draft.get("confirm_problems"):
+            return {"ok": False, "error": "подтверждение не принято",
+                    "problems": draft["confirm_problems"]}
+    elif action == "ppr":
+        draft = build_ppr_draft(object_name=args.get("object_name") or "", positions=positions)
+    else:
+        draft = build_tk_draft(work_type_id=args.get("work_type") or None,
+                               work_text=args.get("text") or None,
+                               object_name=args.get("object_name") or "",
+                               positions=positions, norms_dir=args.get("norms_dir") or None)
+
+    files = write(draft, out_dir)
+    payload = {"ok": True, "kind": draft["kind"], "status": draft["status"],
+               "work_type": draft.get("work_type"), "totals": draft["totals"],
+               "needs_input": draft["needs_input"], "unverified_norms":
+                   [n for n in draft.get("norms") or [] if not n["verified"]],
+               "files": files, "disclaimer": draft["disclaimer"]}
+    if (args.get("format") or "json") == "markdown":
+        payload["markdown"] = to_markdown(draft)
+    return payload
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="pto_agent.cad.mcp_server",
                                  description="MCP-сервер CAD-модуля ИИ-агента ПТО")

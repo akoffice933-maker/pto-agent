@@ -247,11 +247,28 @@ def build_tk_draft(*, work_type_id: str | None = None, work_text: str | None = N
     for extra in requirements.get("extra_docs") or []:
         quality_items.append({"text": f"Дополнительно: {extra}", "source": "матрица требований"})
     if not quality_items:
-        needs.append({"what": "контроль качества и исполнительная документация",
-                      "why": "вид работ не определён — комплект документов не выведен",
-                      "ask": "вид работ, затем комплект по матрице"})
+        nothing_required = (resolved is not None
+                            and not (requirements.get("required") or requirements.get("protocols")
+                                     or requirements.get("extra_docs")))
+        if nothing_required:
+            # демонтаж и вывоз мусора: матрица прямо не требует исполнительных документов.
+            # Это факт из матрицы, а не «раздел не заполнен» — так и пишем, и просим подтвердить.
+            quality_items.append({
+                "text": "Матрица требований не задаёт исполнительных документов по этому виду "
+                        "работ (required пусто, протоколов нет).",
+                "source": "матрица требований"})
+            needs.append({"what": "комплект ИД по виду работ",
+                          "why": "в матрице у этого вида работ не заполнены документы и протоколы",
+                          "ask": "подтвердить, что ИД по этому виду работ не требуется, либо "
+                                 "заполнить матрицу — инженер ПТО"})
+        else:
+            needs.append({"what": "контроль качества и исполнительная документация",
+                          "why": "вид работ не определён — комплект документов не выведен",
+                          "ask": "вид работ, затем комплект по матрице"})
     sections.append({"key": "quality", "title": TK_SECTIONS[5][1], "owner": TK_SECTIONS[5][2],
-                     "items": quality_items, "needs_input": []})
+                     "items": quality_items,
+                     "needs_input": _pop_needs(needs, "комплект ИД по виду работ")
+                     + _pop_needs(needs, "контроль качества и исполнительная документация")})
 
     # 7. Охрана труда
     needs.append({"what": "требования охраны труда, пожарной и экологической безопасности",
