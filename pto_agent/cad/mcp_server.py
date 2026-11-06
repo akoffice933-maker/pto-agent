@@ -1930,6 +1930,182 @@ def t_quality_docs(args, ctx):
     return payload
 
 
+@tool("docflow",
+      "Движение документации. `action=rd`: реестр выдачи рабочей документации — какая редакция "
+      "передана, кому, когда, со штампом ли «В производство работ», есть ли подпись получившего; "
+      "передача заменённой редакции и работа по документу, которого нет в выдаче, — ошибки. "
+      "`action=submittals`: согласование ИД — комплект, замечания со сроками, устранение, "
+      "повторная передача, подпись; подпись при открытых замечаниях и подпись без ФИО и роли "
+      "недействительны. `action=sign` — подпись реестра человеком с ФИО и ролью, при ошибках отказ.",
+      {"type": "object", "properties": {
+          "action": {"type": "string", "enum": ["rd", "submittals", "sign"], "default": "rd"},
+          "transmittals": {"type": "array", "items": {"type": "object"},
+                           "description": "[{doc, title, revision, date, recipient, copies, "
+                                          "stamp, receipt{by, at}}]"},
+          "transmittals_path": {"type": "string"},
+          "revisions": {"type": "array", "items": {"type": "object"},
+                        "description": "реестр редакций: [{doc, revision, current}]"},
+          "revisions_path": {"type": "string", "description": "реестр редакций РД"},
+          "works": {"type": "array", "items": {"type": "object"},
+                    "description": "работы со ссылкой на РД: [{work, rd}]"},
+          "works_path": {"type": "string", "description": "работы со ссылкой на РД"},
+          "submittals": {"type": "array", "items": {"type": "object"},
+                         "description": "[{title, act_ref, sent_at, recipient, receipt{by}, "
+                                        "remarks[{text, due, fixed_at}], signature{by, role, "
+                                        "decision, at}, resubmitted_at}]"},
+          "submittals_path": {"type": "string"},
+          "registry_path": {"type": "string", "description": "для sign: JSON реестра"},
+          "object_name": {"type": "string"}, "number": {"type": "string"},
+          "by": {"type": "string"}, "role": {"type": "string"},
+          "decision": {"type": "string"}, "reason": {"type": "string"},
+          "out_dir": {"type": "string"}, "audit_path": {"type": "string"},
+          "format": {"type": "string", "enum": ["json", "markdown"], "default": "json"}},
+       "required": []})
+def t_docflow(args, ctx):
+    from ..docflow import (build_rd_registry, build_submittal_registry, load_list, sign,
+                           to_markdown, write)
+    base = Path(ctx.get("base_dir") or ".")
+    out_dir = Path(args.get("out_dir") or base / "out" / "docflow")
+    audit = None
+    if args.get("audit_path"):
+        from ..audit import AuditLog
+        audit = AuditLog(Path(args["audit_path"]))
+    action = args.get("action") or "rd"
+
+    if action == "sign":
+        path = Path(_p(args, "registry_path"))
+        document = json.loads(path.read_text(encoding="utf-8"))
+        document = sign(document, by=args.get("by") or "", role=args.get("role") or "",
+                        decision=args.get("decision") or "", reason=args.get("reason") or "",
+                        audit_log=audit)
+        if document.get("sign_problems"):
+            return {"ok": False, "error": "подпись не принята",
+                    "problems": document["sign_problems"]}
+        files = write(document, out_dir, stem=path.stem)
+        return {"ok": True, "kind": document["schema"], "status": document["status"],
+                "totals": document["totals"], "confirmed_by": document["confirmed_by"],
+                "can_work": document.get("can_work"), "can_close": document.get("can_close"),
+                "files": files, "disclaimer": document["disclaimer"]}
+
+    problems: list = []
+    if action == "rd":
+        transmittals = args.get("transmittals") or []
+        if not transmittals and args.get("transmittals_path"):
+            transmittals, problems = load_list(Path(_p(args, "transmittals_path")), "transmittals")
+        revisions: list = args.get("revisions") or []
+        if not revisions and args.get("revisions_path"):
+            revisions, more = load_list(Path(_p(args, "revisions_path")), "revisions")
+            problems += more
+        works: list = args.get("works") or []
+        if not works and args.get("works_path"):
+            works, more = load_list(Path(_p(args, "works_path")), "works")
+            problems += more
+        document = build_rd_registry(transmittals, revisions=revisions, works=works,
+                                     object_name=args.get("object_name") or "",
+                                     number=args.get("number") or "")
+    else:
+        submittals = args.get("submittals") or []
+        if not submittals and args.get("submittals_path"):
+            submittals, problems = load_list(Path(_p(args, "submittals_path")), "submittals")
+        document = build_submittal_registry(submittals, object_name=args.get("object_name") or "",
+                                            number=args.get("number") or "")
+
+    files = write(document, out_dir)
+    if audit is not None:
+        audit.append("agent:docflow", "agent", "docflow.built",
+                     f"{document['schema']}:{document.get('number') or 'б/н'}",
+                     {"errors": document["totals"]["errors"]})
+    payload = {"ok": document["totals"]["errors"] == 0, "kind": document["schema"],
+               "status": document["status"], "totals": document["totals"],
+               "checks": document["checks"], "rejected": document["rejected"],
+               "can_work": document.get("can_work"), "can_close": document.get("can_close"),
+               "problems": problems, "files": files, "disclaimer": document["disclaimer"]}
+    payload["transmittals" if action == "rd" else "submittals"] = document.get(
+        "transmittals" if action == "rd" else "submittals")
+    payload["documents"] = document.get("documents")
+    if (args.get("format") or "json") == "markdown":
+        payload["markdown"] = to_markdown(document)
+    return payload
+
+
+@tool("correspondence",
+      "Внешние участники и переписка. `action=letters`: письма и запросы — адресат, тема, "
+      "основание (пункт договора, норма, номер письма), ФИО и роль подписавшего, срок ответа; "
+      "письмо без основания не предъявляется, просроченный ответ — ошибка. `action=involvement`: "
+      "лаборатории и геодезисты — аттестат, область аккредитации, срок действия на дату работы, "
+      "привязка результата к партии или работе. `action=days`: авторские дни и дни качества — "
+      "участники, протокол, замечания со сроком и ответственным. `action=sign` — подпись реестра "
+      "человеком с ФИО и ролью.",
+      {"type": "object", "properties": {
+          "action": {"type": "string", "enum": ["letters", "involvement", "days", "sign"],
+                     "default": "letters"},
+          "letters": {"type": "array", "items": {"type": "object"}},
+          "letters_path": {"type": "string"},
+          "records": {"type": "array", "items": {"type": "object"}},
+          "records_path": {"type": "string"},
+          "events": {"type": "array", "items": {"type": "object"}},
+          "events_path": {"type": "string"},
+          "registry_path": {"type": "string", "description": "для sign: JSON реестра"},
+          "object_name": {"type": "string"}, "number": {"type": "string"},
+          "by": {"type": "string"}, "role": {"type": "string"}, "reason": {"type": "string"},
+          "out_dir": {"type": "string"}, "audit_path": {"type": "string"},
+          "format": {"type": "string", "enum": ["json", "markdown"], "default": "json"}},
+       "required": []})
+def t_correspondence(args, ctx):
+    from ..correspondence import (build_involvement_registry, build_letter_registry,
+                                  build_quality_days, load_list, sign, to_markdown, write)
+    base = Path(ctx.get("base_dir") or ".")
+    out_dir = Path(args.get("out_dir") or base / "out" / "correspondence")
+    audit = None
+    if args.get("audit_path"):
+        from ..audit import AuditLog
+        audit = AuditLog(Path(args["audit_path"]))
+    action = args.get("action") or "letters"
+
+    if action == "sign":
+        path = Path(_p(args, "registry_path"))
+        document = json.loads(path.read_text(encoding="utf-8"))
+        document = sign(document, by=args.get("by") or "", role=args.get("role") or "",
+                        reason=args.get("reason") or "", audit_log=audit)
+        if document.get("sign_problems"):
+            return {"ok": False, "error": "подпись не принята",
+                    "problems": document["sign_problems"]}
+        files = write(document, out_dir, stem=path.stem)
+        return {"ok": True, "kind": document["schema"], "status": document["status"],
+                "totals": document["totals"], "confirmed_by": document["confirmed_by"],
+                "can_close": document.get("can_close"), "files": files,
+                "disclaimer": document["disclaimer"]}
+
+    key = {"letters": "letters", "involvement": "records", "days": "events"}[action]
+    items = args.get(key) or []
+    problems: list = []
+    if not items:
+        path_key = {"letters": "letters_path", "involvement": "records_path",
+                    "days": "events_path"}[action]
+        if args.get(path_key):
+            items, problems = load_list(Path(_p(args, path_key)), key)
+    builder = {"letters": build_letter_registry, "involvement": build_involvement_registry,
+               "days": build_quality_days}[action]
+    document = builder(items, object_name=args.get("object_name") or "",
+                       number=args.get("number") or "")
+    files = write(document, out_dir)
+    if audit is not None:
+        audit.append("agent:correspondence", "agent", "correspondence.built",
+                     f"{document['schema']}:{document.get('number') or 'б/н'}",
+                     {"errors": document["totals"]["errors"]})
+    payload = {"ok": document["totals"]["errors"] == 0, "kind": document["schema"],
+               "status": document["status"], "totals": document["totals"],
+               "checks": document["checks"], "rejected": document["rejected"],
+               "can_close": document.get("can_close"), "problems": problems, "files": files,
+               "disclaimer": document["disclaimer"]}
+    payload[key] = document.get(key)
+    if action == "letters":
+        payload["open_requests"] = document.get("open_requests")
+    if (args.get("format") or "json") == "markdown":
+        payload["markdown"] = to_markdown(document)
+    return payload
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="pto_agent.cad.mcp_server",
                                  description="MCP-сервер CAD-модуля ИИ-агента ПТО")

@@ -2,7 +2,7 @@
  "$schema": "https://json-schema.org/draft/2020-12/schema",
  "title": "ПТО-агент: контракты инструментов (tool-calling)",
  "description": "Единый реестр инструментов для агентов Документатор, Сметчик, Нормативщик, Чертёжник. Все инструменты вызываются только через оркестратор с проверкой прав и валидацией параметров. Деструктивные операции требуют флага confirmed=true и записи в журнал аудита.",
- "version": "2.2.0",
+ "version": "2.3.0",
  "tools": [
   {
    "name": "get_estimate",
@@ -1416,6 +1416,197 @@
     "копия без отметки «копия верна» в комплект не идёт",
     "состав требуемых документов берётся из файла требований, а не придумывается",
     "комплект подписывает человек с ФИО и ролью, при ошибках подпись не принимается"
+   ]
+  },
+  {
+   "name": "docflow",
+   "agent": "documents",
+   "side_effect": "write",
+   "description": "Выдача РД «В производство работ» (редакция, получатель, штамп, подпись получившего; работа по заменённой редакции и ссылка на невыданную РД — ошибки) и согласование ИД (замечания со сроками, устранение, повторная передача, подпись; подпись при открытых замечаниях и без ФИО и роли недействительна).",
+   "input_schema": {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "rd",
+       "submittals",
+       "sign"
+      ],
+      "default": "rd"
+     },
+     "transmittals": {
+      "type": "array",
+      "items": {
+       "type": "object"
+      }
+     },
+     "transmittals_path": {
+      "type": "string"
+     },
+     "revisions_path": {
+      "type": "string"
+     },
+     "works_path": {
+      "type": "string"
+     },
+     "submittals": {
+      "type": "array",
+      "items": {
+       "type": "object"
+      }
+     },
+     "submittals_path": {
+      "type": "string"
+     },
+     "registry_path": {
+      "type": "string"
+     },
+     "object_name": {
+      "type": "string"
+     },
+     "number": {
+      "type": "string"
+     },
+     "by": {
+      "type": "string"
+     },
+     "role": {
+      "type": "string"
+     },
+     "decision": {
+      "type": "string"
+     },
+     "reason": {
+      "type": "string"
+     },
+     "out_dir": {
+      "type": "string"
+     },
+     "audit_path": {
+      "type": "string"
+     },
+     "format": {
+      "type": "string",
+      "enum": [
+       "json",
+       "markdown"
+      ],
+      "default": "json"
+     },
+     "revisions": {
+      "type": "array",
+      "items": {
+       "type": "object"
+      }
+     },
+     "works": {
+      "type": "array",
+      "items": {
+       "type": "object"
+      }
+     }
+    },
+    "required": []
+   },
+   "guardrails": [
+    "работать можно только по редакции, переданной со штампом «В производство работ»",
+    "передача без подписи получившего не подтверждена",
+    "передача заменённой редакции в производство — ошибка",
+    "ссылка в работах на РД, которой нет в выдаче, — ошибка",
+    "комплект с открытыми замечаниями не подписывается",
+    "подпись без ФИО и роли подписью не является",
+    "повторная передача без отметки об устранении — та же передача"
+   ]
+  },
+  {
+   "name": "correspondence",
+   "agent": "documents",
+   "side_effect": "write",
+   "description": "Письма и запросы (основание, адресат, ФИО и роль подписавшего, срок ответа), лаборатории и геодезисты (аттестат, область аккредитации, срок действия на дату работы, привязка результата), авторские дни и дни качества (участники, протокол, замечания со сроком и ответственным).",
+   "input_schema": {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "letters",
+       "involvement",
+       "days",
+       "sign"
+      ],
+      "default": "letters"
+     },
+     "letters": {
+      "type": "array",
+      "items": {
+       "type": "object"
+      }
+     },
+     "letters_path": {
+      "type": "string"
+     },
+     "records": {
+      "type": "array",
+      "items": {
+       "type": "object"
+      }
+     },
+     "records_path": {
+      "type": "string"
+     },
+     "events": {
+      "type": "array",
+      "items": {
+       "type": "object"
+      }
+     },
+     "events_path": {
+      "type": "string"
+     },
+     "registry_path": {
+      "type": "string"
+     },
+     "object_name": {
+      "type": "string"
+     },
+     "number": {
+      "type": "string"
+     },
+     "by": {
+      "type": "string"
+     },
+     "role": {
+      "type": "string"
+     },
+     "reason": {
+      "type": "string"
+     },
+     "out_dir": {
+      "type": "string"
+     },
+     "audit_path": {
+      "type": "string"
+     },
+     "format": {
+      "type": "string",
+      "enum": [
+       "json",
+       "markdown"
+      ],
+      "default": "json"
+     }
+    },
+    "required": []
+   },
+   "guardrails": [
+    "письмо без основания не предъявляется",
+    "письмо без ФИО и роли подписавшего не считается отправленным",
+    "просроченный срок ответа — ошибка, а не «ждём»",
+    "результат лаборатории без аккредитации или по просроченному аттестату силы не имеет",
+    "результат без привязки к партии или работе в комплект не ложится",
+    "мероприятие без участников и протокола не считается проведённым",
+    "замечание без ответственного и срока не исполняется"
    ]
   }
  ],

@@ -1213,6 +1213,133 @@ def cmd_quality(args) -> int:
     return 2 if totals["errors"] else 0
 
 
+
+def cmd_docflow(args) -> int:
+    """РД «В производство работ» и согласование ИД до подписи."""
+    from .docflow import (build_rd_registry, build_submittal_registry, load_list, sign,
+                          to_markdown, write)
+
+    out_dir = Path(args.out)
+    audit = AuditLog(out_dir / "audit.jsonl") if getattr(args, "audit", None) else None
+    action = args.docflow_action
+
+    if action == "sign":
+        path = Path(args.registry)
+        document = json.loads(path.read_text(encoding="utf-8"))
+        document = sign(document, by=args.by, role=args.role, decision=args.decision or "",
+                        reason=args.reason or "", audit_log=audit)
+        if document.get("sign_problems"):
+            print("   ПОДПИСЬ НЕ ПРИНЯТА:")
+            for problem in document["sign_problems"]:
+                print(f"     ✗ {problem}")
+            return 2
+        files = write(document, out_dir, stem=path.stem)
+        print(f"подписал: {args.by} ({args.role}) · статус: {document['status']}")
+        close = document.get("can_work") or document.get("can_close") or {}
+        print("  закрыто" if close.get("allowed") else
+              "  закрывать нельзя: " + "; ".join(close.get("reasons") or []))
+        print(f"  файлы: {files['json']}, {files['xlsx']}")
+        return 0
+
+    if action == "rd":
+        transmittals, problems = load_list(Path(args.transmittals), "transmittals")
+        revisions: list[dict] = []
+        if getattr(args, "revisions", None):
+            revisions, more = load_list(Path(args.revisions), "revisions")
+            problems += more
+        works: list[dict] = []
+        if getattr(args, "works", None):
+            works, more = load_list(Path(args.works), "works")
+            problems += more
+        for problem in problems:
+            print(f"   ⚠ {problem}")
+        document = build_rd_registry(transmittals, revisions=revisions, works=works,
+                                     object_name=args.object_name or "", number=args.number or "")
+    else:
+        submittals, problems = load_list(Path(args.submittals), "submittals")
+        for problem in problems:
+            print(f"   ⚠ {problem}")
+        document = build_submittal_registry(submittals, object_name=args.object_name or "",
+                                            number=args.number or "")
+
+    files = write(document, out_dir)
+    totals = document["totals"]
+    print(f"{document['title']}: {document['object_name'] or 'объект не указан'}")
+    if action == "rd":
+        print(f"  передач: {totals['transmittals']} · отклонено: {totals['rejected']} · "
+              f"документов: {totals['documents']} · со штампом: {totals['with_stamp']}")
+        for doc in document["documents"]:
+            print(f"  {doc['doc']}: {doc['status']} (действующая редакция "
+                  f"{doc.get('current_revision') or '—'})")
+    else:
+        print(f"  комплектов: {totals['submittals']} · подписано: {totals['signed']} · "
+              f"с открытыми замечаниями: {totals['with_open_remarks']} · замечаний: "
+              f"{totals['remarks']} (просрочено: {totals['overdue']})")
+    for check in document["checks"]:
+        mark = "✗" if check["level"] == "error" else "⚠"
+        print(f"  {mark} {check['code']}: {check['message']}")
+    print("  статус: " + document["status"])
+    close = document.get("can_work") or document.get("can_close") or {}
+    for reason in close.get("reasons") or []:
+        print(f"     · {reason}")
+    print(f"  файлы: {files['json']}, {files['markdown']}, {files['xlsx']}")
+    print("  решение принимает человек: агент сверяет редакции, штампы, сроки и подписи")
+    return 2 if totals["errors"] else 0
+
+
+def cmd_correspondence(args) -> int:
+    """Письма и запросы, лаборатории и геодезисты, авторские дни и дни качества."""
+    from .correspondence import (build_involvement_registry, build_letter_registry,
+                                 build_quality_days, load_list, sign, to_markdown, write)
+
+    out_dir = Path(args.out)
+    audit = AuditLog(out_dir / "audit.jsonl") if getattr(args, "audit", None) else None
+    action = args.corr_action
+
+    if action == "sign":
+        path = Path(args.registry)
+        document = json.loads(path.read_text(encoding="utf-8"))
+        document = sign(document, by=args.by, role=args.role, reason=args.reason or "",
+                        audit_log=audit)
+        if document.get("sign_problems"):
+            print("   ПОДПИСЬ НЕ ПРИНЯТА:")
+            for problem in document["sign_problems"]:
+                print(f"     ✗ {problem}")
+            return 2
+        files = write(document, out_dir, stem=path.stem)
+        print(f"подписал: {args.by} ({args.role}) · статус: {document['status']}")
+        print(f"  файлы: {files['json']}, {files['xlsx']}")
+        return 0
+
+    key = {"letters": "letters", "involvement": "records", "days": "events"}[action]
+    items, problems = load_list(Path(args.source), key)
+    for problem in problems:
+        print(f"   ⚠ {problem}")
+    builder = {"letters": build_letter_registry, "involvement": build_involvement_registry,
+               "days": build_quality_days}[action]
+    document = builder(items, object_name=args.object_name or "", number=args.number or "")
+    files = write(document, out_dir)
+    totals = document["totals"]
+    print(f"{document['title']}: {document['object_name'] or 'объект не указан'}")
+    if action == "letters":
+        print(f"  писем: {totals['letters']} · требуют ответа: {totals['require_answer']} · "
+              f"ответов: {totals['answered']} · ждём: {totals['awaiting']}")
+    elif action == "involvement":
+        print(f"  заявок: {totals['records']} · лабораторий: {totals['laboratories']} · "
+              f"геодезистов: {totals['geodesists']} · с результатом: {totals['with_result']}")
+    else:
+        print(f"  мероприятий: {totals['events']} · замечаний: {totals['remarks']} · "
+              f"открыто: {totals['open_remarks']} · просрочено: {totals['overdue']}")
+    for check in document["checks"]:
+        mark = "✗" if check["level"] == "error" else "⚠"
+        print(f"  {mark} {check['code']}: {check['message']}")
+    print("  статус: " + document["status"])
+    for reason in (document.get("can_close") or {}).get("reasons") or []:
+        print(f"     · {reason}")
+    print(f"  файлы: {files['json']}, {files['markdown']}, {files['xlsx']}")
+    return 2 if totals["errors"] else 0
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     # подкоманды CAD и MCP живут в своих пакетах: делегируем до разбора argparse,
@@ -1303,6 +1430,51 @@ def main(argv=None):
     mtr.add_argument("--act", nargs="*", default=[], help="материалы КС-2 построчно (csv, xlsx)")
     mtr.add_argument("--object-name", default="")
     mtr.set_defaults(func=cmd_materials)
+
+    dfl = sub.add_parser("docflow",
+                         help="РД «В производство работ» и согласование ИД до подписи")
+    dfl.add_argument("--out", default="out/docflow")
+    dfl.add_argument("--audit", default=None)
+    dflsub = dfl.add_subparsers(dest="docflow_action", required=True)
+    dfr = dflsub.add_parser("rd", help="реестр выдачи рабочей документации")
+    dfr.add_argument("--transmittals", required=True, help="JSON передач РД")
+    dfr.add_argument("--revisions", default=None, help="JSON реестра редакций РД")
+    dfr.add_argument("--works", default=None, help="JSON работ со ссылкой на РД")
+    dfr.add_argument("--object-name", default="")
+    dfr.add_argument("--number", default="")
+    dfr.set_defaults(func=cmd_docflow)
+    dfs = dflsub.add_parser("submittals", help="реестр согласования ИД: замечания и подпись")
+    dfs.add_argument("--submittals", required=True, help="JSON комплектов ИД")
+    dfs.add_argument("--object-name", default="")
+    dfs.add_argument("--number", default="")
+    dfs.set_defaults(func=cmd_docflow)
+    dfg = dflsub.add_parser("sign", help="подписать реестр (ФИО и роль обязательны)")
+    dfg.add_argument("--registry", required=True)
+    dfg.add_argument("--by", required=True)
+    dfg.add_argument("--role", required=True)
+    dfg.add_argument("--decision", default="")
+    dfg.add_argument("--reason", default="")
+    dfg.set_defaults(func=cmd_docflow)
+
+    cor = sub.add_parser("correspondence",
+                         help="письма и запросы, лаборатории и геодезисты, дни качества")
+    cor.add_argument("--out", default="out/correspondence")
+    cor.add_argument("--audit", default=None)
+    corsub = cor.add_subparsers(dest="corr_action", required=True)
+    for name, helptext in (("letters", "реестр писем и запросов"),
+                           ("involvement", "реестр лабораторий и геодезистов"),
+                           ("days", "авторские дни и дни качества")):
+        sub_parser = corsub.add_parser(name, help=helptext)
+        sub_parser.add_argument("--source", required=True, help="JSON записей")
+        sub_parser.add_argument("--object-name", default="")
+        sub_parser.add_argument("--number", default="")
+        sub_parser.set_defaults(func=cmd_correspondence)
+    cors = corsub.add_parser("sign", help="подписать реестр (ФИО и роль обязательны)")
+    cors.add_argument("--registry", required=True)
+    cors.add_argument("--by", required=True)
+    cors.add_argument("--role", required=True)
+    cors.add_argument("--reason", default="")
+    cors.set_defaults(func=cmd_correspondence)
 
     qua = sub.add_parser("quality",
                          help="документы качества на материалы: реестр, привязка к партиям, опись")
@@ -1592,6 +1764,6 @@ def main(argv=None):
     result = args.func(args)
     if args.cmd in ("audit-verify", "approve", "prices", "materials", "procure", "audit",
                     "takeoff", "tk", "cumulative", "atn", "consumption", "checklist",
-                    "journal", "quality"):
+                    "journal", "quality", "docflow", "correspondence"):
         return result
     return 0
