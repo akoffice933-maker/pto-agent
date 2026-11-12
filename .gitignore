@@ -44,3 +44,6 @@ data/input/
 .coverage
 .coverage.*
 htmlcov/
+
+# версии цен, собранные прогонами (генерируются `pto_agent prices import`)
+data/prices_skc_adler/

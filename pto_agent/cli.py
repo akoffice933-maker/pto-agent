@@ -547,6 +547,49 @@ def cmd_takeoff(args) -> int:
         print(f"  файлы: {out_dir / 'draft.json'}, {out_dir / 'draft.xlsx'}, {out_dir / 'draft.md'}")
         return 0
 
+    if action == "tz":
+        from .tz_tables import extract_file, write_report
+        report = extract_file(args.file, cache=args.cache)
+        paths = write_report(report, out_dir)
+        totals = report["totals"]
+        print(f"ТЗ: страниц {report['pages_total']} · таблиц "
+              f"{', '.join(f'{k} — {v}' for k, v in (report['tables_found'] or {}).items()) or 'нет'}")
+        print(f"  объёмов: {totals['lines']} (высокая {totals['high']} · средняя "
+              f"{totals['medium']} · низкая {totals['low']}) · «не оценено» "
+              f"{totals['not_estimated']} · не разобрано {totals['unparsed']}")
+        for check in report["checks"]:
+            mark = "✓" if check["result"] == "сходится" else "!"
+            print(f"  {mark} {check['name'][:70]}: {check['result']}")
+        for item in report["not_estimated"]:
+            print(f"  не оценено: {item['description'][:60]} — {item['why']}", file=sys.stderr)
+        if args.tz_no_draft:
+            print(f"  файлы: {paths['json']}, {paths['boq']}, {paths['md']}")
+            return 0
+        boq, problems = read_boq(paths["boq"])
+        if not boq:
+            print("в выгрузке объёмов нет ни одной строки", file=sys.stderr)
+            for problem in problems:
+                print("  " + problem, file=sys.stderr)
+            return 1
+        draft = build_takeoff_draft(boq, mapping=load_takeoff_map(args.map),
+                                    prices_dir=args.prices_dir, as_of=args.as_of,
+                                    object_name=args.object_name, section=args.section)
+        (out_dir / "draft.json").write_text(json.dumps(draft, ensure_ascii=False, indent=2),
+                                            encoding="utf-8")
+        (out_dir / "draft.md").write_text(takeoff_to_markdown(draft), encoding="utf-8")
+        export_draft_xlsx(draft, out_dir / "draft.xlsx")
+        dt = draft["totals"]
+        print(f"  ведомость: строк {dt['lines']} · с ценой {dt['priced_lines']} · на проверку "
+              f"{dt['review_lines']} · не включено {dt['excluded_lines']}")
+        amount, high = dt["amount_rub"], dt["amount_high_rub"]
+        print("  итог по строкам с известной ценой: "
+              + ("—" if amount is None else f"{amount:.2f}") + " ₽"
+              + (" (высокая уверенность: —" if high is None
+                 else f" (высокая уверенность: {high:.2f}") + " ₽)")
+        print(f"  файлы: {paths['json']}, {paths['boq']}, {paths['md']}, "
+              f"{out_dir / 'draft.json'}")
+        return 0
+
     if action == "pdf":
         cache = Path(args.cache) if args.cache else out_dir / f"{Path(args.file).stem}_pages.json"
         doc = read_pdf_text(args.file, cache=cache)
@@ -1886,6 +1929,17 @@ def main(argv=None):
     tks.add_argument("--object-name", default="")
     tks.add_argument("--section", default="КР1")
     tks.set_defaults(func=cmd_takeoff)
+    tkt = tksub.add_parser("tz", help="таблицы технического задания (СКС, слаботочка) → объёмы")
+    tkt.add_argument("--file", required=True, help="PDF технического задания")
+    tkt.add_argument("--map", default="data/reference/takeoff_map_tz.json")
+    tkt.add_argument("--prices-dir", default="data/prices")
+    tkt.add_argument("--as-of", default=None)
+    tkt.add_argument("--object-name", default="")
+    tkt.add_argument("--section", default="ТЗ")
+    tkt.add_argument("--cache", default=None)
+    tkt.add_argument("--no-draft", dest="tz_no_draft", action="store_true",
+                     help="только объёмы из ТЗ, без стыка с ценами")
+    tkt.set_defaults(func=cmd_takeoff)
     tkc = tksub.add_parser("confirm", help="подтвердить ведомость: количества и шифры расценок")
     tkc.add_argument("--draft", required=True)
     tkc.add_argument("--changes", default=None, help="JSON {элемент: {qty, norm, exclude, note}}")
