@@ -280,8 +280,10 @@ def _cli(*argv):
 
 
 def test_cli_finance(tmp_path):
+    # дата расчёта фиксируется: иначе пени растут каждый день и тест краснеет от календаря,
+    # а не от кода (2026-11-06 — дата, на которую зафиксированы ожидаемые суммы)
     run = _cli("finance", "--out", str(tmp_path / "fin"), "--base-dir", str(ROOT), "plan",
-               "--config", str(DEMO / "funding" / "plan.json"))
+               "--config", str(DEMO / "funding" / "plan.json"), "--today", "2026-11-06")
     assert run.returncode == 2, "в демо есть блокеры графика"
     assert "строк графика: 5" in run.stdout
     assert "переносится: 38 524 600.00 ₽" in run.stdout
