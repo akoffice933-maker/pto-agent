@@ -1433,7 +1433,8 @@ def cmd_funding(args) -> int:
     out_dir = Path(args.out)
     config = json.loads(Path(args.config).read_text(encoding="utf-8"))
     base = Path(args.base_dir or ".")
-    plan = build_plan(config, base_dir=base, out_dir=out_dir)
+    today = (date.fromisoformat(args.today) if getattr(args, "today", None) else None)
+    plan = build_plan(config, base_dir=base, out_dir=out_dir, today=today)
     files = plan["files"]
     totals = plan["totals"]
     contract = plan["contract"]
@@ -1480,7 +1481,8 @@ def cmd_monthly(args) -> int:
     out_dir = Path(args.out)
     config = json.loads(Path(args.config).read_text(encoding="utf-8"))
     base = Path(args.base_dir or ".")
-    plan = build_plan(config, base_dir=base, out_dir=out_dir)
+    today = (date.fromisoformat(args.today) if getattr(args, "today", None) else None)
+    plan = build_plan(config, base_dir=base, out_dir=out_dir, today=today)
     files = plan["files"]
     totals = plan["totals"]
     print(f"{plan['title']}: {plan['name']} · на {plan['built_at']}")
@@ -1637,6 +1639,9 @@ def main(argv=None):
     finsub = fin.add_subparsers(dest="finance_action", required=True)
     finp = finsub.add_parser("plan", help="свести график платежей с портфелем комплектов")
     finp.add_argument("--config", required=True, help="JSON: график, договор, портфель")
+    finp.add_argument("--today", default=None,
+                      help="дата расчёта YYYY-MM-DD (по умолчанию сегодня): "
+                           "сроки и пени считаются на неё, а не на дату запуска")
     finp.set_defaults(func=cmd_funding)
 
     mon = sub.add_parser("monthly",
