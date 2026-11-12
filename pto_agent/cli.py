@@ -13,6 +13,7 @@ from .llm import describe_discrepancies, route
 from .norms import NormIndex, load_norms
 from .parsers import (WorkbookTooLarge, read_closed_ex, read_estimate_ex,
                       read_journal_ex)
+from .pdf_profiles import ProfileError, fact_rules, get_profile, schedule_markers
 from .kr_pdf import (derive_boq, extract_facts, extract_levels, find_schedules, kr_report,
                      read_pdf_text)
 from .kr_schedules import (coverage as schedules_coverage, read_schedules, schedules_report,
@@ -593,10 +594,15 @@ def cmd_takeoff(args) -> int:
     if action == "pdf":
         cache = Path(args.cache) if args.cache else out_dir / f"{Path(args.file).stem}_pages.json"
         doc = read_pdf_text(args.file, cache=cache)
-        schedules = find_schedules(doc)
+        try:
+            profile = get_profile(args.profile, args.profiles)
+        except ProfileError as error:
+            print(f"профиль: {error}", file=sys.stderr)
+            return 2
+        schedules = find_schedules(doc, markers=schedule_markers(profile))
         levels = extract_levels(doc)
-        facts = extract_facts(doc)
-        derived = derive_boq(facts, levels=levels)
+        facts = extract_facts(doc, rules=fact_rules(profile))
+        derived = derive_boq(facts, levels=levels, profile=profile)
         draft = build_takeoff_draft(derived["lines"], mapping=load_takeoff_map(args.map),
                                     prices_dir=args.prices_dir, as_of=args.as_of,
                                     object_name=args.object_name, section=args.section)
@@ -605,6 +611,7 @@ def cmd_takeoff(args) -> int:
         (out_dir / "draft.md").write_text(takeoff_to_markdown(draft), encoding="utf-8")
         export_draft_xlsx(draft, out_dir / "draft.xlsx")
         payload = {"schema": "pto-agent/kr-run@1", "file": doc["file"],
+                   "profile": {k: profile[k] for k in ("name", "title", "validated_on")},
                    "pages_total": doc["pages_total"], "pages_with_text": doc["pages_with_text"],
                    "pages_without_text": doc["pages_without_text"],
                    "read_errors": doc["read_errors"], "schedules": schedules, "levels": levels,
@@ -613,9 +620,12 @@ def cmd_takeoff(args) -> int:
         (out_dir / "kr_report.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2),
                                                 encoding="utf-8")
         (out_dir / "kr_report.md").write_text(
-            kr_report(doc, schedules, facts, derived, object_name=args.object_name, draft=draft),
+            kr_report(doc, schedules, facts, derived, object_name=args.object_name, draft=draft,
+                      profile=profile),
             encoding="utf-8")
 
+        print(f"профиль: {profile['name']} ({profile['title']})"
+              + ("" if profile["validated"] else " — на реальном документе не проверялся"))
         print(f"PDF: страниц {doc['pages_total']} · с текстом {doc['pages_with_text']} · "
               f"без текста {len(doc['pages_without_text'])}")
         print(f"  ведомости: {', '.join(schedules['found']) or 'не найдены'} "
@@ -623,7 +633,7 @@ def cmd_takeoff(args) -> int:
         print(f"  фактов из текста: {len(facts['facts'])} · перекрытий в томе: "
               f"{levels['levels_count']} ({', '.join(levels['levels'])})")
         for line in derived["lines"]:
-            print(f"  объём: {line['description']} — {line['qty']:g} м3 "
+            print(f"  объём: {line['description']} — {line['qty']:g} {line['unit']} "
                   f"({line['confidence']}): {line['formula']}")
         for need in derived["needs_input"]:
             print(f"  нужно спросить: {need['what']} — {need['ask']}", file=sys.stderr)
@@ -1915,6 +1925,9 @@ def main(argv=None):
     tkp.add_argument("--as-of", default=None)
     tkp.add_argument("--object-name", default="")
     tkp.add_argument("--section", default="КР1")
+    tkp.add_argument("--profile", default=None,
+                     help="профиль разбора PDF: kr, sks, ovik (по умолчанию — из файла профилей)")
+    tkp.add_argument("--profiles", default=None, help="путь к pdf_profiles.json")
     tkp.add_argument("--cache", default=None, help="кэш текста страниц (json)")
     tkp.set_defaults(func=cmd_takeoff)
     tks = tksub.add_parser("schedules",
