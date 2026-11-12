@@ -28,6 +28,7 @@
 | Аудит-лог | снимок «до/после», дельта, автор, причина, основание; хэш-цепочка, подмена видна |
 | Материалы | заявка → приход → КС-2: заморожено 1 645,92 ₽, риск 15 134,40 ₽, возврат переплаты 840 ₽ — по позициям, с формулами |
 | Стык takeoff КР | выгрузка объёмов (формат autoconst, MIT) → ведомость: 2 503 660 ₽ по строкам с ценой, из них 1 763 900 ₽ высокой уверенности; LOW и RATE_NOT_FOUND — в «не включено» |
+| Таблицы ТЗ → объёмы | `takeoff tz`: ТЗ на СКС (8 стр.) → 97 объёмов без ручной разметки, 96 строк с ценой на 1 608 120 ₽; сам нашёл расхождение 7 910 vs 8 270 м в раскладке кабеля и оговорку «исправлено с 5 до 6»; 12 позиций — «не оценено» с адресом вопроса |
 | Том КР из PDF | школа на 825 мест (Сертолово, 49 стр.): 14 параметров с цитатами, ведомостей в томе нет, плита 5 259,2 м3 расчётом по габаритам, арматура — «нет ведомости расхода стали», а не «примерно» |
 | MCP | 36 инструментов, stdio + http; http — только с Bearer-токеном (`PTO_MCP_TOKEN`), по умолчанию 127.0.0.1, CORS закрыт, песочница путей |
 
@@ -47,6 +48,12 @@ python3 -m pto_agent run --data data/demo --out out
 # 3. выпуск исполнительной документации со сканов
 python3 -m pto_agent cad scan-batch --manifest data/demo/batch/manifest.json \
         --engine vlm --summary out/summary.json --out out/cad/batch
+
+# 3b. ТЗ на слаботочку (СКС) → объёмы → ведомость с ценами
+python3 -m pto_agent prices --out data/prices_skc_adler import --file data/demo/prices_skc_adler.csv \
+        --source "ДЕМО: условные ставки" --date 2026-11-01 --region 23 --zone 1
+python3 -m pto_agent takeoff --out out/tz tz --file ТЗ.pdf --prices-dir data/prices_skc_adler \
+        --object-name "Модернизация СКС" --section "СКС"
 
 # 4. деньги: сколько стоит спор с актом
 python3 -m pto_agent cad impact --batch out/cad/batch/batch_summary.json \
