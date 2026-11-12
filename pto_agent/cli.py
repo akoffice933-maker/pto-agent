@@ -581,10 +581,11 @@ def cmd_takeoff(args) -> int:
         dt = draft["totals"]
         print(f"  ведомость: строк {dt['lines']} · с ценой {dt['priced_lines']} · на проверку "
               f"{dt['review_lines']} · не включено {dt['excluded_lines']}")
-        print(f"  итог по строкам с известной ценой: "
-              f"{'—' if dt['amount_rub'] is None else f'{dt[chr(39) + chr(39)] if False else dt["amount_rub"]:.2f}'} ₽"
-              f" (высокая уверенность: "
-              f"{'—' if dt['amount_high_rub'] is None else f'{dt["amount_high_rub"]:.2f}'} ₽)")
+        amount, high = dt["amount_rub"], dt["amount_high_rub"]
+        print("  итог по строкам с известной ценой: "
+              + ("—" if amount is None else f"{amount:.2f}") + " ₽"
+              + (" (высокая уверенность: —" if high is None
+                 else f" (высокая уверенность: {high:.2f}") + " ₽)")
         print(f"  файлы: {paths['json']}, {paths['boq']}, {paths['md']}, "
               f"{out_dir / 'draft.json'}")
         return 0
