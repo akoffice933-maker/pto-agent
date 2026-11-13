@@ -44,6 +44,15 @@ SOURCE_M29 = "Постановление Госкомстата России о�
 #: каким статусам акта доверяем для денежного итога; всё остальное — «на проверку»
 STATUS_CHECKED = {"проверен", "подписан", "signed", "verified"}
 
+#: тип колонки в XLSX: деньги и количества должны быть числами, иначе бухгалтерия
+#: не сможет их суммировать (строка «4 168 000,00» в Excel — это текст)
+COL_TYPES = {
+    "ks2": ["int", "text", "text", "text", "qty", "qty", "money", "money", "text"],
+    "ks3": ["text", "text", "text", "money", "money", "money", "text"],
+    "ks6a": ["text", "text", "text", "money", "qty", "qty", "money"],
+    "m29": ["text", "text", "qty", "qty", "qty", "qty", "qty", "qty"],
+}
+
 #: человеческие подписи итогов: в бланке не должно быть английских ключей
 TOTAL_LABELS = {
     "acts_in_period": "актов за период",
@@ -69,6 +78,14 @@ TOTAL_LABELS = {
     "without_norm": "позиций без нормы",
     "unit_mismatch": "позиций с расхождением единиц",
     "expense_without_receipt": "позиций «расход без прихода»",
+    "amount_journal": "по журналу без НДС, ₽",
+    "amount_claim": "к предъявлению без НДС, ₽",
+    "amount_blocked": "не предъявляется, ₽ (в акт не входит)",
+    "vat_claim": "НДС от суммы к предъявлению, ₽",
+    "total_claim_with_vat": "итого к предъявлению с НДС, ₽",
+    "positions": "позиций в акте",
+    "positions_fully_blocked": "позиций заблокировано полностью",
+    "positions_reduced": "позиций с урезанным объёмом",
 }
 
 
@@ -101,6 +118,14 @@ FORMS = {
         "source": SOURCE_KS,
         "columns": ["Код расценки", "Наименование работ", "Ед.", "Цена за ед., ₽",
                     "За отчётный период", "С начала договора", "Стоимость за период, ₽"],
+    },
+    "ks2": {
+        "code": "КС-2",
+        "title": "Акт о приёмке выполненных работ",
+        "source": SOURCE_KS,
+        "columns": ["№", "Шифр расценки", "Наименование работ", "Ед. изм.",
+                    "Кол-во по журналу", "К предъявлению", "Цена, ₽",
+                    "Стоимость к предъявлению, ₽", "Ограничения и флаги"],
     },
     "m29": {
         "code": "М-29",
@@ -200,6 +225,17 @@ def _load_json(path: str | Path, key: str) -> tuple[list[dict], list[str]]:
     return list(items or []), []
 
 
+def _load_json_raw(path: str | Path) -> tuple[dict | list, list[str]]:
+    """Прочитать JSON целиком: у `summary.json` своя структура, ключа `acts` в нём нет."""
+    path = Path(path)
+    if not path.exists():
+        return {}, [f"файл не найден: {path}"]
+    try:
+        return json.loads(path.read_text(encoding="utf-8")), []
+    except json.JSONDecodeError as error:
+        return {}, [f"{path.name}: не JSON ({error.msg}, строка {error.lineno})"]
+
+
 def _load_csv(path: str | Path) -> tuple[list[dict], list[str]]:
     path = Path(path)
     if not path.exists():
@@ -219,7 +255,10 @@ def _load_csv(path: str | Path) -> tuple[list[dict], list[str]]:
 
 
 def _base_row(**kwargs) -> dict:
-    return {"cells": [str(kwargs.get("c%d" % i, "")) for i in range(1, 9)],
+    """Строка бланка: `cells` — как показывать человеку, `values` — как считать в Excel."""
+    values = [kwargs.get("c%d" % i, "") for i in range(1, 10)]
+    return {"cells": [str(v) for v in values],
+            "values": values,
             "state": kwargs.get("state", "ok"), "source": kwargs.get("source", ""),
             "note": kwargs.get("note", "")}
 
@@ -240,6 +279,7 @@ def envelope(kind: str, *, period: str, req: dict, rows: list[dict], totals: dic
         "draft_notice": "ЧЕРНОВИК. Не подписано. Юридической силы не имеет.",
         "requisites": req,
         "columns": spec["columns"][: len(rows[0]["cells"]) if rows else len(spec["columns"])],
+        "col_types": COL_TYPES.get(kind, ["text"] * len(spec["columns"]))[:len(spec["columns"])],
         "rows": rows,
         "totals": totals,
         "gaps": gaps,
@@ -247,6 +287,189 @@ def envelope(kind: str, *, period: str, req: dict, rows: list[dict], totals: dic
         "sources": sources,
         "built_from": "артефакты прогона; форма ничего не пересчитывает",
     }
+
+
+
+# ─────────────────────────── КС-2 ───────────────────────────
+def build_ks2(positions: list[dict], *, period_from: str, period_to: str,
+              requisites_dict: dict | None = None, vat_rate=None,
+              number: str = "") -> dict:
+    """Акт КС-2 из позиций сверки: что предъявляем, что нет и почему.
+
+    Позиция: `code`, `name`, `unit`, `qty_journal`, `qty_claim`, `price`,
+    `restrictions` (почему объём урезан), необязательные `estimate_qty`, `closed_before`.
+
+    Три правила:
+      * предъявляем `qty_claim`, а не `qty_journal` — объём «по журналу» и «к предъявлению»
+        показаны рядом, чтобы урезание было видно, а не спрятано;
+      * ограниченная позиция остаётся в акте с нулём к предъявлению и причиной —
+        выкинуть её значит потерять работу, которую прораб уже сделал;
+      * НДС и итог с НДС считаются только от предъявляемой суммы; заблокированное
+        уходит отдельным итогом и в запросы, а не в сумму акта.
+    """
+    period = period_to or period_from
+    req = requisites_dict or requisites(period=_month_label(period[:7]) if period else "")
+    if not req.get("Отчётный период", {}).get("value"):
+        req = requisites(period=_month_label(period[:7]) if period else "",
+                         **{k: v["value"] for k, v in req.items() if v.get("value")
+                            and k != "Отчётный период"})
+    code = FORMS["ks2"]["code"]
+    gaps = _gaps_from_requisites(req, code)
+    warnings: list[str] = []
+
+    rows: list[dict] = []
+    claim_total = Decimal("0")
+    journal_total = Decimal("0")
+    blocked_total = Decimal("0")
+    blocked_positions: list[dict] = []
+    reduced_positions: list[dict] = []  # и полностью заблокированные, и урезанные
+
+    for index, position in enumerate(positions, start=1):
+        price = _dec(position.get("price"))
+        qty_journal = _dec(position.get("qty_journal")) or Decimal("0")
+        qty_claim = _dec(position.get("qty_claim"))
+        restrictions = [str(r) for r in (position.get("restrictions") or []) if str(r).strip()]
+        note = "; ".join(restrictions)
+
+        if qty_claim is None:
+            qty_claim = Decimal("0")
+            note = (note + "; " if note else "") + "количество к предъявлению не задано"
+        amount_claim = (qty_claim * price).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) \
+            if price is not None else None
+        state = "ok"
+        if price is None:
+            state = "no_price"
+            notes_add = "нет цены — стоимость не считается"
+            note = (note + "; " if note else "") + notes_add
+            warnings.append(f"{position.get('code')}: нет цены, строка не оценена")
+            amount_claim = None
+        elif qty_claim == 0 and qty_journal > 0:
+            state = "blocked"
+            blocked_positions.append({"code": position.get("code"), "qty": str(qty_journal),
+                                      "unit": position.get("unit") or "",
+                                      "amount": _money(
+                                          (qty_journal * price).quantize(Decimal("0.01"),
+                                                                         rounding=ROUND_HALF_UP)),
+                                      "why": note or "не указана причина"})
+        elif restrictions:
+            state = "review"
+        else:
+            state = "ok"
+
+        if amount_claim is not None:
+            if state == "blocked":
+                reduced_positions.append({"code": position.get("code"),
+                                          "unit": position.get("unit") or "",
+                                          "qty_journal": str(qty_journal),
+                                          "qty_claim": "0",
+                                          "amount": _money(amount_claim) if amount_claim else 0.0,
+                                          "why": note})
+            elif qty_claim < qty_journal:
+                reduced_positions.append({"code": position.get("code"),
+                                          "unit": position.get("unit") or "",
+                                          "qty_journal": str(qty_journal),
+                                          "qty_claim": str(qty_claim),
+                                          "amount": _money(
+                                              ((qty_journal - qty_claim) * price).quantize(
+                                                  Decimal("0.01"), rounding=ROUND_HALF_UP)),
+                                          "why": note or "объём урезан без указанной причины"})
+            # «не предъявляется» — вся разница между журналом и актом, не только нули
+            blocked_total += ((qty_journal - qty_claim) * price).quantize(Decimal("0.01"),
+                                                                        rounding=ROUND_HALF_UP)
+        if state != "blocked" and amount_claim is not None:
+            claim_total += amount_claim
+        journal_total += (qty_journal * price).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) \
+            if price is not None else Decimal("0")
+
+        rows.append(_base_row(
+            c1=index, c2=str(position.get("code") or "—"),
+            c3=str(position.get("name") or "не задано — см. «что нужно запросить»"),
+            c4=str(position.get("unit") or "—"),
+            c5=_qty(qty_journal), c6=_qty(qty_claim), c7=_rub(price),
+            c8=_rub(amount_claim),
+            c9=note or "",
+            state=state, source=str(position.get("source") or ""), note=note))
+
+    if not positions:
+        gaps.append({"what": "позиции акта", "why": "предъявлять нечего: в сверке нет позиций "
+                                                    "с объёмом за период",
+                     "ask": "проверить журнал работ и смету — возможно, объёмы не разнесены"})
+
+    rate = _dec(vat_rate)
+    if rate is None:
+        rate = Decimal("20")
+        warnings.append("ставка НДС не задана — применена 20%; проверьте реквизит договора")
+        gaps.append({"what": "ставка НДС", "why": "в данных нет ставки из договора",
+                     "ask": "указать ставку НДС договора (20 %, 10 %, без НДС)"})
+    else:
+        rate = rate / 100 if rate > 1 else rate
+    vat = (claim_total * rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    for item in reduced_positions:
+        gaps.append({"what": f"позиция {item['code']} на {item['amount']} ₽",
+                     "why": f"не предъявляется сейчас: {item['why']}",
+                     "ask": "устранить причину ограничения и включить в следующий акт"})
+
+    totals = {
+        "positions": len(rows),
+        "amount_journal": _money(journal_total),
+        "amount_claim": _money(claim_total),
+        "amount_blocked": _money(blocked_total),
+        "vat_rate": float(rate),
+        "vat_claim": _money(vat),
+        "total_claim_with_vat": _money(claim_total + vat),
+        "positions_fully_blocked": len(blocked_positions),
+        "positions_reduced": len(reduced_positions),
+        "excluded": ("позиции с ограничениями в сумму акта не входят" if blocked_positions else ""),
+    }
+    form = envelope("ks2", period=period, req=req, rows=rows, totals=totals, gaps=gaps,
+                    warnings=warnings,
+                    sources=["журнал выполненных работ", "смета", "расхождения сверки"])
+    if number:
+        form["number"] = number
+    form["period_from"] = period_from
+    form["period_to"] = period_to
+    return form
+
+
+def ks2_from_summary(payload: dict, *, req: dict | None = None,
+                     vat_rate=None, number: str = "") -> dict:
+    """КС-2 из `out/summary.json` прогона `pto_agent run` (без повторной сверки)."""
+    lines = payload.get("lines") or []
+    positions = [{
+        "code": line.get("code"), "name": line.get("name"), "unit": line.get("unit"),
+        "qty_journal": line.get("qty_journal"), "qty_claim": line.get("qty_claim"),
+        "price": line.get("price"), "restrictions": line.get("restrictions") or [],
+        "estimate_qty": line.get("estimate_qty"), "closed_before": line.get("closed_before"),
+    } for line in lines
+        if ((line.get("qty_journal") or 0) > 0 or (line.get("qty_claim") or 0) > 0)
+        and not line.get("unit_mismatch")]
+    period = payload.get("period") or []
+    period_from = str(period[0]) if len(period) > 0 else ""
+    period_to = str(period[1]) if len(period) > 1 else period_from
+    values = {k: v for k, v in (req or {}).items() if v}
+    if not values.get("Объект") and payload.get("object"):
+        values["Объект"] = payload["object"]
+    return build_ks2(positions, period_from=period_from, period_to=period_to,
+                     requisites_dict=_req_map(values, period_to[:7]),
+                     vat_rate=vat_rate if vat_rate is not None else payload.get("vat_rate"),
+                     number=number)
+
+
+def ks2_from_reconciliation(rec, *, vat_rate=None, requisites_dict: dict | None = None) -> dict:
+    """КС-2 напрямую из объекта сверки — чтобы старый `export_ks2` шёл тем же путём."""
+    positions = []
+    for plan in rec.act_plan():
+        line = plan["line"]
+        positions.append({
+            "code": line.item.code, "name": line.item.name, "unit": line.item.unit,
+            "qty_journal": line.qty_journal, "qty_claim": plan["qty_claim"],
+            "price": line.item.price, "restrictions": list(plan["restrictions"]),
+            "estimate_qty": line.item.qty, "closed_before": line.qty_prev_closed,
+        })
+    period_from, period_to = rec.period[0].isoformat(), rec.period[1].isoformat()
+    return build_ks2(positions, period_from=period_from, period_to=period_to,
+                     requisites_dict=requisites_dict, vat_rate=vat_rate)
 
 
 # ─────────────────────────── КС-3 ───────────────────────────
@@ -759,10 +982,19 @@ def to_xlsx(form: dict, path: str | Path) -> Path:
         cell.alignment = Alignment(wrap_text=True, vertical="center")
         cell.fill = PatternFill("solid", fgColor="DDEBF7")
     row_index += 1
+    types = form.get("col_types") or ["text"] * len(form["columns"])
     for row in form["rows"]:
         for column, text in enumerate(row["cells"][:len(form["columns"])], start=1):
-            cell = sheet.cell(row=row_index, column=column, value=text)
+            kind = types[column - 1] if column - 1 < len(types) else "text"
+            value = (row.get("values") or row["cells"])[column - 1]
+            cell = sheet.cell(row=row_index, column=column, value=_excel_value(kind, value, text))
             cell.font = Font(size=8)
+            if kind == "money":
+                cell.number_format = "#,##0.00"
+            elif kind == "qty":
+                cell.number_format = "#,##0.###"
+            elif kind == "int":
+                cell.number_format = "0"
             if row["state"] == "review":
                 cell.fill = PatternFill("solid", fgColor="FCE4D6")
             elif row["state"] in ("unit_mismatch", "no_amount", "no_unit"):
@@ -778,7 +1010,13 @@ def to_xlsx(form: dict, path: str | Path) -> Path:
     row_index += 1
     for label, value in totals_ru(form):
         sheet.cell(row=row_index, column=1, value=label).font = Font(size=8)
-        sheet.cell(row=row_index, column=2, value=str(value)).font = Font(size=8)
+        # итог тоже числом: бухгалтерия должна иметь возможность его сложить, а не копировать текст
+        number = _dec(value) if "₽" in label else None
+        cell = sheet.cell(row=row_index, column=2,
+                          value=float(number) if number is not None else str(value))
+        cell.font = Font(size=8)
+        if number is not None:
+            cell.number_format = "#,##0.00"
         row_index += 1
 
     gaps_sheet = wb.create_sheet("требует данных")
@@ -834,6 +1072,19 @@ def _names_from_works(path: str | Path | None) -> dict:
     return {str(item.get("code")): item.get("name") or "" for item in items if item.get("code")}
 
 
+def _excel_value(kind: str, value, text: str):
+    """В Excel — число, если колонка числовая и значение разобралось; иначе текст."""
+    if kind == "text":
+        return text
+    number = _dec(value)
+    if number is None and kind != "int":
+        return text  # «—» остаётся прочерком, а не нулём
+    if number is None:
+        return text
+    return float(number) if kind == "money" else (
+        int(number) if kind == "int" and number == int(number) else float(number))
+
+
 def build_from_files(kind: str, *, period: str, acts_path: str | None = None,
                      purchases_path: str | None = None, writeoffs_path: str | None = None,
                      norms_path: str | None = None, works_path: str | None = None,
@@ -868,6 +1119,16 @@ def build_from_files(kind: str, *, period: str, acts_path: str | None = None,
         form = build_m29(purchases, writeoffs, period=period, norms=norms, works=works,
                          opening=opening or None, requisites_dict=_req_map(req, period))
         form["warnings"] = (errors_p + errors_w + errors_n + errors_k + errors_o + form["warnings"])
+        return form
+    if kind == "ks2":
+        payload, errors = _load_json_raw(acts_path) if acts_path else ({}, ["не задан --summary"])
+        if isinstance(payload, list):
+            payload = {"lines": payload}
+        if not payload.get("lines"):
+            errors.append("в файле нет позиций акта (lines) — КС-2 не из чего собрать")
+        form = ks2_from_summary(payload, req=req, vat_rate=vat_rate,
+                                number=str((req or {}).get("Номер акта") or ""))
+        form["warnings"] = errors + form["warnings"]
         return form
     raise ValueError(f"неизвестная форма: {kind}; есть: {', '.join(FORMS)}")
 

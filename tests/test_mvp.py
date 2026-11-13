@@ -177,14 +177,15 @@ def test_routine_extraction_is_local():
 
 # ── 8. Экспорт КС-2 ────────────────────────────────────────────────────────
 def test_ks2_export_writes_totals(demo, tmp_path):
+    """КС-2 идёт тем же механизмом бланков, что КС-3/КС-6а/М-29: суммы — числами."""
     rec, *_ = demo
     path = export_ks2(rec, tmp_path / "ks2.xlsx", vat_rate=20.0)
     ws = load_workbook(path, data_only=True)["КС-2"]
-    assert "КС-2" in ws["A1"].value
-    values = [ws.cell(r, 8).value for r in range(1, ws.max_row + 1)
-              if isinstance(ws.cell(r, 8).value, (int, float))]
-    # суммы записаны числами (а не формулами-заглушками): и полный объём по журналу,
-    # и рекомендация агента «к предъявлению» присутствуют в итогах
-    assert any(abs(v - rec.amount_act) < 0.01 for v in values)
-    assert any(abs(v - rec.amount_act_safe) < 0.01 for v in values)
-    assert any(abs(v - rec.amount_blocked) < 0.01 for v in values)
+    assert "ЧЕРНОВИК" in ws["A1"].value  # бланк помечен, как и остальные формы
+    assert "КС-2" in ws["A2"].value
+    numbers = [ws.cell(r, 2).value for r in range(1, ws.max_row + 1)
+               if isinstance(ws.cell(r, 2).value, (int, float))]
+    # и полный объём по журналу, и сумма к предъявлению, и заблокированное — числами
+    assert any(abs(v - rec.amount_act) < 0.01 for v in numbers)
+    assert any(abs(v - rec.amount_act_safe) < 0.01 for v in numbers)
+    assert any(abs(v - rec.amount_blocked) < 0.01 for v in numbers)

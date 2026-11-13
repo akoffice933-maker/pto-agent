@@ -159,6 +159,9 @@ def _lines_payload(rec) -> list:
             "amount_claim": (plan or {}).get("amount_claim", 0.0),
             "qty_claim": (plan or {}).get("qty_claim", 0.0),
             "restrictions": (plan or {}).get("restrictions", []),
+            # без этого флага КС-2 из summary.json не совпадёт с актом из сверки:
+            # позиции с разными единицами в акт не входят
+            "unit_mismatch": bool(line.unit_mismatch),
         })
     return out
 
@@ -518,10 +521,12 @@ def cmd_forms(args) -> int:
     req = {name: value for name, value in (("Объект", args.object_name),
                                            ("Договор", args.contract),
                                            ("Заказчик", args.customer),
-                                           ("Подрядчик", args.contractor)) if value}
+                                           ("Подрядчик", args.contractor),
+                                           ("Номер акта", getattr(args, "number", ""))) if value}
     try:
         form = print_forms.build_from_files(
-            args.form, period=args.period, acts_path=getattr(args, "acts", None),
+            args.form, period=args.period,
+            acts_path=getattr(args, "acts", None) or getattr(args, "summary", None),
             purchases_path=getattr(args, "purchases", None),
             writeoffs_path=getattr(args, "writeoffs", None),
             norms_path=getattr(args, "norms", None), works_path=getattr(args, "works", None),
@@ -1968,6 +1973,14 @@ def main(argv=None):
               ("--out", {"default": "out/forms"}),
               ("--object-name", {"default": ""}), ("--contract", {"default": ""}),
               ("--customer", {"default": ""}), ("--contractor", {"default": ""})]
+    fk2 = fms.add_parser("ks2", help="акт о приёмке выполненных работ (КС-2) по итогам run")
+    fk2.add_argument("--summary", default="out/summary.json",
+                     help="итог прогона run (позиции, объёмы, ограничения)")
+    fk2.add_argument("--vat-rate", default=None, help="ставка НДС из договора (20, 10, 0)")
+    fk2.add_argument("--number", default="", help="номер акта")
+    for flag, options in common:
+        fk2.add_argument(flag, **options)
+    fk2.set_defaults(func=cmd_forms)
     fk3 = fms.add_parser("ks3", help="справка о стоимости выполненных работ (КС-3)")
     fk3.add_argument("--acts", default="data/demo/acts/acts.json")
     fk3.add_argument("--vat-rate", default=None, help="ставка НДС из договора (20, 10, 0)")
