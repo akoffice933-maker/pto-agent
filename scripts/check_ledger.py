@@ -14,7 +14,13 @@
 9. в закрытый период проводок нет, сторно — в открытом;
 10. давальческие материалы живут на 003 и в баланс не подмешиваются;
 11. выручка признаётся только по подписанной заказчиком КС-2;
-12. у каждой проводки есть документ-основание: записей «по смыслу» нет.
+12. у каждой проводки есть документ-основание: записей «по смыслу» нет;
+13. заявка на оплату без документа-основания не принимается, а просит документ;
+14. маршрут согласования проходится по порядку, одно лицо не подписывает две ступени;
+15. лимит статьи блокирует заявку, обход — только с причиной и автором в аудите;
+16. оплата сверх остатка — только с явным разрешением и причиной, разрыв виден в календаре;
+17. Дт 60.01 Кт 51 и Дт 51 Кт 62.01 проводятся в журнал, а деньги казначейства
+    сходятся с сальдо 51 (без входящего остатка счёт 51 уходил в минус).
 """
 from __future__ import annotations
 
@@ -27,16 +33,20 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from pto_agent import closing, ledger, stock                              # noqa: E402
+from pto_agent import closing, ledger, stock, treasury                    # noqa: E402
 
 DOCS = ROOT / "data" / "demo" / "stock" / "documents_2026_10.json"
 CATALOG = ROOT / "data" / "demo" / "stock" / "catalog.json"
 INVOICES = ROOT / "data" / "demo" / "accounting" / "invoices_2026_10.json"
 SIGNED = ROOT / "data" / "demo" / "accounting" / "acts_signed_scenario.json"
+TREASURY = ROOT / "data" / "demo" / "treasury" / "state_2026_10.json"
+RECEIPTS = ROOT / "data" / "demo" / "treasury" / "receipts_2026_10.json"
+FUNDING = ROOT / "data" / "demo" / "funding" / "plan.json"
 
 violations: list[str] = []
 stats = {"entries": 0, "balance_checks": 0, "rejected": 0, "gaps": 0,
-         "stock_rows": 0, "off_balance": 0, "acts": 0, "close_steps": 0, "profit": 0.0}
+         "stock_rows": 0, "off_balance": 0, "acts": 0, "close_steps": 0, "profit": 0.0,
+         "cash_requests": 0, "cash_paid": 0.0, "cash_balance": 0.0}
 
 
 def check(condition: bool, message: str) -> None:
@@ -323,6 +333,156 @@ check(dry.get("dry_run") is True, "сухой прогон не пометилс
 check(json.dumps(dry_state, sort_keys=True, ensure_ascii=False) == snapshot,
       "сухой прогон изменил журнал")
 
+# ── 16. казначейство: заявка → маршрут → лимит → оплата → проводки ───────────
+treasury_payload = json.loads(TREASURY.read_text(encoding="utf-8"))
+cash_state = treasury.new_state(object_name=treasury_payload["object"],
+                               opening=treasury_payload["opening"],
+                               limits=treasury_payload["limits"],
+                               contract=treasury_payload.get("contract") or "")
+cash_accepted = 0
+for request in treasury_payload["requests"]:
+    outcome = treasury.add_request(cash_state, request)
+    if outcome["request"]:
+        cash_accepted += 1
+    if request["number"] == "З-006":
+        check([item["code"] for item in outcome["errors"]] == ["NO_BASIS"],
+              "заявка без документа-основания принята: «оплатить» без счёта — не заявка")
+        check(bool(outcome["gaps"]), "по заявке без основания не запрошен документ")
+    if request["number"] == "З-004":
+        blocked = outcome["request"] or {}
+        check(blocked.get("status") == treasury.BLOCKED,
+              f"заявка сверх лимита не заблокирована: {blocked.get('status')}")
+        check(any("80 000,00" in item["why"] for item in outcome["errors"]),
+              "в отказе по лимиту нет точной суммы превышения")
+stats["cash_requests"] = cash_accepted
+check(cash_accepted == 5, f"принято заявок {cash_accepted}, ожидалось 5")
+
+wrong = treasury.approve(cash_state, "З-001", role="финдиректор",
+                         person="Орлова М.С.", date="2026-10-10")
+check([item["code"] for item in wrong["errors"]] == ["WRONG_STEP"],
+      "маршрут согласования проходится не по порядку")
+for role, person in (("снабжение", "Ким А.П."), ("ПТО", "Волков С.И."),
+                     ("финдиректор", "Орлова М.С.")):
+    treasury.approve(cash_state, "З-001", role=role, person=person, date="2026-10-10")
+check(treasury.find(cash_state, "З-001")["status"] == treasury.APPROVED,
+      "маршрут из трёх ступеней не привёл заявку в «согласована»")
+
+same = treasury.approve(cash_state, "З-003", role="снабжение", person="Ким А.П.",
+                        date="2026-10-10")
+treasury.approve(cash_state, "З-003", role="ПТО", person="Ким А.П.", date="2026-10-10")
+check(treasury.find(cash_state, "З-003")["status"] == treasury.ON_APPROVAL or same,
+      "одно лицо подписало две ступени подряд")
+
+overrun = treasury.new_state(limits=treasury_payload["limits"])
+request_004 = [row for row in treasury_payload["requests"] if row["number"] == "З-004"][0]
+allowed = treasury.add_request(overrun, {**request_004, "limit_override": {
+    "reason": "плита на критическом пути", "by": "Орлова М.С."}})
+check((allowed["request"] or {}).get("status") == treasury.ON_APPROVAL,
+      "превышение лимита с причиной и автором не принято")
+check(any(row.get("what") == "превышение лимита разрешено" for row in overrun["audit"]),
+      "обход лимита не попал в аудит — потом никто не вспомнит, кто разрешил")
+
+gap_payment = treasury.pay(cash_state, "З-001", date="2026-10-15")
+check([item["code"] for item in gap_payment["errors"]] == ["NO_MONEY"],
+      "оплата сверх остатка прошла без разрешения")
+check(any("711 200,00" in item["why"] for item in gap_payment["errors"]),
+      "в отказе по остатку нет точной нехватки")
+overdraft = treasury.pay(cash_state, "З-001", date="2026-10-15", allow_overdraft=True,
+                         reason="бетон на захватке, простой дороже", person="Орлова М.С.")
+check(bool(overdraft.get("payment")), "оплата с разрешённым разрывом не прошла")
+check(treasury.balance_at(cash_state, "2026-10-15") == Decimal("-711200.00"),
+      "разрыв не отражён в остатке: остаток обязан уйти в минус")
+
+for number, day in (("З-003", "2026-10-20"), ("З-005", "2026-10-31")):
+    treasury.approve(cash_state, number, role="снабжение", person="Ким А.П.", date="2026-10-12")
+    if treasury.find(cash_state, number)["status"] != treasury.APPROVED:
+        treasury.approve(cash_state, number, role="ПТО", person="Волков С.И.",
+                         date="2026-10-12")
+    # разрыв уже открыт оплатой З-001: дальше платим только с разрешением и причиной
+    treasury.pay(cash_state, number, date=day, allow_overdraft=True,
+                 reason="платёж по сроку, разрыв уже согласован", person="Орлова М.С.")
+check(len(cash_state["payments"]) == 3,
+      f"оплачено заявок {len(cash_state['payments'])}, ожидалось 3")
+
+calendar_own = treasury.calendar(cash_state, "2026-10")
+expected_closing = (Decimal("1000000") - Decimal("1711200") - Decimal("117600")
+                    - Decimal("60000"))   # З-005 ещё не оплачена: она в плане, не в факте
+check(Decimal(str(calendar_own["closing"])) == expected_closing,
+      f"остаток на конец октября {calendar_own['closing']}, ожидалось {expected_closing}")
+check(bool(calendar_own["gaps"]), "кассовый разрыв не назван")
+foreign = treasury.calendar(cash_state, "2026-10",
+                            funding=json.loads(FUNDING.read_text(encoding="utf-8")))
+check(foreign["closing"] == calendar_own["closing"],
+      "поступления чужого графика финансирования изменили остаток")
+check(bool(foreign["funding_unlinked"]), "строки чужого графика не помечены как непривязанные")
+check("складывать" in treasury.bdds(cash_state, "2026-10")["note"].lower(),
+      "в БДДС не сказано, что факт и план складывать нельзя")
+
+for receipt in json.loads(RECEIPTS.read_text(encoding="utf-8"))["receipts"]:
+    treasury.add_receipt(cash_state, receipt)
+
+cash_ledger = ledger.new_state(object_name=stock_state["object"])
+ledger.post_stock(cash_ledger, stock_state, documents=documents)
+ledger.post_acts(cash_ledger, json.loads(SIGNED.read_text(encoding="utf-8")))
+posted = treasury.post_to_ledger(cash_state, cash_ledger)
+check(posted["posted"] >= 2, f"проводок казначейства создано {posted['posted']}")
+refused_post = [item["code"] for item in posted["errors"]]
+check(refused_post == ["PAYMENT_OVER_DEBT"],
+      f"оплата без счёта в учёте должна отказать PAYMENT_OVER_DEBT, а не {refused_post}")
+check(not [row for row in cash_ledger["entries"] if "З-005" in row["doc"]["number"]],
+      "оплата аренды проведена, хотя долга перед арендодателем в учёте нет")
+# до проведения счёта за аренду 51 отстаёт от казначейства ровно на эту оплату
+cash_on_51 = sum(ledger.balance_as_of(cash_ledger, "51", "2026-10-31").values())
+check(cash_on_51 == treasury.balance_at(cash_state, "2026-10-31") + Decimal("60000"),
+      f"сальдо 51 {cash_on_51} не равно остатку казначейства за вычетом непроведённой "
+      f"оплаты {treasury.balance_at(cash_state, '2026-10-31')}")
+baseline = ledger.new_state(object_name=stock_state["object"])
+ledger.post_stock(baseline, stock_state, documents=documents)
+ledger.post_acts(baseline, json.loads(SIGNED.read_text(encoding="utf-8")))
+posted_requests = {row["payment"] for row in posted["results"] if row.get("payment")}
+for payment in cash_state["payments"]:
+    before = -sum((value for key, value in ledger.balance_as_of(
+        baseline, "60.01", "2026-10-31", group_by=("контрагент",)).items()
+        if key[0] == payment["counterparty"]), Decimal("0"))
+    after = -sum((value for key, value in ledger.balance_as_of(
+        cash_ledger, "60.01", "2026-10-31", group_by=("контрагент",)).items()
+        if key[0] == payment["counterparty"]), Decimal("0"))
+    if payment["id"] in posted_requests:
+        check(Decimal(str(before - after)) == Decimal(str(payment["amount"])),
+              f"долг {payment['counterparty']} уменьшился на {before - after}, "
+              f"а оплачено {payment['amount']}")
+    else:
+        check(before == after, "непроведённая оплата всё-таки изменила долг поставщику")
+
+# деньги ушли, а счёта в учёте нет: сверка обязана это назвать, а не «сойтись»
+check_or_break = treasury.reconcile_ledger(cash_state, cash_ledger, as_of="2026-11-28")
+check(not check_or_break["ok"], "оплата без счёта в учёте прошла сверку как будто всё в порядке")
+check(Decimal(str(check_or_break["diff"])) == Decimal("60000"),
+      f"расхождение названо {check_or_break['diff']}, а неоплаченный в учёте счёт — 60 000")
+# и лечится это не подгонкой цифры, а проводкой счёта: Дт 26 Кт 60.01
+ledger.post_entry(cash_ledger, event="overhead", date="2026-10-15",
+                  doc={"number": "счёт №12 аренда бытовки"},
+                  lines=[{"account": "26", "side": ledger.DEBIT, "amount": 60000,
+                          "analytics": {}},
+                         {"account": "60.01", "side": ledger.CREDIT, "amount": 60000,
+                          "analytics": {"контрагент": "ООО «Аренда»"}}])
+reposted = treasury.post_to_ledger(cash_state, cash_ledger)
+check(reposted["posted"] == 1, f"после счёта проведено {reposted['posted']} операций, ожидалась 1")
+recon_cash = treasury.reconcile_ledger(cash_state, cash_ledger, as_of="2026-11-28")
+check(recon_cash["ok"], "деньги казначейства не сошлись с сальдо 51: "
+      + "; ".join(item["why"] for item in recon_cash["problems"]))
+balance_51 = sum(ledger.balance_as_of(cash_ledger, "51", "2026-11-28").values())
+check(balance_51 >= 0, "счёт 51 ушёл в минус: деньги пришли в казначейство, а проводки нет")
+again_post = treasury.post_to_ledger(cash_state, cash_ledger)
+check(again_post["posted"] == 0 and not again_post["errors"],
+      "повторный прогон проводок создал дубли или упал на погашенном долге")
+balanced(cash_ledger, "проводки казначейства")
+cash_check = treasury.verify(cash_state)
+check(cash_check["ok"], "казначейство не сходится: "
+      + "; ".join(f"{item['code']}: {item['why']}" for item in cash_check["problems"]))
+stats["cash_paid"] = cash_check["paid_total"]
+stats["cash_balance"] = cash_check["balance"]
+
 # ── итог ──────────────────────────────────────────────────────────────────────
 print(f"ядро учёта: записей {stats['entries']} · проверок Дт=Кт {stats['balance_checks']} · "
       f"отказов по демо {stats['rejected']} · запросов к первичке {stats['gaps']} · "
@@ -331,6 +491,8 @@ print(f"ядро учёта: записей {stats['entries']} · проверо
 print(f"10.01 = склад: {recon['ledger_total']:,.2f} ₽ = {recon['stock_total']:,.2f} ₽")
 print(f"закрытие месяца: шагов {stats['close_steps']} · прибыль по сценарию "
       f"{stats['profit']:,.2f} ₽")
+print(f"казначейство: заявок {stats['cash_requests']} · оплачено {stats['cash_paid']:,.2f} ₽ · "
+      f"остаток {stats['cash_balance']:,.2f} ₽")
 if violations:
     print("НАРУШЕНИЯ:")
     for violation in violations:

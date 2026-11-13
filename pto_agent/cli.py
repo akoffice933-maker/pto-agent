@@ -17,6 +17,7 @@ from . import forms as print_forms
 from . import stock as stock_ledger
 from . import ledger as accounting
 from . import closing as accounting_close
+from . import treasury as cash
 from .pdf_profiles import ProfileError, fact_rules, get_profile, schedule_markers
 from .kr_pdf import (derive_boq, extract_facts, extract_levels, find_schedules, kr_report,
                      read_pdf_text)
@@ -924,6 +925,202 @@ def cmd_ledger(args) -> int:
         print(f"{'OK' if summary['ok'] else 'РАСХОЖДЕНИЯ'}: записей {summary['entries']} · "
               f"Дт {summary['debits']:,.2f} · Кт {summary['credits']:,.2f} · "
               f"забаланс {summary['off_balance_qty']:.3f} — {summary['summary']}")
+        for problem in summary["problems"]:
+            print(f"  [{problem['code']}] {problem['what']}: {problem['why']}", file=sys.stderr)
+        return 0 if summary["ok"] else 1
+
+    print(f"неизвестное действие: {action}", file=sys.stderr)
+    return 2
+
+
+# ─────────────────────────── казначейство: заявки, календарь, БДДС ───────────────────────────
+def cmd_treasury(args) -> int:
+    action = args.treasury_action
+    state = cash.load(args.state)
+
+    if action == "init":
+        payload = json.loads(Path(args.file).read_text(encoding="utf-8"))
+        state = cash.new_state(object_name=payload.get("object") or "",
+                               opening=payload.get("opening"), limits=payload.get("limits"),
+                               contract=payload.get("contract") or "")
+        added = 0
+        rules = cash.load_rules(args.rules or None)
+        for request in payload.get("requests") or []:
+            result = cash.add_request(state, request, rules=rules)
+            status = result["status"] or "не принята"
+            print(f"  {request.get('number'):<8} {status:<22} "
+                  f"{cash.rub(request.get('amount') or 0)}")
+            for item in result["errors"]:
+                print(f"      отказано [{item['code']}] {item['why']}", file=sys.stderr)
+            for gap in result["gaps"]:
+                print(f"      нужно запросить: {gap['what']} — {gap['ask']}", file=sys.stderr)
+            for warning in result["warnings"]:
+                print(f"      {warning}", file=sys.stderr)
+            if result["request"]:
+                added += 1
+        cash.save(state, args.state)
+        print(f"заявок принято: {added} · лимиты на {len(state.get('limits') or {})} период(ов) · "
+              f"входящий остаток {cash.rub((state.get('opening') or {}).get('amount') or 0)}")
+        return 0 if added else 1
+
+    if action == "list":
+        rows = state.get("requests") or []
+        if not rows:
+            print("заявок нет")
+            return 0
+        for row in rows:
+            done = len([item for item in row.get("approvals") or []
+                        if item.get("decision") == "согласовано"])
+            print(f"{row['number']:<8} {row['date']} {row['counterparty']:<24} "
+                  f"{row['article']:<11} {cash.rub(row['amount']):>16} "
+                  f"срок {row.get('due_date') or '—':<11} {row['status']:<22} "
+                  f"маршрут {done}/{len(row.get('route') or [])}")
+        print(f"заявок: {len(rows)}")
+        if getattr(args, "out", None):
+            path = Path(args.out)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(cash.requests_markdown(state), encoding="utf-8")
+            print(f"  файл: {path}")
+        return 0
+
+    if action == "approve":
+        result = cash.approve(state, args.number, role=args.role, person=args.person,
+                              date=args.date, comment=args.comment or "")
+        cash.save(state, args.state)
+        print(f"{args.number}: {result['status']}"
+              + (f" · следующая ступень: {result['next_role']}" if result.get("next_role") else ""))
+        for item in result["errors"]:
+            print(f"  отказано [{item['code']}] {item['why']}", file=sys.stderr)
+        for warning in result["warnings"]:
+            print(f"  {warning}", file=sys.stderr)
+        return 0 if not result["errors"] else 1
+
+    if action == "reject":
+        result = cash.reject(state, args.number, role=args.role, person=args.person,
+                             date=args.date, reason=args.reason)
+        cash.save(state, args.state)
+        print(f"{args.number}: {result['status']}")
+        for item in result["errors"]:
+            print(f"  отказано [{item['code']}] {item['why']}", file=sys.stderr)
+        return 0 if not result["errors"] else 1
+
+    if action == "pay":
+        result = cash.pay(state, args.number, date=args.date,
+                          amount=args.amount, allow_overdraft=args.allow_overdraft,
+                          reason=args.reason or "", person=args.person or "")
+        cash.save(state, args.state)
+        payment = result.get("payment") or {}
+        print(f"{args.number}: {result['status']}"
+              + (f" · платёж {cash.rub(payment['amount'])} от {payment['date']}" if payment else ""))
+        for item in result["errors"]:
+            print(f"  отказано [{item['code']}] {item['why']}", file=sys.stderr)
+        for gap in result["gaps"]:
+            print(f"  нужно запросить: {gap['what']} — {gap['ask']}", file=sys.stderr)
+        for warning in result["warnings"]:
+            print(f"  {warning}", file=sys.stderr)
+        return 0 if payment else 1
+
+    if action == "receipt":
+        payload = json.loads(Path(args.file).read_text(encoding="utf-8"))
+        rows = payload.get("receipts") if isinstance(payload, dict) else payload
+        rules = cash.load_rules(args.rules or None)
+        accepted = 0
+        for row in rows or []:
+            result = cash.add_receipt(state, row, rules=rules)
+            print(f"  {row.get('number'):<12} {result['status']}")
+            for item in result["errors"]:
+                print(f"      отказано [{item['code']}] {item['why']}", file=sys.stderr)
+            for gap in result["gaps"]:
+                print(f"      нужно запросить: {gap['what']} — {gap['ask']}", file=sys.stderr)
+            if result["receipt"]:
+                accepted += 1
+        cash.save(state, args.state)
+        print(f"поступлений принято: {accepted}")
+        return 0 if accepted else 1
+
+    if action == "calendar":
+        funding = (json.loads(Path(args.funding).read_text(encoding="utf-8"))
+                   if getattr(args, "funding", None) else None)
+        report = cash.calendar(state, args.period, funding=funding)
+        print(f"платёжный календарь на {args.period}: остаток на начало "
+              f"{cash.rub(report['opening'])} · на конец {cash.rub(report['closing'])}")
+        print(f"{'дата':<12} {'поступл. факт':>14} {'поступл. план':>14} "
+              f"{'оплаты факт':>14} {'оплаты план':>14} {'остаток':>16}")
+        for row in report["rows"]:
+            print(f"{row['date']:<12} {row['in_fact']:>14,.2f} {row['in_plan']:>14,.2f} "
+                  f"{row['out_fact']:>14,.2f} {row['out_plan']:>14,.2f} {row['balance']:>16,.2f}")
+        print(f"итого: поступило {report['in_fact']:,.2f} · оплачено {report['out_fact']:,.2f} · "
+              f"ожидается {report['in_plan']:,.2f} · к оплате {report['out_plan']:,.2f}")
+        if report["gaps"]:
+            print("кассовые разрывы:")
+            for gap in report["gaps"]:
+                print(f"  {gap['date']}: не хватает {cash.rub(gap['amount'])}", file=sys.stderr)
+        if report["overdue"]:
+            print("просроченные заявки:")
+            for row in report["overdue"]:
+                print(f"  {row['number']} ({row['counterparty']}): срок {row['due_date']}, "
+                      f"не оплачено {cash.rub(row['amount'])}")
+        if funding:
+            note = cash.funding_contract_note(funding, state)
+            if note:
+                print(f"  {note}", file=sys.stderr)
+            print(f"  строк графика финансирования в периоде: {len(report['funding_rows'])}")
+        if getattr(args, "out", None):
+            path = Path(args.out)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(cash.calendar_markdown(report), encoding="utf-8")
+            print(f"  файл: {path}")
+        return 0 if not report["gaps"] else 1
+
+    if action == "bdds":
+        report = cash.bdds(state, args.period)
+        print(f"БДДС за {args.period}: факт — поступило {report['in_fact']:,.2f}, оплачено "
+              f"{report['out_fact']:,.2f}, чистый поток {report['net_fact']:,.2f}")
+        print(f"план — ожидается {report['in_plan']:,.2f}, к оплате {report['out_plan']:,.2f}, "
+              f"чистый план {report['net_plan']:,.2f}")
+        print(f"{'статья':<14} {'тип':<12} {'поступл.':>14} {'оплаты':>14} "
+              f"{'ожидается':>14} {'к оплате':>14}")
+        for row in report["rows"]:
+            print(f"{row['article']:<14} {row['kind'] or '':<12} {row['in_fact']:>14,.2f} "
+                  f"{row['out_fact']:>14,.2f} {row['in_plan']:>14,.2f} {row['out_plan']:>14,.2f}")
+        print(f"  {report['note']}")
+        if getattr(args, "out", None):
+            path = Path(args.out)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(cash.bdds_markdown(report), encoding="utf-8")
+            print(f"  файл: {path}")
+        return 0
+
+    if action == "post":
+        ledger_state = accounting.load(args.ledger)
+        result = cash.post_to_ledger(state, ledger_state, mode=getattr(args, "mode", None) or None)
+        accounting.save(ledger_state, args.ledger)
+        print(f"проводок по казначейству: создано {result['posted']} · повторно "
+              f"{result['duplicates']} · отказано {result['rejected']}")
+        for item in result["errors"]:
+            print(f"  отказано [{item['code']}] {item['what']}: {item['why']}", file=sys.stderr)
+        for gap in result["gaps"]:
+            print(f"  нужно запросить: {gap['what']} — {gap['ask']}", file=sys.stderr)
+        for warning in result["warnings"]:
+            print(f"  замечание: {warning}", file=sys.stderr)
+        return 0 if result["rejected"] == 0 else 1
+
+    if action == "reconcile":
+        ledger_state = accounting.load(args.ledger)
+        result = cash.reconcile_ledger(state, ledger_state, as_of=args.as_of or None)
+        print(f"сверка денег с 51 на {result['as_of']}: казначейство {result['cash']:,.2f} ₽ · "
+              f"сальдо 51 {result['ledger']:,.2f} ₽ · расхождение {result['diff']:,.2f} ₽ — "
+              f"{'сходится' if result['ok'] else 'НЕ сходится'}")
+        for problem in result["problems"]:
+            print(f"  [{problem['code']}] {problem['what']}: {problem['why']}", file=sys.stderr)
+        return 0 if result["ok"] else 1
+
+    if action == "verify":
+        summary = cash.verify(state)
+        print(f"{'OK' if summary['ok'] else 'РАСХОЖДЕНИЯ'}: заявок {summary['requests']} · "
+              f"оплат {summary['payments']} на {summary['paid_total']:,.2f} · поступлений "
+              f"{summary['receipts']} на {summary['received_total']:,.2f} · остаток "
+              f"{summary['balance']:,.2f} — {summary['summary']}")
         for problem in summary["problems"]:
             print(f"  [{problem['code']}] {problem['what']}: {problem['why']}", file=sys.stderr)
         return 0 if summary["ok"] else 1
@@ -2460,6 +2657,84 @@ def main(argv=None):
     stk_m29.add_argument("--period", required=True)
     stk_m29.add_argument("--out", default="out/forms")
     stk_m29.set_defaults(func=cmd_stock)
+
+    trs = sub.add_parser("treasury", help="казначейство: заявки на оплату, календарь, БДДС")
+    trss = trs.add_subparsers(dest="treasury_action", required=True)
+
+    tr_init = trss.add_parser("init", help="загрузить заявки, лимиты и входящий остаток из файла")
+    tr_init.add_argument("--state", default="out/treasury/state.json")
+    tr_init.add_argument("--file", required=True)
+    tr_init.add_argument("--rules", default=None)
+    tr_init.set_defaults(func=cmd_treasury)
+
+    tr_list = trss.add_parser("list", help="заявки и статусы согласования")
+    tr_list.add_argument("--state", default="out/treasury/state.json")
+    tr_list.add_argument("--out", default=None)
+    tr_list.set_defaults(func=cmd_treasury)
+
+    tr_ok = trss.add_parser("approve", help="согласовать очередную ступень маршрута")
+    tr_ok.add_argument("--state", default="out/treasury/state.json")
+    tr_ok.add_argument("--number", required=True)
+    tr_ok.add_argument("--role", required=True)
+    tr_ok.add_argument("--person", required=True)
+    tr_ok.add_argument("--date", required=True)
+    tr_ok.add_argument("--comment", default="")
+    tr_ok.set_defaults(func=cmd_treasury)
+
+    tr_no = trss.add_parser("reject", help="отклонить заявку с причиной")
+    tr_no.add_argument("--state", default="out/treasury/state.json")
+    tr_no.add_argument("--number", required=True)
+    tr_no.add_argument("--role", required=True)
+    tr_no.add_argument("--person", required=True)
+    tr_no.add_argument("--date", required=True)
+    tr_no.add_argument("--reason", required=True)
+    tr_no.set_defaults(func=cmd_treasury)
+
+    tr_pay = trss.add_parser("pay", help="оплатить согласованную заявку")
+    tr_pay.add_argument("--state", default="out/treasury/state.json")
+    tr_pay.add_argument("--number", required=True)
+    tr_pay.add_argument("--date", required=True)
+    tr_pay.add_argument("--amount", type=float, default=None, help="частичная оплата")
+    tr_pay.add_argument("--allow-overdraft", dest="allow_overdraft", action="store_true",
+                        help="оплатить сверх остатка (нужна --reason)")
+    tr_pay.add_argument("--reason", default="")
+    tr_pay.add_argument("--person", default="")
+    tr_pay.set_defaults(func=cmd_treasury)
+
+    tr_rc = trss.add_parser("receipt", help="поступления от заказчика")
+    tr_rc.add_argument("--state", default="out/treasury/state.json")
+    tr_rc.add_argument("--file", required=True)
+    tr_rc.add_argument("--rules", default=None)
+    tr_rc.set_defaults(func=cmd_treasury)
+
+    tr_cal = trss.add_parser("calendar", help="платёжный календарь: разрывы и просрочки")
+    tr_cal.add_argument("--state", default="out/treasury/state.json")
+    tr_cal.add_argument("--period", required=True)
+    tr_cal.add_argument("--funding", default=None, help="график финансирования (поступления)")
+    tr_cal.add_argument("--out", default=None)
+    tr_cal.set_defaults(func=cmd_treasury)
+
+    tr_bd = trss.add_parser("bdds", help="БДДС: факт и план по статьям отдельно")
+    tr_bd.add_argument("--state", default="out/treasury/state.json")
+    tr_bd.add_argument("--period", required=True)
+    tr_bd.add_argument("--out", default=None)
+    tr_bd.set_defaults(func=cmd_treasury)
+
+    tr_post = trss.add_parser("post", help="проводки в учёт: Дт 60.01 Кт 51 и Дт 51 Кт 62.01")
+    tr_post.add_argument("--state", default="out/treasury/state.json")
+    tr_post.add_argument("--ledger", default="out/ledger/state.json")
+    tr_post.add_argument("--mode", default=None, choices=["проводить", "предлагать"])
+    tr_post.set_defaults(func=cmd_treasury)
+
+    tr_rc2 = trss.add_parser("reconcile", help="сверка: деньги в казначействе против сальдо 51")
+    tr_rc2.add_argument("--state", default="out/treasury/state.json")
+    tr_rc2.add_argument("--ledger", default="out/ledger/state.json")
+    tr_rc2.add_argument("--as-of", dest="as_of", default=None)
+    tr_rc2.set_defaults(func=cmd_treasury)
+
+    tr_ver = trss.add_parser("verify", help="сходится ли казначейство само с собой")
+    tr_ver.add_argument("--state", default="out/treasury/state.json")
+    tr_ver.set_defaults(func=cmd_treasury)
 
     led = sub.add_parser("ledger", help="ядро учёта: план счетов 94н, проводки, ОСВ")
     leds = led.add_subparsers(dest="ledger_action", required=True)
