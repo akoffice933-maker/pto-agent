@@ -494,8 +494,9 @@ def test_signed_act_books_revenue_and_vat():
     result = ledger.post_acts(state, {"acts": [signed_act()]})
     assert result["posted"] == 1
     lines = lines_of(state)
-    assert lines["Дт 62.01"] == pytest.approx(1200000.0)
-    assert lines["Кт 90.01"] == pytest.approx(1200000.0)
+    # долг заказчика — сумма к получению: 1 200 000 без НДС + 240 000 НДС (вариант А)
+    assert lines["Дт 62.01"] == pytest.approx(1440000.0)
+    assert lines["Кт 90.01"] == pytest.approx(1440000.0)
     assert lines["Дт 90.03"] == pytest.approx(240000.0)
     assert lines["Кт 68.02"] == pytest.approx(240000.0)
     assert ledger.verify(state)["ok"] is True
@@ -598,6 +599,15 @@ def test_close_rejects_bad_period_format():
 
 
 # ─────────────────────────── демо целиком ───────────────────────────
+def test_signed_act_receivable_includes_vat_when_vat_is_on_top():
+    """Регресс: при НДС «сверху» 62.01 должен быть суммой к получению, а не суммой без НДС."""
+    state = ledger.new_state(object_name="ЖК «Северный», корпус 2")
+    ledger.post_acts(state, {"acts": [signed_act()]})
+    lines = lines_of(state)
+    assert lines["Дт 62.01"] - lines["Дт 90.03"] == pytest.approx(1200000.0)
+    assert lines["Кт 68.02"] == pytest.approx(240000.0)
+
+
 def test_whole_demo_chain_is_consistent():
     documents = json.loads(DEMO_DOCS.read_text(encoding="utf-8"))
     stock_state = catalog_state()

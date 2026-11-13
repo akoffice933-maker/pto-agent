@@ -60,6 +60,12 @@ EPS = Decimal("0.01")
 STATUS_OK = "проведено"
 STATUS_DUPLICATE = "уже проведено"
 STATUS_REJECTED = "отклонено"
+STATUS_PROPOSED = "предложено"
+
+#: вариант C из плана: движок один, режим — настройка организации
+MODE_POST = "проводить"
+MODE_PROPOSE = "предлагать"
+MODES = {MODE_POST: "проводки проводятся", MODE_PROPOSE: "проводки только предлагаются"}
 
 DEBIT = "Дт"
 CREDIT = "Кт"
@@ -155,7 +161,7 @@ def check_chart(chart: dict) -> list[dict]:
 def new_state(*, object_name: str = "", organization: str = "", contract: str = "") -> dict:
     return {"schema": SCHEMA, "object": object_name, "organization": organization,
             "contract": contract, "entries": [], "periods": [], "rejections": [],
-            "keys": []}
+            "proposals": [], "mode": MODE_POST, "keys": []}
 
 
 def load(path: str | Path) -> dict:
@@ -211,7 +217,8 @@ def _analytics_ok(chart: dict, line: dict) -> list[str]:
 def post_entry(state: dict, *, event: str, date: str, doc: dict, lines: list[dict],
                kind: str = "balance", memo: str = "", rule: str = "", key: str = "",
                bases: list[dict] | None = None, chart: dict | None = None,
-               rules: dict | None = None) -> dict:
+               rules: dict | None = None, mode: str = MODE_POST,
+               force: bool = False) -> dict:
     """Провести одну операцию. Всё, что не проходит проверку, — отказ, а не «проведём как есть»."""
     chart = chart or load_chart()
     rules = rules if rules is not None else load_rules()
@@ -292,6 +299,24 @@ def post_entry(state: dict, *, event: str, date: str, doc: dict, lines: list[dic
             return result
 
     entry_key = key or f"{rule}|{date}|{number}|{event}"
+    if mode == MODE_PROPOSE and not force:
+        if entry_key in (state.get("keys") or []):
+            result["status"] = STATUS_DUPLICATE
+            result["warnings"].append(f"{number or event}: повтор — запись с тем же ключом уже есть")
+            return result
+        if any(row.get("key") == entry_key for row in state.get("proposals") or []):
+            result["status"] = STATUS_DUPLICATE
+            result["warnings"].append(f"{number or event}: такое предложение уже есть")
+            return result
+        proposal = {"id": f"Пр-{len(state.get('proposals') or []) + 1:04d}",
+                    "date": date, "period": period_of(date), "event": event, "rule": rule,
+                    "kind": kind, "doc": {"number": number, "date": str(doc.get("date") or date),
+                                          "kind": doc.get("kind") or ""},
+                    "memo": memo, "lines": clean, "bases": list(bases or []), "key": entry_key}
+        state.setdefault("proposals", []).append(proposal)
+        result.update({"status": STATUS_PROPOSED, "proposal": proposal})
+        return result
+
     if entry_key in (state.get("keys") or []):
         result["status"] = STATUS_DUPLICATE
         result["warnings"].append(f"{number or event}: повтор — запись с тем же ключом "
@@ -409,7 +434,8 @@ def _build_balance_entry(rule: dict, *, amounts: dict, debit_analytics: dict,
 
 
 def post_stock(state: dict, stock_state: dict, *, documents: dict | None = None,
-               chart: dict | None = None, rules: dict | None = None) -> dict:
+               chart: dict | None = None, rules: dict | None = None,
+               mode: str = MODE_POST) -> dict:
     """Проводки из складских движений: приход, требование, перемещение, списание, 003.
 
     Суммы берутся из движений (а не из документа): при списании это себестоимость
@@ -463,7 +489,7 @@ def post_stock(state: dict, stock_state: dict, *, documents: dict | None = None,
                                 lines=lines, rule=str(rule.get("id")), bases=bases,
                                 memo=(f"входящие остатки склада на {date}: "
                                       f"{len(bases)} позиций, {_rub(total)}"),
-                                key=f"opening|{date}", chart=chart, rules=rules)
+                                key=f"opening|{date}", chart=chart, rules=rules, mode=mode)
             results.append(result)
 
     # 2. документы склада
@@ -479,7 +505,7 @@ def post_stock(state: dict, stock_state: dict, *, documents: dict | None = None,
         event = STOCK_EVENTS.get(kind)
         if kind == "inventory":
             # инвентаризация — не своё событие, а два: излишек и недостача
-            _inventory_entries(state, stock_state, doc_row, chart, rules, results)
+            _inventory_entries(state, stock_state, doc_row, chart, rules, results, mode=mode)
             continue
         if not event:
             continue
@@ -524,7 +550,7 @@ def post_stock(state: dict, stock_state: dict, *, documents: dict | None = None,
                 result = _post_daval(state, rule=rule, doc_row=doc_row, date=date,
                                      item=item, warehouse=warehouse, row=row,
                                      requisites=requisites, chart=chart, rules=rules,
-                                     side=CREDIT if kind == "daval_return" else DEBIT)
+                                     side=CREDIT if kind == "daval_return" else DEBIT, mode=mode)
                 results.append(result)
                 continue
 
@@ -595,7 +621,7 @@ def post_stock(state: dict, stock_state: dict, *, documents: dict | None = None,
                                 lines=lines, rule=str(rule.get("id")), memo=memo,
                                 bases=row["batches"],
                                 key=f"{rule.get('id')}|{date}|{number}|{item}|{warehouse}",
-                                chart=chart, rules=rules)
+                                chart=chart, rules=rules, mode=mode)
             result["document"] = {"number": number, "kind": kind, "date": date}
             if pre_gaps:
                 result["gaps"] = (result.get("gaps") or []) + pre_gaps
@@ -613,7 +639,7 @@ def _reason_of(doc_meta: dict) -> str:
 
 def _post_daval(state: dict, *, rule: dict, doc_row: dict, date: str, item: str,
                 warehouse: str, row: dict, requisites: dict, chart: dict, rules: dict,
-                side: str) -> dict:
+                side: str, mode: str = MODE_POST) -> dict:
     """Забалансовая запись по 003: односторонняя, количественная, без «встречного» счёта."""
     account = (rule["lines"][0].get("debit") or rule["lines"][0].get("credit") or "003")
     credit_side = side == CREDIT
@@ -653,7 +679,7 @@ def _post_daval(state: dict, *, rule: dict, doc_row: dict, date: str, item: str,
                         lines=[line], kind="off_balance", memo=memo,
                         rule=str(rule.get("id")),
                         key=f"{rule.get('id')}|{date}|{doc_row.get('number')}|{item}",
-                        chart=chart, rules=rules)
+                        chart=chart, rules=rules, mode=mode)
     result["gaps"] = (result.get("gaps") or []) + gaps
     result["warnings"] = (result.get("warnings") or []) + warnings
     return result
@@ -675,7 +701,7 @@ def _daval_balance(state: dict, *, item: str, counterparty: str) -> float:
 
 
 def _inventory_entries(state: dict, stock_state: dict, doc_row: dict, chart: dict,
-                       rules: dict, results: list) -> list:
+                       rules: dict, results: list, *, mode: str = MODE_POST) -> list:
     """ИНВ-3: излишек и недостача — два разных правила, а не «одна корректировка»."""
     number = str(doc_row.get("number") or "")
     date = str(doc_row.get("date") or "")
@@ -728,7 +754,7 @@ def _inventory_entries(state: dict, stock_state: dict, doc_row: dict, chart: dic
                                   f"{item} · {row['qty'].normalize():f} {row['unit']} · "
                                   f"{_rub(row['amount'])}"),
                             key=f"{rule.get('id')}|{date}|{number}|{item}|{warehouse}",
-                            chart=chart, rules=rules)
+                            chart=chart, rules=rules, mode=mode)
         results.append(result)
     return results
 
@@ -750,7 +776,8 @@ SIGNED = {"подписан", "подписана", "подписано зака
 
 
 def post_acts(state: dict, acts: dict | list, *, contract: str = "", customer: str = "",
-              chart: dict | None = None, rules: dict | None = None) -> dict:
+              chart: dict | None = None, rules: dict | None = None,
+              mode: str = MODE_POST) -> dict:
     """Выручка по КС-2. Признаётся только подписанный заказчиком акт — не «проверенный»."""
     chart = chart or load_chart()
     rules = rules or load_rules()
@@ -795,7 +822,9 @@ def post_acts(state: dict, acts: dict | list, *, contract: str = "", customer: s
             continue
         rate, included = _vat_of(act)
         net, vat, vat_memo = split_vat(amount, rate, included)
-        amounts = {"gross": amount, "net": net, "vat": vat}
+        # долг заказчика — это сумма к получению: без НДС + НДС. Вариант А: 90.01 показывается
+        # с НДС, налог снимается строкой 90.03, поэтому 62.01 и 90.01 равны сумме к получению
+        amounts = {"gross": amount, "net": net, "vat": vat, "receivable": net + vat}
         debit_analytics = {"контрагент": counterparty, "договор": contract_no}
         credit_analytics = {"объект": str(act.get("object") or state.get("object") or ""),
                             "договор": contract_no}
@@ -805,7 +834,7 @@ def post_acts(state: dict, acts: dict | list, *, contract: str = "", customer: s
                             doc={"number": number, "date": date, "kind": "ks2"},
                             lines=lines, rule=str(rule.get("id")),
                             memo=f"{number} · {_rub(net)} без НДС · {vat_memo}",
-                            key=f"act|{date}|{number}", chart=chart, rules=rules)
+                            key=f"act|{date}|{number}", chart=chart, rules=rules, mode=mode)
         if vat == 0 and result.get("status") == STATUS_OK:
             result.setdefault("gaps", []).append(
                 {"what": f"ставка НДС по {number}",
@@ -813,6 +842,41 @@ def post_acts(state: dict, acts: dict | list, *, contract: str = "", customer: s
                  "ask": "ставка НДС по договору"})
         results.append(result)
     return _summarise(results, state)
+
+
+def accept_proposal(state: dict, proposal_id: str, *, chart: dict | None = None,
+                    rules: dict | None = None) -> dict:
+    """Провести предложенную проводку. Пока её не приняли — в журнале её нет."""
+    row = next((item for item in state.get("proposals") or [] if item.get("id") == proposal_id),
+               None)
+    if not row:
+        return {"status": STATUS_REJECTED, "entry": None,
+                "errors": [{"code": "NO_PROPOSAL", "what": proposal_id,
+                            "why": "предложения нет в списке"}],
+                "gaps": [], "warnings": []}
+    result = post_entry(state, event=row["event"], date=row["date"], doc=row.get("doc") or {},
+                        lines=row["lines"], kind=row.get("kind") or "balance",
+                        memo=row.get("memo") or "", rule=row.get("rule") or "",
+                        key=row.get("key") or "", bases=row.get("bases") or [],
+                        chart=chart, rules=rules, force=True)
+    if result["status"] == STATUS_OK:
+        state["proposals"] = [item for item in state.get("proposals") or []
+                              if item.get("id") != proposal_id]
+    return result
+
+
+def reject_proposal(state: dict, proposal_id: str, *, reason: str = "") -> dict:
+    """Отклонить предложение: оно уходит из списка, но остаётся след — что и почему."""
+    row = next((item for item in state.get("proposals") or [] if item.get("id") == proposal_id),
+               None)
+    if not row:
+        return {"status": STATUS_REJECTED, "proposal": None}
+    state["proposals"] = [item for item in state.get("proposals") or []
+                          if item.get("id") != proposal_id]
+    state.setdefault("rejections", []).append({"what": "проводка отклонена", "proposal": proposal_id,
+                                               "event": row.get("event"), "date": row.get("date"),
+                                               "memo": row.get("memo"), "reason": reason})
+    return {"status": "отклонено", "proposal": row}
 
 
 # ─────────────────────────── сторно ───────────────────────────
