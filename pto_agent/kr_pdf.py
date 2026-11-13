@@ -89,17 +89,22 @@ SCHEDULE_MARKERS = {
 }
 
 
-def find_schedules(doc: dict) -> dict:
-    """Есть ли в томе ведомости. Отсутствие — не ошибка, а факт, который меняет план работ."""
+def find_schedules(doc: dict, markers: dict | None = None) -> dict:
+    """Есть ли в томе ведомости. Отсутствие — не ошибка, а факт, который меняет план работ.
+
+    `markers` — из профиля (`pdf_profiles.schedule_markers`): у слаботочки ищут кабельный
+    журнал и спецификацию, а не ведомость расхода стали.
+    """
+    source = markers or SCHEDULE_MARKERS
     found: dict[str, list[int]] = {}
-    for name, markers in SCHEDULE_MARKERS.items():
+    for name, keys in source.items():
         pages = [p["page"] for p in doc["pages"]
-                 if any(m in p["text"].lower() for m in markers)]
+                 if any(m in p["text"].lower() for m in keys)]
         if pages:
             found[name] = pages
     return {
         "found": found,
-        "missing": [name for name in SCHEDULE_MARKERS if name not in found],
+        "missing": [name for name in source if name not in found],
         "schedules_present": bool(found),
         "note": ("ведомости в томе есть — объёмы можно брать из таблиц" if found else
                  "табличных ведомостей в томе нет: объёмы из таблиц взять нельзя, "
@@ -137,10 +142,27 @@ FACT_RULES = [
 ]
 
 
-def _page_for(doc: dict, pattern: re.Pattern) -> tuple[int | None, str]:
+def _search_with_reject(pattern: re.Pattern, reject: re.Pattern | None,
+                        text: str) -> re.Match | None:
+    """Первое совпадение, которое не отсекается правилом `reject`.
+
+    `reject` ищется в тексте перед совпадением (до 40 символов): так «4 этаж» внутри
+    «пом. 414, 4 этаж» отсеивается, а «этажность блоков — 4» проходит.
+    """
+    for match in pattern.finditer(text):
+        if reject is not None:
+            window = text[max(match.start() - 40, 0):match.end()]
+            if reject.search(window):
+                continue
+        return match
+    return None
+
+
+def _page_for(doc: dict, pattern: re.Pattern,
+              reject: re.Pattern | None = None) -> tuple[int | None, str]:
     for page in doc["pages"]:
         flat = " ".join(page["text"].split())
-        match = pattern.search(flat)
+        match = _search_with_reject(pattern, reject, flat)
         if match:
             start = max(match.start() - 70, 0)
             if start:                                   # не режем слово пополам
@@ -149,19 +171,29 @@ def _page_for(doc: dict, pattern: re.Pattern) -> tuple[int | None, str]:
     return None, ""
 
 
-def extract_facts(doc: dict) -> dict:
-    """Конструктивные параметры: значение + единица + номер страницы + цитата."""
+def extract_facts(doc: dict, rules: list | None = None) -> dict:
+    """Параметры объекта: значение + единица + номер страницы + цитата.
+
+    `rules` — правила профиля (`pdf_profiles.fact_rules`): dict с `pattern`/`reject`
+    новее кортежей `FACT_RULES`, потому что умеют отсеивать ложные срабатывания
+    вроде «этажность 4» из «пом. 414, 4 этаж».
+    """
     facts: list[dict] = []
-    for name, pattern, unit in FACT_RULES:
-        page, quote = _page_for(doc, pattern)
+    prepared = rules if rules is not None else [
+        {"name": name, "pattern": pattern, "unit": unit, "reject": None, "note": ""}
+        for name, pattern, unit in FACT_RULES]
+    for rule in prepared:
+        name, pattern, unit = rule["name"], rule["pattern"], rule["unit"]
+        reject = rule.get("reject")
+        page, quote = _page_for(doc, pattern, reject=reject)
         if page is None:
             continue
-        match = pattern.search(" ".join(
-            next(p for p in doc["pages"] if p["page"] == page)["text"].split()))
+        flat = " ".join(next(p for p in doc["pages"] if p["page"] == page)["text"].split())
+        match = _search_with_reject(pattern, reject, flat)
         groups = [g for g in (match.groups() if match else []) if g]
         value = " × ".join(groups) if len(groups) > 1 else (groups[0] if groups else "")
         facts.append({"name": name, "value": value, "unit": unit, "page": page,
-                      "quote": quote[:220]})
+                      "quote": quote[:220], "note": rule.get("note", "")})
     by_name = {f["name"]: f for f in facts}
     return {"facts": facts, "by_name": by_name,
             "note": "факты только из текста тома: у каждого — страница и цитата"}
@@ -196,7 +228,7 @@ def _num(text: str) -> float | None:
 
 # ─────────────────────────── расчёт по габаритам ───────────────────────────
 def derive_boq(facts: dict, *, levels: dict | None = None,
-               storey_height: float | None = None) -> dict:
+               storey_height: float | None = None, profile: dict | None = None) -> dict:
     """Объёмы, которые можно посчитать по указанным в томе параметрам.
 
     Считается только то, что выводится формулой из текстовых параметров. Всё, для чего
@@ -206,6 +238,23 @@ def derive_boq(facts: dict, *, levels: dict | None = None,
     lines: list[dict] = []
     needs: list[dict] = []
     formulas: list[dict] = []
+    # профиль решает, что считаем расчётом; без профиля — поведение КР как раньше
+    allow = None if profile is None else set(profile.get("derive") or [])
+    concrete_ok = allow is None or "concrete_from_dimensions" in allow
+    # вопрос задаём только про те параметры, которые профиль вообще ищет:
+    # «площадь застройки» в слаботочке — это вопрос не по адресу
+    tracked = None if profile is None else {f["name"] for f in facts.get("facts") or []}
+
+    def has(*names: str) -> bool:
+        return tracked is None or any(name in tracked for name in names)
+
+    def missing(*names: str) -> bool:
+        """Параметр профилю нужен (есть в правилах), но из томом не извлёкся."""
+        if tracked is None:
+            return True
+        wanted = set(names)
+        rules = {r["name"] for r in (profile.get("facts") or [])} if profile else set()
+        return bool(wanted & rules) and not (wanted & tracked)
 
     gab = by.get("габариты здания")
     area = None
@@ -220,7 +269,7 @@ def derive_boq(facts: dict, *, levels: dict | None = None,
                                  "page": gab["page"],
                                  "caveat": "габаритный прямоугольник: фактическая площадь "
                                            "меньше (здание из двух объёмов многоугольной формы)"})
-    if area is None:
+    if area is None and missing("габариты здания"):
         if gab:
             why = (f"габариты в томе есть («{gab['value']}», стр. {gab['page']}), но не разобраны "
                    f"как два положительных размера — считать по ним нельзя")
@@ -230,7 +279,12 @@ def derive_boq(facts: dict, *, levels: dict | None = None,
                       "ask": "габариты по осям или обмер плана"})
 
     t_plate = positive((by.get("толщина фундаментной плиты") or {}).get("value"))
-    if area and t_plate:
+    if area and t_plate and not concrete_ok:
+        needs.append({"what": "бетон фундаментной плиты", "why": f"габариты и толщина "
+                      f"{t_plate:g} мм в томе есть, но профиль «{profile.get('name')}» не "
+                      f"разрешает выводить бетон расчётом по габаритам",
+                      "ask": "ведомость объёмов бетона или обмер"})
+    elif area and t_plate:
         qty = round(area * t_plate / 1000, 1)
         if qty > 0:
             lines.append({
@@ -249,7 +303,7 @@ def derive_boq(facts: dict, *, levels: dict | None = None,
                           "ask": "габариты по осям и толщина плиты"})
 
     t_basement = positive((by.get("толщина стен подвала") or {}).get("value"))
-    if t_basement:
+    if t_basement and missing("толщина стен подвала"):
         marks = ", ".join(f"{m['mark']} (стр. {m['page']})"
                           for m in (levels or {}).get("marks", [])[:6]) or "отметок не найдено"
         needs.append({
@@ -262,7 +316,7 @@ def derive_boq(facts: dict, *, levels: dict | None = None,
 
     t_floor = positive((by.get("толщина перекрытия") or {}).get("value"))
     floors = (levels or {}).get("levels_count") or 0
-    if area and t_floor and floors:
+    if area and t_floor and floors and concrete_ok:
         qty = round(area * t_floor / 1000 * floors, 1)
         if qty > 0:
             lines.append({
@@ -277,20 +331,36 @@ def derive_boq(facts: dict, *, levels: dict | None = None,
             })
 
     # колонны: нужна высота этажа — в томе её текстом нет
-    if by.get("сечение колонн"):
+    if by.get("сечение колонн") and has("сечение колонн"):
         needs.append({"what": "объём колонн", "why": "в тексте есть сечение 400×400 и сетка 7,2×7,2, "
                                                     "но нет высот этажей",
                       "ask": "высота этажей (или разрез) — тогда посчитаю по сетке"})
-    if by.get("балки"):
+    if by.get("балки") and has("балки"):
         needs.append({"what": "объём балок", "why": "в тексте есть сечения балок, но нет их общей длины",
                       "ask": "схема балок с длинами или обмер"})
-    needs.append({"what": "арматура (т)", "why": "ведомости расхода стали в томе нет, а расход "
-                                                "по объёму бетона — это норматив, а не факт",
-                  "ask": "ведомость расхода стали по спецификации либо обмер по схемам армирования"})
-    if by.get("кирпич перегородок") or by.get("газобетон стен"):
+    always = [a for a in (profile or {}).get("always_ask") or []]
+    has_armatura = any("арматура" in a for a in always)
+    if profile is None or has_armatura:
+        needs.append({"what": "арматура (т)", "why": "ведомости расхода стали в томе нет, а расход "
+                                                    "по объёму бетона — это норматив, а не факт",
+                      "ask": "ведомость расхода стали по спецификации либо обмер по схемам армирования"})
+    if (by.get("кирпич перегородок") or by.get("газобетон стен")) and \
+            has("кирпич перегородок", "газобетон стен"):
         needs.append({"what": "кладка и газобетон (м3/м2)", "why": "материал и толщина указаны, "
                                                                  "площадей стен в томе нет",
                       "ask": "площади стен по этажам"})
+    if profile is not None:
+        # вопросы профиля, которых ещё нет в списке (сверка по «what»)
+        known = {n["what"] for n in needs}
+        for item in always:
+            what = item if isinstance(item, str) else item.get("what", "")
+            if not what or what in known:
+                continue
+            ask = (item if isinstance(item, str)
+                   else item.get("ask") or item.get("why") or "уточнить у проектировщика")
+            needs.append({"what": what, "ask": ask,
+                          "why": (f"профиль «{profile['name']}» требует это всегда: "
+                                  f"в томе этого нет, а расчётом не выводится")})
 
     return {"lines": lines, "needs_input": needs, "formulas": formulas,
             "storey_height": storey_height, "levels": levels}
@@ -298,8 +368,15 @@ def derive_boq(facts: dict, *, levels: dict | None = None,
 
 # ─────────────────────────── отчёт ───────────────────────────
 def kr_report(doc: dict, schedules: dict, facts: dict, derived: dict,
-              object_name: str = "", draft: dict | None = None) -> str:
-    lines = [f"# Раздел КР из PDF: {object_name or doc['file']}", ""]
+              object_name: str = "", draft: dict | None = None,
+              profile: dict | None = None) -> str:
+    """Markdown-отчёт. `profile` (из `pdf_profiles.get_profile`) задаёт заголовок и оговорки."""
+    from .pdf_profiles import describe
+
+    title = profile["title"] if profile else "Раздел КР"
+    lines = [f"# {title} из PDF: {object_name or doc['file']}", ""]
+    if profile:
+        lines += [f"- {describe(profile)}", ""]
     lines += [f"- файл: `{doc['file']}` · страниц {doc['pages_total']} · с текстовым слоем "
               f"{doc['pages_with_text']}",
               f"- страниц без текста (только графика/скан): "
@@ -307,7 +384,7 @@ def kr_report(doc: dict, schedules: dict, facts: dict, derived: dict,
               + (f", ошибки чтения: {'; '.join(doc['read_errors'])}" if doc["read_errors"] else ""),
               ""]
 
-    lines += ["## 1. Есть ли в томе ведомости", "",
+    lines += [f"## 1. {'Ведомости, которые ищет профиль' if profile else 'Есть ли в томе ведомости'}", "",
               f"- найдено: {', '.join(f'{k} (стр. {v})'.replace('[','').replace(']','') for k, v in schedules['found'].items()) or '**ничего**'}",
               f"- нет: {', '.join(schedules['missing']) or '—'}",
               f"- вывод: {schedules['note']}", ""]
