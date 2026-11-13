@@ -36,75 +36,20 @@ def _sheet(wb, title, headers, widths):
 
 
 def export_ks2(rec: Reconciliation, path: Path, vat_rate: float = 20.0) -> Path:
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "КС-2"
-    ws["A1"] = "АКТ О ПРИЁМКЕ ВЫПОЛНЕННЫХ РАБОТ (форма № КС-2) — ЧЕРНОВИК"
-    ws["A1"].font = Font(bold=True, size=13, color=NAVY)
-    ws["A2"] = f"Объект: {rec.object_name}"
-    ws["A3"] = f"Отчётный период: {rec.period[0]:%d.%m.%Y} — {rec.period[1]:%d.%m.%Y}"
-    ws["A4"] = (f"Сформировано автоматически ИИ-агентом ПТО {date.today():%d.%m.%Y}. "
-                "Требует проверки и подписи инженера ПТО.")
-    ws["A4"].font = Font(italic=True, size=9, color="666666")
+    """КС-2 тем же механизмом бланков, что КС-3, КС-6а и М-29 (`forms.build_ks2`).
 
-    headers = ["№", "Шифр расценки", "Наименование работ", "Ед. изм.",
-               "Кол-во по журналу", "К предъявлению", "Цена, руб.",
-               "Стоимость к предъявлению, руб.", "Ограничения и флаги"]
-    widths = [5, 20, 46, 9, 14, 14, 13, 17, 40]
-    start = 6
-    for i, h in enumerate(headers, 1):
-        c = ws.cell(start, i, h)
-        c.font, c.fill, c.border = HDR, FILL, BOX
-        c.alignment = Alignment(vertical="center", wrap_text=True)
-        ws.column_dimensions[get_column_letter(i)].width = widths[i - 1]
+    Раньше КС-2 собиралась здесь отдельным кодом с собственной вёрсткой: расхождения
+    с остальными формами появлялись уже в шапке и в правилах округления. Теперь это
+    один механизм — `pto_agent/forms.py`, а эта функция осталась обёрткой, чтобы не
+    ломать вызовы `run` и MCP. Форму с колонтитулом «ЧЕРНОВИК» и листом «требует данных»
+    можно получить через `python3 -m pto_agent forms ks2 --summary out/summary.json`.
+    """
+    from . import forms as print_forms
 
-    row = start + 1
-    n = 0
-    for plan in rec.act_plan():
-        line = plan["line"]
-        n += 1
-        flags = list(plan["restrictions"])
-        if line.duplicates:
-            flags.append(f"исключены дубли: {line.duplicates}")
-        if not line.has_docs:
-            flags.append("нет ИД")
-        values = [n, line.item.code, line.item.name, line.item.unit,
-                  line.qty_journal, plan["qty_claim"], line.item.price,
-                  plan["amount_claim"], "; ".join(flags)]
-        for i, v in enumerate(values, 1):
-            c = ws.cell(row, i, v)
-            c.border, c.font = BOX, BASE
-            c.alignment = Alignment(vertical="top", wrap_text=(i == 9))
-            if i in (5, 6):
-                c.number_format = QTY
-            if i in (7, 8):
-                c.number_format = MONEY
-            if flags and i == 9:
-                c.fill = WARN
-        row += 1
-    ws.freeze_panes = f"A{start + 1}"
-
-    total = round(sum(l.amount_act for l in rec.lines_with_qty), 2)
-    safe = rec.amount_act_safe
-    vat = round(total * vat_rate / 100, 2)
-    rows = [("Итого по журналу (все позиции)", total),
-            ("К предъявлению после снятия ограничений", safe),
-            ("Заблокировано замечаниями", rec.amount_blocked),
-            (f"НДС {vat_rate:.0f} % (от суммы к предъявлению)",
-             round(safe * vat_rate / 100, 2)),
-            ("Всего с НДС", round(safe * (1 + vat_rate / 100), 2))]
-    for label, value in rows:
-        ws.cell(row, 3, label).font = BOLD
-        c = ws.cell(row, 8, value)
-        c.number_format = MONEY
-        c.font = BOLD
-        row += 1
-    ws.cell(row + 1, 3, "Сдал (подрядчик) ______________").font = BASE
-    ws.cell(row + 2, 3, "Принял (заказчик) ______________").font = BASE
-
+    form = print_forms.ks2_from_reconciliation(rec, vat_rate=vat_rate)
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    wb.save(path)
-    return path
+    return print_forms.to_xlsx(form, path)
 
 
 def export_discrepancies(rec: Reconciliation, path: Path) -> Path:

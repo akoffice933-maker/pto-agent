@@ -33,6 +33,19 @@ def position(code, qty, unit, price, amount=None, name=""):
             "amount_rub": amount if amount is not None else qty * price, "name": name}
 
 
+@pytest.fixture
+def demo_like_summary():
+    """Мини-аналог out/summary.json: те же поля, что пишет `pto_agent run`."""
+    return {"object": "ЖК «Северный», корпус 2", "period": ["2026-10-01", "2026-10-31"],
+            "vat_rate": 0.2, "lines": [
+                {"code": "ФЕР 06-01-001-01", "name": "Плита", "unit": "м3",
+                 "qty_journal": 1240, "qty_claim": 1000, "price": 18500,
+                 "restrictions": ["объём ограничен остатком сметы: 1000 м3"]},
+                {"code": "ФЕР 06-01-001-02", "name": "Балки", "unit": "м3",
+                 "qty_journal": 390, "qty_claim": 0, "price": 21400,
+                 "restrictions": ["нет подтверждающих документов (АОСР/исп. схема)"]}]}
+
+
 ACTS = [
     act(35, 4168000, positions=[position("ФЕР 06-01-001-01", 200, "м3", 18500),
                                 position("ФЕР 08-02-001-01", 600, "м2", 780)]),
@@ -287,3 +300,95 @@ def test_demo_m29_balances_receipts_and_expenses():
     assert form["totals"]["materials"] == 4
     assert form["totals"]["expense_without_receipt"] == 1  # керамзит: расход без прихода
     assert form["totals"]["rows_with_overrun"] == 2
+
+
+# ─────────────────────────── КС-2: один механизм с остальными формами ───────────────────────────
+def ks2_position(code, journal, claim, price, *, restrictions=None, unit="м3", name=""):
+    return {"code": code, "name": name or f"Работа {code}", "unit": unit,
+            "qty_journal": journal, "qty_claim": claim, "price": price,
+            "restrictions": restrictions or []}
+
+
+def test_ks2_claims_less_than_journal_and_shows_both():
+    form = forms.build_ks2([ks2_position("ФЕР 1", 1240, 1000, 18500)], period_from="2026-10-01",
+                           period_to="2026-10-31", vat_rate=20)
+    row = form["rows"][0]
+    assert row["cells"][4] == "1240"      # по журналу
+    assert row["cells"][5] == "1000"      # к предъявлению
+    assert form["totals"]["amount_claim"] == 18500000.0
+    assert form["totals"]["amount_blocked"] == 4440000.0
+
+
+def test_ks2_blocked_position_stays_in_act_with_reason():
+    form = forms.build_ks2(
+        [ks2_position("ФЕР 2", 390, 0, 21400, restrictions=["нет подтверждающих документов"])],
+        period_from="2026-10-01", period_to="2026-10-31", vat_rate=20)
+    row = form["rows"][0]
+    assert row["state"] == "blocked"
+    assert "нет подтверждающих документов" in row["cells"][8]
+    assert row["cells"][7] == "0,00"
+    assert form["totals"]["positions_fully_blocked"] == 1
+    assert any("ФЕР 2" in gap["what"] for gap in form["gaps"])
+
+
+def test_ks2_vat_only_from_claimable_amount():
+    form = forms.build_ks2([ks2_position("ФЕР 1", 100, 60, 1000)], period_from="2026-10-01",
+                           period_to="2026-10-31", vat_rate=20)
+    assert form["totals"]["vat_claim"] == 12000.0          # 20 % от 60 000, не от 100 000
+    assert form["totals"]["total_claim_with_vat"] == 72000.0
+
+
+def test_ks2_position_without_price_is_not_priced():
+    form = forms.build_ks2([{"code": "ФЕР 3", "name": "X", "unit": "м2",
+                             "qty_journal": 10, "qty_claim": 10, "price": None}],
+                           period_from="2026-10-01", period_to="2026-10-31", vat_rate=20)
+    assert form["rows"][0]["state"] == "no_price"
+    assert form["rows"][0]["cells"][7] == "—"
+    assert any("нет цены" in warning for warning in form["warnings"])
+
+
+def test_ks2_empty_positions_is_a_gap_not_a_zero_act():
+    form = forms.build_ks2([], period_from="2026-10-01", period_to="2026-10-31", vat_rate=20)
+    assert form["rows"] == []
+    assert any("позиции акта" in gap["what"] for gap in form["gaps"])
+    assert form["totals"]["amount_claim"] == 0.0
+
+
+def test_ks2_from_summary_equals_reconciliation_path(demo_like_summary):
+    """Один механизм: акт из сверки и акт из summary.json дают одни и те же суммы."""
+    from pto_agent import forms as f
+    from_summary = f.ks2_from_summary(demo_like_summary, vat_rate=20)
+    by_hand = f.build_ks2(
+        [ks2_position("ФЕР 06-01-001-01", 1240, 1000, 18500,
+                      restrictions=["объём ограничен остатком сметы: 1000 м3"]),
+         ks2_position("ФЕР 06-01-001-02", 390, 0, 21400,
+                      restrictions=["нет подтверждающих документов (АОСР/исп. схема)"])],
+        period_from="2026-10-01", period_to="2026-10-31", vat_rate=20)
+    assert from_summary["totals"]["amount_claim"] == by_hand["totals"]["amount_claim"]
+    assert from_summary["totals"]["amount_blocked"] == by_hand["totals"]["amount_blocked"]
+    assert from_summary["totals"]["total_claim_with_vat"] == by_hand["totals"]["total_claim_with_vat"]
+
+
+def test_ks2_from_summary_skips_unit_mismatch_lines():
+    payload = {"object": "X", "period": ["2026-10-01", "2026-10-31"], "lines": [
+        {"code": "A", "name": "a", "unit": "м3", "qty_journal": 10, "qty_claim": 10,
+         "price": 100, "restrictions": []},
+        {"code": "B", "name": "b", "unit": "м3", "qty_journal": 999, "qty_claim": 999,
+         "price": 100, "restrictions": [], "unit_mismatch": True}]}
+    form = forms.ks2_from_summary(payload, vat_rate=20)
+    assert [row["cells"][1] for row in form["rows"]] == ["A"]
+    assert form["totals"]["amount_claim"] == 1000.0
+
+
+def test_ks2_numbers_are_numbers_in_excel(tmp_path):
+    """В бланке Excel суммы — числа, а не тексты: иначе бухгалтерия их не сложит."""
+    from openpyxl import load_workbook
+
+    form = forms.build_ks2([ks2_position("ФЕР 1", 100, 60, 1000)], period_from="2026-10-01",
+                           period_to="2026-10-31", vat_rate=20)
+    ws = load_workbook(forms.to_xlsx(form, tmp_path / "ks2.xlsx"), data_only=True)["КС-2"]
+    row = next(r for r in range(1, ws.max_row + 1) if ws.cell(r, 2).value == "ФЕР 1")
+    assert ws.cell(row, 6).value == 60          # к предъявлению — число
+    assert ws.cell(row, 8).value == 60000       # стоимость — число
+    totals = [ws.cell(r, 2).value for r in range(1, ws.max_row + 1)]
+    assert 60000 in totals and 40000 in totals  # предъявляется / не предъявляется
