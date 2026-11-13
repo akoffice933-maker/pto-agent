@@ -37,7 +37,10 @@
       "parent": null,
       "off_balance": true,
       "service": false,
-      "analytics": ["контрагент", "номенклатура"],
+      "analytics": [
+        "контрагент",
+        "номенклатура"
+      ],
       "manual_allowed": false,
       "subaccount_source": "94н",
       "note": "Забалансовый. Давальческие материалы заказчика: они не наши, в затраты не списываются, из 10 не выходят. Учёт количественный и стоимостной по данным передающей стороны."
@@ -61,7 +64,10 @@
       "parent": "10",
       "off_balance": false,
       "service": false,
-      "analytics": ["склад", "номенклатура"],
+      "analytics": [
+        "склад",
+        "номенклатура"
+      ],
       "manual_allowed": false,
       "subaccount_source": "94н",
       "note": "Основной счёт складского контура: приход, списание в производство, перемещение."
@@ -73,7 +79,10 @@
       "parent": "10",
       "off_balance": false,
       "service": false,
-      "analytics": ["склад", "номенклатура"],
+      "analytics": [
+        "склад",
+        "номенклатура"
+      ],
       "manual_allowed": false,
       "subaccount_source": "94н",
       "note": "В рабочем плане оставлен, но складской контур пока пишет всё на 10.01: разделять по группам номенклатуры имеет смысл, когда появится учётная политика по группам, а не «на глазок»."
@@ -85,7 +94,10 @@
       "parent": "10",
       "off_balance": false,
       "service": false,
-      "analytics": ["склад", "номенклатура"],
+      "analytics": [
+        "склад",
+        "номенклатура"
+      ],
       "manual_allowed": false,
       "subaccount_source": "94н",
       "note": "То же: счёт есть, автоматических проводок на него пока нет — номенклатура в справочнике не размечена по группам 10.08/10.09."
@@ -109,7 +121,9 @@
       "parent": "19",
       "off_balance": false,
       "service": false,
-      "analytics": ["контрагент"],
+      "analytics": [
+        "контрагент"
+      ],
       "manual_allowed": false,
       "subaccount_source": "94н",
       "note": "НДС из накладной поставщика. Возникает только если в документе явно указана ставка: ставку «по умолчанию» учёт не подставляет."
@@ -133,7 +147,9 @@
       "parent": "20",
       "off_balance": false,
       "service": false,
-      "analytics": ["объект"],
+      "analytics": [
+        "объект"
+      ],
       "manual_allowed": false,
       "subaccount_source": "организация",
       "note": "94н субсчета по счёту 20 не устанавливает — это наше решение. Сюда попадает материал, списанный требованием М-11 с указанием объекта."
@@ -145,7 +161,9 @@
       "parent": null,
       "off_balance": false,
       "service": false,
-      "analytics": ["объект"],
+      "analytics": [
+        "объект"
+      ],
       "manual_allowed": true,
       "subaccount_source": "94н",
       "note": "В рабочем плане есть, автоматических правил пока нет: распределение этих расходов — учётная политика, а не арифметика."
@@ -193,7 +211,9 @@
       "parent": null,
       "off_balance": false,
       "service": false,
-      "analytics": ["договор"],
+      "analytics": [
+        "договор"
+      ],
       "manual_allowed": true,
       "subaccount_source": "94н",
       "note": "Обеспечительный платёж по контракту; задел."
@@ -217,7 +237,9 @@
       "parent": "60",
       "off_balance": false,
       "service": false,
-      "analytics": ["контрагент"],
+      "analytics": [
+        "контрагент"
+      ],
       "manual_allowed": false,
       "subaccount_source": "94н",
       "note": "Кредит — долг за пришедший материал. Контрагент обязателен: «приход без поставщика» — это не проводка, а дыра в первичке."
@@ -229,7 +251,9 @@
       "parent": "60",
       "off_balance": false,
       "service": false,
-      "analytics": ["контрагент"],
+      "analytics": [
+        "контрагент"
+      ],
       "manual_allowed": false,
       "subaccount_source": "94н",
       "note": "Задел под казначейство: аванс поставщику."
@@ -253,7 +277,10 @@
       "parent": "62",
       "off_balance": false,
       "service": false,
-      "analytics": ["контрагент", "договор"],
+      "analytics": [
+        "контрагент",
+        "договор"
+      ],
       "manual_allowed": false,
       "subaccount_source": "94н",
       "note": "Выручка по подписанной КС-2. Договор обязателен: без него непонятно, по какому объекту долг."
@@ -325,7 +352,9 @@
       "parent": null,
       "off_balance": false,
       "service": false,
-      "analytics": ["контрагент"],
+      "analytics": [
+        "контрагент"
+      ],
       "manual_allowed": true,
       "subaccount_source": "94н",
       "note": "Прораб с деньгами на руки — частый источник «где чеки». Задел."
@@ -337,7 +366,9 @@
       "parent": null,
       "off_balance": false,
       "service": false,
-      "analytics": ["контрагент"],
+      "analytics": [
+        "контрагент"
+      ],
       "manual_allowed": true,
       "subaccount_source": "94н",
       "note": "Претензии, в т.ч. по недостачам."
@@ -361,7 +392,10 @@
       "parent": "90",
       "off_balance": false,
       "service": false,
-      "analytics": ["объект", "договор"],
+      "analytics": [
+        "объект",
+        "договор"
+      ],
       "manual_allowed": false,
       "subaccount_source": "94н",
       "note": "Выручка признаётся по подписанной заказчиком КС-2, без НДС."
@@ -373,7 +407,9 @@
       "parent": "90",
       "off_balance": false,
       "service": false,
-      "analytics": ["объект"],
+      "analytics": [
+        "объект"
+      ],
       "manual_allowed": false,
       "subaccount_source": "94н",
       "note": "Закрытие 20.01 в 90.02 — операция закрытия месяца; в этом круге не автоматизирована."
@@ -421,7 +457,9 @@
       "parent": null,
       "off_balance": false,
       "service": false,
-      "analytics": ["склад"],
+      "analytics": [
+        "склад"
+      ],
       "manual_allowed": false,
       "subaccount_source": "94н",
       "note": "Списание по акту и недостача по ИНВ-3 идут сюда, а не сразу в затраты: решение, кто возмещает, принимает человек, а не программа."
@@ -437,6 +475,54 @@
       "manual_allowed": true,
       "subaccount_source": "94н",
       "note": "Задел под закрытие года."
+    },
+    {
+      "code": "90.09",
+      "title": "Прибыль/убыток от продаж",
+      "type": "АП",
+      "parent": "90",
+      "off_balance": false,
+      "service": false,
+      "analytics": [],
+      "manual_allowed": false,
+      "subaccount_source": "94н",
+      "note": "Закрывается только операцией закрытия месяца: сюда собираются 90.01, 90.02, 90.03, отсюда — на 99. Ручная проводка запрещена: иначе прибыль можно «поправить»."
+    },
+    {
+      "code": "91.09",
+      "title": "Сальдо прочих доходов и расходов",
+      "type": "АП",
+      "parent": "91",
+      "off_balance": false,
+      "service": false,
+      "analytics": [],
+      "manual_allowed": false,
+      "subaccount_source": "94н",
+      "note": "То же для прочих доходов и расходов: излишки по ИНВ-3 попадают в 91.01, закрываются здесь."
+    },
+    {
+      "code": "84",
+      "title": "Нераспределённая прибыль (непокрытый убыток)",
+      "type": "АП",
+      "parent": null,
+      "off_balance": false,
+      "service": false,
+      "analytics": [],
+      "manual_allowed": true,
+      "subaccount_source": "94н",
+      "note": "В рабочем плане есть, но реформация баланса (99 → 84) — операция года, а не месяца: в этом круге не автоматизирована."
+    },
+    {
+      "code": "91.02",
+      "title": "Прочие расходы",
+      "type": "А",
+      "parent": "91",
+      "off_balance": false,
+      "service": false,
+      "analytics": [],
+      "manual_allowed": false,
+      "subaccount_source": "94н",
+      "note": "Недостачи по ИНВ-3 после решения человека (когда виновный не найден) идут сюда: 94 → 91.02. Автоматически не закрывается — это решение, а не арифметика."
     }
   ]
 }

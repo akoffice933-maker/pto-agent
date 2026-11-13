@@ -16,6 +16,7 @@ from .parsers import (WorkbookTooLarge, read_closed_ex, read_estimate_ex,
 from . import forms as print_forms
 from . import stock as stock_ledger
 from . import ledger as accounting
+from . import closing as accounting_close
 from .pdf_profiles import ProfileError, fact_rules, get_profile, schedule_markers
 from .kr_pdf import (derive_boq, extract_facts, extract_levels, find_schedules, kr_report,
                      read_pdf_text)
@@ -693,7 +694,8 @@ def cmd_ledger(args) -> int:
         documents = json.loads(Path(args.documents).read_text(encoding="utf-8")) \
             if getattr(args, "documents", None) else {}
         state["object"] = state.get("object") or stock_state.get("object") or ""
-        result = accounting.post_stock(state, stock_state, documents=documents)
+        result = accounting.post_stock(state, stock_state, documents=documents,
+                                       mode=getattr(args, "mode", None) or accounting.MODE_POST)
         accounting.save(state, args.state)
         print(f"проводок по складу: создано {result['posted']} · повторно "
               f"{result['duplicates']} · отказано {result['rejected']} · всего в журнале "
@@ -709,7 +711,8 @@ def cmd_ledger(args) -> int:
     if action == "post-acts":
         acts = json.loads(Path(args.acts).read_text(encoding="utf-8"))
         result = accounting.post_acts(state, acts, contract=args.contract or "",
-                                      customer=args.customer or "")
+                                      customer=args.customer or "",
+                                      mode=getattr(args, "mode", None) or accounting.MODE_POST)
         accounting.save(state, args.state)
         print(f"актов: признано {result['posted']} · не признано "
               f"{sum(1 for r in result['results'] if r['status'] == 'не признано')} · "
@@ -807,22 +810,100 @@ def cmd_ledger(args) -> int:
 
     if action == "close":
         stock_state = stock_ledger.load(args.stock) if getattr(args, "stock", None) else None
-        result = accounting.close_period(state, args.period, stock_state=stock_state)
-        if result["closed"]:
-            accounting.save(state, args.state)
-            print(f"период {args.period} закрыт: записей {result.get('entries')} · "
-                  f"оборот Дт {result.get('turnover', {}).get('debit', 0):,.2f} · "
-                  f"Кт {result.get('turnover', {}).get('credit', 0):,.2f}")
-            for step in result.get("not_done") or []:
-                print(f"  не сделано при закрытии: {step['step']} — {step['why']}",
+        invoices = (json.loads(Path(args.invoices).read_text(encoding="utf-8"))
+                    if getattr(args, "invoices", None) else None)
+        policy = accounting_close.load_policy(args.policy or None)
+        result = accounting_close.close_month(
+            state, args.period, stock_state=stock_state, invoices=invoices, policy=policy,
+            mode=getattr(args, "mode", None) or None, dry_run=bool(getattr(args, "dry_run", False)))
+        title = "ЗАКРЫТИЕ (сухой прогон, журнал не меняется)" if result.get("dry_run") \
+            else f"ЗАКРЫТИЕ {args.period}"
+        print(f"{title} · режим: {result['mode']}")
+        for step in result["steps"]:
+            amount = f"{step['amount']:>15,.2f}" if step.get("amount") is not None else f"{'—':>15}"
+            print(f"  {step['status']:<20} {step['title']:<44} {amount}")
+            if step.get("why"):
+                print(f"      причина: {step['why']}")
+            for row in (step.get("detail") or [])[:6]:
+                print("      · " + " · ".join(f"{key}: {value}" for key, value in row.items()))
+        if result.get("problems"):
+            for problem in result["problems"]:
+                print(f"  ПРОБЛЕМА [{problem['code']}] {problem['what']}: {problem['why']}",
                       file=sys.stderr)
-        else:
-            print(f"период {args.period} НЕ закрыт", file=sys.stderr)
-        for warning in result["warnings"]:
+        for warning in result.get("warnings") or []:
             print(f"  {warning}", file=sys.stderr)
-        for problem in result["problems"]:
-            print(f"  [{problem['code']}] {problem['what']}: {problem['why']}", file=sys.stderr)
-        return 0 if result["closed"] else 1
+        if result.get("requests"):
+            print("  нужно запросить:")
+            for gap in result["requests"]:
+                print(f"    — {gap['what']}: {gap['ask']}")
+        if result.get("result"):
+            res = result["result"]
+            print(f"  результат: выручка {res['revenue_net']:,.2f} без НДС · "
+                  f"себестоимость {res['cost']:,.2f} · НДС с реализации {res['vat_out']:,.2f} · "
+                  f"НДС к вычету {res['vat_in']:,.2f} · "
+                  f"{'прибыль' if res['profit'] >= 0 else 'убыток'} {abs(res['profit']):,.2f}")
+        if result.get("turnover"):
+            turn = result["turnover"]
+            print(f"  оборот за период: Дт {turn['debit']:,.2f} = Кт {turn['credit']:,.2f}")
+        if not result.get("dry_run"):
+            accounting.save(state, args.state)
+        if result.get("closed"):
+            print(f"  период {args.period} закрыт; проводки в него больше не принимаются")
+        return 0 if result.get("closed") or result.get("dry_run") else 1
+
+    if action == "proposals":
+        rows = state.get("proposals") or []
+        if not rows:
+            print("предложений нет: все проводки либо проведены, либо ещё не рассчитаны")
+            return 0
+        for row in rows:
+            debit = ", ".join(f"{line['account']} {line['amount']:,.2f}"
+                              for line in row["lines"] if line["side"] == "Дт")
+            credit = ", ".join(f"{line['account']} {line['amount']:,.2f}"
+                               for line in row["lines"] if line["side"] == "Кт")
+            print(f"{row['id']} {row['date']} {row['event']}: Дт {debit} | Кт {credit}")
+            print(f"        {row.get('memo')}")
+        print(f"предложений: {len(rows)} — проводками они станут только после ledger accept")
+        return 0
+
+    if action == "accept":
+        result = accounting.accept_proposal(state, args.proposal)
+        if result["status"] == accounting.STATUS_OK:
+            accounting.save(state, args.state)
+            print(f"проведено: {args.proposal} → {result['entry']['id']}")
+        else:
+            print(f"не проведено: {result['status']}")
+            for item in result["errors"]:
+                print(f"  [{item['code']}] {item['what']}: {item['why']}", file=sys.stderr)
+        return 0 if result["status"] == accounting.STATUS_OK else 1
+
+    if action == "reject":
+        result = accounting.reject_proposal(state, args.proposal, reason=args.reason or "")
+        if result["status"] == "отклонено":
+            accounting.save(state, args.state)
+            print(f"предложение {args.proposal} отклонено: {args.reason or 'без причины'}")
+            return 0
+        print(f"предложения {args.proposal} нет", file=sys.stderr)
+        return 1
+
+    if action == "policy":
+        policy = accounting_close.load_policy(args.policy or None)
+        if getattr(args, "markdown", False):
+            print(accounting_close.policy_markdown(policy))
+        else:
+            print(f"учётная политика: {policy.get('organization')} с {policy.get('effective_from')}")
+            print(f"  режим проводок: {(policy.get('mode') or {}).get('value')}")
+            print(f"  база косвенных: {(policy.get('overheads') or {}).get('basis')}")
+            print(f"  закрытие затрат: {(policy.get('cost_close') or {}).get('mode')}")
+            print(f"  зачёт НДС: {(policy.get('vat') or {}).get('offset')}")
+            print(f"  недостачи: {(policy.get('shortages') or {}).get('mode')}")
+            tables = (policy.get("analytics") or {}).get("object", {}).get("rollup") or {}
+            for target, captures in tables.items():
+                print(f"  свёртка: {target} ← {', '.join(captures)}")
+            print("  чего нет:")
+            for row in policy.get("not_implemented") or []:
+                print(f"    — {row}")
+        return 0
 
     if action == "storno":
         result = accounting.storno(state, args.entry, date=args.date, reason=args.reason)
@@ -2394,6 +2475,7 @@ def main(argv=None):
     led_ps.add_argument("--stock", default="out/stock/state.json")
     led_ps.add_argument("--documents", default=None,
                         help="JSON документов: оттуда берутся поставщик и ставка НДС")
+    led_ps.add_argument("--mode", default=None, choices=["проводить", "предлагать"])
     led_ps.set_defaults(func=cmd_ledger)
 
     led_pa = leds.add_parser("post-acts", help="выручка по подписанным КС-2: 62/90, 90/68")
@@ -2401,6 +2483,7 @@ def main(argv=None):
     led_pa.add_argument("--acts", required=True, help="JSON реестра актов")
     led_pa.add_argument("--contract", default="")
     led_pa.add_argument("--customer", default="")
+    led_pa.add_argument("--mode", default=None, choices=["проводить", "предлагать"])
     led_pa.set_defaults(func=cmd_ledger)
 
     led_tb = leds.add_parser("trial", help="оборотно-сальдовая ведомость за период")
@@ -2429,11 +2512,37 @@ def main(argv=None):
     led_rc.add_argument("--as-of", dest="as_of", default=None)
     led_rc.set_defaults(func=cmd_ledger)
 
-    led_cl = leds.add_parser("close", help="закрыть период: после этого в него не проводят")
+    led_cl = leds.add_parser("close", help="закрыть месяц: 25/26 → 20.01 → 90.02, зачёт НДС, 90/91 → 99")
     led_cl.add_argument("--state", default="out/ledger/state.json")
     led_cl.add_argument("--period", required=True)
     led_cl.add_argument("--stock", default=None, help="склад: проверить отсутствие минусов")
+    led_cl.add_argument("--invoices", default=None, help="реестр счетов-фактур для зачёта НДС")
+    led_cl.add_argument("--policy", default=None, help="файл учётной политики")
+    led_cl.add_argument("--mode", default=None, choices=["проводить", "предлагать"],
+                        help="проводить или только предложить проводки закрытия")
+    led_cl.add_argument("--dry-run", dest="dry_run", action="store_true",
+                        help="показать, что было бы, и не трогать журнал")
     led_cl.set_defaults(func=cmd_ledger)
+
+    led_pr = leds.add_parser("proposals", help="предложенные проводки, которые ждут решения")
+    led_pr.add_argument("--state", default="out/ledger/state.json")
+    led_pr.set_defaults(func=cmd_ledger)
+
+    led_ac = leds.add_parser("accept", help="провести предложенную проводку")
+    led_ac.add_argument("--state", default="out/ledger/state.json")
+    led_ac.add_argument("--proposal", required=True)
+    led_ac.set_defaults(func=cmd_ledger)
+
+    led_rj = leds.add_parser("reject", help="отклонить предложенную проводку (след остаётся)")
+    led_rj.add_argument("--state", default="out/ledger/state.json")
+    led_rj.add_argument("--proposal", required=True)
+    led_rj.add_argument("--reason", default="")
+    led_rj.set_defaults(func=cmd_ledger)
+
+    led_pol = leds.add_parser("policy", help="учётная политика: что выбрано и чего в ней нет")
+    led_pol.add_argument("--policy", default=None)
+    led_pol.add_argument("--markdown", action="store_true")
+    led_pol.set_defaults(func=cmd_ledger)
 
     led_sto = leds.add_parser("storno", help="сторно записи журнала (правка запрещена)")
     led_sto.add_argument("--state", default="out/ledger/state.json")
