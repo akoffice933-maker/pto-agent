@@ -15,6 +15,7 @@ from .parsers import (WorkbookTooLarge, read_closed_ex, read_estimate_ex,
                       read_journal_ex)
 from . import forms as print_forms
 from . import stock as stock_ledger
+from . import ledger as accounting
 from .pdf_profiles import ProfileError, fact_rules, get_profile, schedule_markers
 from .kr_pdf import (derive_boq, extract_facts, extract_levels, find_schedules, kr_report,
                      read_pdf_text)
@@ -659,6 +660,195 @@ def _stock_balances(state: dict, *, as_of: str | None = None, warehouse: str | N
               f"{'  (003)' if row['daval'] else ''}")
     print(f"{'итого по остаткам:':<46} {total:>14,.2f} ₽")
     return 0
+
+
+# ─────────────────────────── ядро учёта: план счетов, журнал, ОСВ ───────────────────────────
+def cmd_ledger(args) -> int:
+    action = args.ledger_action
+    state = accounting.load(args.state) if getattr(args, "state", None) else accounting.new_state()
+
+    if action == "chart":
+        chart = accounting.load_chart(args.chart or None)
+        rules = accounting.load_rules(args.rules or None)
+        print(f"план счетов: {len(chart['accounts'])} строк · правила: {len(rules['rules'])}")
+        for row in chart["accounts"]:
+            mark = " [забалансовый]" if row.get("off_balance") else ""
+            analytics = ", ".join(row.get("analytics") or []) or "—"
+            print(f"  {row['code']:<7} {row['title'][:46]:<48} {row['type']:<2} "
+                  f"аналитика: {analytics}{mark}")
+        problems = accounting.check_chart(chart)
+        for problem in problems:
+            print(f"  план счетов [{problem['code']}] {problem['what']}: {problem['why']}",
+                  file=sys.stderr)
+        print("правила:")
+        for row in rules["rules"]:
+            lines = " + ".join(
+                f"Дт {line.get('debit') or '—'} Кт {line.get('credit') or '—'} ({line.get('amount')})"
+                for line in row.get("lines") or [])
+            print(f"  {row['id']:<26} {lines}")
+        return 0 if not problems else 1
+
+    if action == "post-stock":
+        stock_state = stock_ledger.load(args.stock)
+        documents = json.loads(Path(args.documents).read_text(encoding="utf-8")) \
+            if getattr(args, "documents", None) else {}
+        state["object"] = state.get("object") or stock_state.get("object") or ""
+        result = accounting.post_stock(state, stock_state, documents=documents)
+        accounting.save(state, args.state)
+        print(f"проводок по складу: создано {result['posted']} · повторно "
+              f"{result['duplicates']} · отказано {result['rejected']} · всего в журнале "
+              f"{result['entries']}")
+        for item in result["errors"]:
+            print(f"  отказано [{item['code']}] {item['what']}: {item['why']}", file=sys.stderr)
+        for gap in result["gaps"]:
+            print(f"  нужно запросить: {gap['what']} — {gap['ask']}", file=sys.stderr)
+        for warning in result["warnings"]:
+            print(f"  замечание: {warning}", file=sys.stderr)
+        return 0 if result["rejected"] == 0 else 1
+
+    if action == "post-acts":
+        acts = json.loads(Path(args.acts).read_text(encoding="utf-8"))
+        result = accounting.post_acts(state, acts, contract=args.contract or "",
+                                      customer=args.customer or "")
+        accounting.save(state, args.state)
+        print(f"актов: признано {result['posted']} · не признано "
+              f"{sum(1 for r in result['results'] if r['status'] == 'не признано')} · "
+              f"отказано {result['rejected']}")
+        for item in result["results"]:
+            entry = item.get("entry") or {}
+            doc = ((entry.get("doc") or {}).get("number")
+                   or (item.get("document") or {}).get("number") or "—")
+            print(f"  {item['status']:<14} {doc}")
+        for warning in result["warnings"]:
+            print(f"  замечание: {warning}", file=sys.stderr)
+        for item in result["errors"]:
+            print(f"  отказано [{item['code']}] {item['what']}: {item['why']}", file=sys.stderr)
+        for gap in result["gaps"]:
+            print(f"  нужно запросить: {gap['what']} — {gap['ask']}", file=sys.stderr)
+        return 0
+
+    if action == "trial":
+        report = accounting.trial_balance(state, args.period)
+        rows = report["rows"]
+        print(f"ОСВ за {args.period}: счетов с оборотами {len(rows)} · записей "
+              f"{report['entries']} · сходится: {'да' if report['balanced'] else 'НЕТ'}")
+        print(f"{'счёт':<7} {'наименование':<40} {'сальдо нач.':>15} {'об. Дт':>14} "
+              f"{'об. Кт':>14} {'сальдо кон.':>15}")
+        for row in rows:
+            print(f"{row['code']:<7} {row['title'][:38]:<40} "
+                  f"{accounting._saldo_text(row, 'opening'):>15} {row['debit']:>14,.2f} "
+                  f"{row['credit']:>14,.2f} {accounting._saldo_text(row, 'closing'):>15}")
+        totals = report["totals"]
+        print(f"{'':<7} {'ИТОГО':<40} {totals['opening_debit']:>15,.2f} "
+              f"{totals['debit']:>14,.2f} {totals['credit']:>14,.2f} "
+              f"{totals['closing_debit']:>15,.2f}   (сальдо: нач. Кт "
+              f"{totals['opening_credit']:,.2f} · кон. Кт {totals['closing_credit']:,.2f})")
+        for row in report["off_balance"]:
+            print(f"{row['code']:<7} {row['title'][:38]:<40} {'':>15} "
+                  f"{row['qty_debit']:>14,.3f} {row['qty_credit']:>14,.3f} "
+                  f"{row['qty_closing']:>15,.3f}   (забаланс, количество)")
+        if getattr(args, "out", None):
+            out = Path(args.out)
+            out.mkdir(parents=True, exist_ok=True)
+            md = out / f"osv_{args.period}.md"
+            md.write_text(accounting.to_markdown(state, args.period), encoding="utf-8")
+            xlsx = accounting.to_xlsx(report, out / f"osv_{args.period}.xlsx")
+            print(f"  файлы: {md}, {xlsx}")
+        return 0 if report["balanced"] else 1
+
+    if action == "entries":
+        entries = [entry for entry in state.get("entries") or []
+                   if (not args.period or entry.get("period") == args.period)
+                   and (not args.account or any(line["account"].startswith(args.account)
+                                                for line in entry.get("lines") or []))]
+        for entry in entries[-args.limit:]:
+            debit = ", ".join(f"{line['account']} {line['amount']:,.2f}"
+                              for line in entry.get("lines") or [] if line["side"] == "Дт")
+            credit = ", ".join(f"{line['account']} {line['amount']:,.2f}"
+                               for line in entry.get("lines") or [] if line["side"] == "Кт")
+            mark = " [забаланс]" if entry.get("kind") == "off_balance" else ""
+            print(f"{entry['id']} {entry['date']} {entry['event']:<22}{mark} "
+                  f"Дт {debit} | Кт {credit}")
+            print(f"        {entry.get('memo')}")
+        print(f"записей: {len(entries)}")
+        if getattr(args, "out", None):
+            path = Path(args.out)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(accounting.entries_markdown(state, period=args.period or "",
+                                                        account=args.account or ""),
+                            encoding="utf-8")
+            print(f"  файл: {path}")
+        return 0
+
+    if action == "register":
+        report = accounting.register(state, args.account, args.period)
+        print(f"счёт {report['account']} «{report['title']}» за {report['period']}: "
+              f"Дт {report['debit']:,.2f} · Кт {report['credit']:,.2f}")
+        for row in report["rows"]:
+            analytics = " · ".join(f"{key}: {value}" for key, value in row["analytics"].items()) \
+                or "без аналитики"
+            print(f"  {analytics:<52} Дт {row['debit']:>13,.2f} · Кт {row['credit']:>13,.2f}")
+        return 0
+
+    if action == "reconcile":
+        stock_state = stock_ledger.load(args.stock)
+        result = accounting.reconcile_stock(state, stock_state, as_of=args.as_of or None)
+        print(f"сверка склад ↔ 10.01 на {result['as_of']}: склад "
+              f"{result['stock_total']:,.2f} ₽ · учёт {result['ledger_total']:,.2f} ₽ · "
+              f"расхождение {result['diff']:,.2f} ₽ — "
+              f"{'сходится' if result['ok'] else 'НЕ сходится'}")
+        for row in result["rows"]:
+            print(f"  {row['warehouse']:<6} {row['item']:<20} {row['qty']:>10.3f}  "
+                  f"склад {row['stock']:>13,.2f}  учёт {row['ledger']:>13,.2f}  "
+                  f"разница {row['diff']:>11,.2f}")
+        for problem in result["problems"]:
+            print(f"  [{problem['code']}] {problem['what']}: {problem['why']}", file=sys.stderr)
+        return 0 if result["ok"] else 1
+
+    if action == "close":
+        stock_state = stock_ledger.load(args.stock) if getattr(args, "stock", None) else None
+        result = accounting.close_period(state, args.period, stock_state=stock_state)
+        if result["closed"]:
+            accounting.save(state, args.state)
+            print(f"период {args.period} закрыт: записей {result.get('entries')} · "
+                  f"оборот Дт {result.get('turnover', {}).get('debit', 0):,.2f} · "
+                  f"Кт {result.get('turnover', {}).get('credit', 0):,.2f}")
+            for step in result.get("not_done") or []:
+                print(f"  не сделано при закрытии: {step['step']} — {step['why']}",
+                      file=sys.stderr)
+        else:
+            print(f"период {args.period} НЕ закрыт", file=sys.stderr)
+        for warning in result["warnings"]:
+            print(f"  {warning}", file=sys.stderr)
+        for problem in result["problems"]:
+            print(f"  [{problem['code']}] {problem['what']}: {problem['why']}", file=sys.stderr)
+        return 0 if result["closed"] else 1
+
+    if action == "storno":
+        result = accounting.storno(state, args.entry, date=args.date, reason=args.reason)
+        if result["status"] == accounting.STATUS_OK:
+            accounting.save(state, args.state)
+            entry = result["entry"]
+            print(f"сторно {args.entry} → {entry['id']} от {entry['date']}: {args.reason}")
+        else:
+            print(f"сторно не создано: {result['status']}")
+        for item in result["errors"]:
+            print(f"  [{item['code']}] {item['what']}: {item['why']}", file=sys.stderr)
+        for warning in result["warnings"]:
+            print(f"  {warning}", file=sys.stderr)
+        return 0 if result["status"] == accounting.STATUS_OK else 1
+
+    if action == "verify":
+        summary = accounting.verify(state)
+        print(f"{'OK' if summary['ok'] else 'РАСХОЖДЕНИЯ'}: записей {summary['entries']} · "
+              f"Дт {summary['debits']:,.2f} · Кт {summary['credits']:,.2f} · "
+              f"забаланс {summary['off_balance_qty']:.3f} — {summary['summary']}")
+        for problem in summary["problems"]:
+            print(f"  [{problem['code']}] {problem['what']}: {problem['why']}", file=sys.stderr)
+        return 0 if summary["ok"] else 1
+
+    print(f"неизвестное действие: {action}", file=sys.stderr)
+    return 2
 
 
 # ─────────────────────────── печатные формы КС-3 / КС-6а / М-29 ───────────────────────────
@@ -2189,6 +2379,72 @@ def main(argv=None):
     stk_m29.add_argument("--period", required=True)
     stk_m29.add_argument("--out", default="out/forms")
     stk_m29.set_defaults(func=cmd_stock)
+
+    led = sub.add_parser("ledger", help="ядро учёта: план счетов 94н, проводки, ОСВ")
+    leds = led.add_subparsers(dest="ledger_action", required=True)
+
+    led_chart = leds.add_parser("chart", help="рабочий план счетов и справочник правил проводок")
+    led_chart.add_argument("--state", default=None)
+    led_chart.add_argument("--chart", default=None)
+    led_chart.add_argument("--rules", default=None)
+    led_chart.set_defaults(func=cmd_ledger)
+
+    led_ps = leds.add_parser("post-stock", help="проводки из складских движений: 10/60, 20/10, 94/10, 003")
+    led_ps.add_argument("--state", default="out/ledger/state.json")
+    led_ps.add_argument("--stock", default="out/stock/state.json")
+    led_ps.add_argument("--documents", default=None,
+                        help="JSON документов: оттуда берутся поставщик и ставка НДС")
+    led_ps.set_defaults(func=cmd_ledger)
+
+    led_pa = leds.add_parser("post-acts", help="выручка по подписанным КС-2: 62/90, 90/68")
+    led_pa.add_argument("--state", default="out/ledger/state.json")
+    led_pa.add_argument("--acts", required=True, help="JSON реестра актов")
+    led_pa.add_argument("--contract", default="")
+    led_pa.add_argument("--customer", default="")
+    led_pa.set_defaults(func=cmd_ledger)
+
+    led_tb = leds.add_parser("trial", help="оборотно-сальдовая ведомость за период")
+    led_tb.add_argument("--state", default="out/ledger/state.json")
+    led_tb.add_argument("--period", required=True)
+    led_tb.add_argument("--out", default=None, help="куда сохранить ОСВ (md + xlsx)")
+    led_tb.set_defaults(func=cmd_ledger)
+
+    led_en = leds.add_parser("entries", help="журнал проводок")
+    led_en.add_argument("--state", default="out/ledger/state.json")
+    led_en.add_argument("--period", default=None)
+    led_en.add_argument("--account", default=None)
+    led_en.add_argument("--limit", type=int, default=50)
+    led_en.add_argument("--out", default=None, help="сохранить журнал в markdown")
+    led_en.set_defaults(func=cmd_ledger)
+
+    led_rg = leds.add_parser("register", help="обороты по счёту с аналитикой")
+    led_rg.add_argument("--state", default="out/ledger/state.json")
+    led_rg.add_argument("--account", required=True)
+    led_rg.add_argument("--period", required=True)
+    led_rg.set_defaults(func=cmd_ledger)
+
+    led_rc = leds.add_parser("reconcile", help="сверка: склад в деньгах против сальдо 10.01")
+    led_rc.add_argument("--state", default="out/ledger/state.json")
+    led_rc.add_argument("--stock", default="out/stock/state.json")
+    led_rc.add_argument("--as-of", dest="as_of", default=None)
+    led_rc.set_defaults(func=cmd_ledger)
+
+    led_cl = leds.add_parser("close", help="закрыть период: после этого в него не проводят")
+    led_cl.add_argument("--state", default="out/ledger/state.json")
+    led_cl.add_argument("--period", required=True)
+    led_cl.add_argument("--stock", default=None, help="склад: проверить отсутствие минусов")
+    led_cl.set_defaults(func=cmd_ledger)
+
+    led_sto = leds.add_parser("storno", help="сторно записи журнала (правка запрещена)")
+    led_sto.add_argument("--state", default="out/ledger/state.json")
+    led_sto.add_argument("--entry", required=True)
+    led_sto.add_argument("--date", required=True)
+    led_sto.add_argument("--reason", required=True)
+    led_sto.set_defaults(func=cmd_ledger)
+
+    led_ver = leds.add_parser("verify", help="сходится ли журнал: Дт=Кт, цепочка, аналитика")
+    led_ver.add_argument("--state", default="out/ledger/state.json")
+    led_ver.set_defaults(func=cmd_ledger)
 
     fm = sub.add_parser("forms", help="печатные формы КС-3, КС-6а, М-29 из артефактов прогона")
     fms = fm.add_subparsers(dest="form", required=True)
