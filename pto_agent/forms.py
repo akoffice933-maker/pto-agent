@@ -40,6 +40,13 @@ from pathlib import Path
 STATUS_DRAFT = "черновик"
 SOURCE_KS = "Постановление Госкомстата России от 11.11.1999 № 100"
 SOURCE_M29 = "Постановление Госкомстата России от 30.10.1997 № 71а"
+SOURCE_M4 = "Постановление Госкомстата России от 30.10.1997 № 71а (М-4)"
+SOURCE_M11 = "Постановление Госкомстата России от 30.10.1997 № 71а (М-11)"
+SOURCE_M8 = "Постановление Госкомстата России от 30.10.1997 № 71а (М-8)"
+SOURCE_M15 = "Постановление Госкомстата России от 30.10.1997 № 71а (М-15)"
+SOURCE_INV3 = "Постановление Госкомстата России от 18.08.1998 № 88 (ИНВ-3)"
+SOURCE_FREE = ("типовой бланк не установлен — свободная форма организации "
+               "(ст. 9 ФЗ-402 «О бухгалтерском учёте»)")
 
 #: каким статусам акта доверяем для денежного итога; всё остальное — «на проверку»
 STATUS_CHECKED = {"проверен", "подписан", "signed", "verified"}
@@ -51,6 +58,13 @@ COL_TYPES = {
     "ks3": ["text", "text", "text", "money", "money", "money", "text"],
     "ks6a": ["text", "text", "text", "money", "qty", "qty", "money"],
     "m29": ["text", "text", "qty", "qty", "qty", "qty", "qty", "qty"],
+    "m4": ["int", "text", "text", "qty", "money", "money", "text"],
+    "m11": ["int", "text", "text", "qty", "qty", "text"],
+    "m8": ["int", "text", "text", "qty", "qty", "qty"],
+    "m15": ["int", "text", "text", "qty", "money", "money", "text", "text"],
+    "inv3": ["int", "text", "text", "qty", "qty", "qty", "money", "money"],
+    "writeoff": ["int", "text", "text", "qty", "text", "text"],
+    "daval": ["int", "text", "text", "qty", "money", "text"],
 }
 
 #: человеческие подписи итогов: в бланке не должно быть английских ключей
@@ -86,6 +100,15 @@ TOTAL_LABELS = {
     "positions": "позиций в акте",
     "positions_fully_blocked": "позиций заблокировано полностью",
     "positions_reduced": "позиций с урезанным объёмом",
+    "lines": "строк",
+    "qty_total": "количество, ед. (по разным единицам не складывать)",
+    "amount_total": "сумма, ₽",
+    "warehouse": "склад",
+    "mol": "материально ответственное лицо",
+    "charge": "сумма к взысканию по недостаче, ₽",
+    "surplus_amount": "сумма излишка, ₽",
+    "over_limit": "позиций сверх лимита",
+    "limit_total": "лимит, ед.",
 }
 
 
@@ -134,6 +157,54 @@ FORMS = {
         "columns": ["Материал", "Ед.", "Остаток на начало", "Приход", "Расход",
                     "Норма на объём работ", "Отклонение от нормы", "Остаток на конец"],
     },
+    "m4": {
+        "code": "М-4",
+        "title": "Приходный ордер",
+        "source": SOURCE_M4,
+        "columns": ["№", "Номенклатура", "Ед.", "Кол-во по документу", "Цена, ₽",
+                    "Сумма, ₽", "Партия"],
+    },
+    "m11": {
+        "code": "М-11",
+        "title": "Требование-накладная",
+        "source": SOURCE_M11,
+        "columns": ["№", "Номенклатура", "Ед.", "Затребовано", "Отпущено",
+                    "Объект / назначение"],
+    },
+    "m8": {
+        "code": "М-8",
+        "title": "Лимитно-заборная карта",
+        "source": SOURCE_M8,
+        "columns": ["№", "Номенклатура", "Ед.", "Лимит на месяц", "Отпущено с начала месяца",
+                    "Остаток лимита"],
+    },
+    "m15": {
+        "code": "М-15",
+        "title": "Накладная на внутреннее перемещение материалов",
+        "source": SOURCE_M15,
+        "columns": ["№", "Номенклатура", "Ед.", "Кол-во", "Цена, ₽", "Сумма, ₽",
+                    "Откуда", "Куда"],
+    },
+    "writeoff": {
+        "code": "акт списания",
+        "title": "Акт на списание материалов",
+        "source": SOURCE_FREE,
+        "columns": ["№", "Номенклатура", "Ед.", "Кол-во", "Причина", "Документ-основание"],
+    },
+    "daval": {
+        "code": "акт ДМ",
+        "title": "Акт приёмки-передачи давальческих материалов",
+        "source": SOURCE_FREE,
+        "columns": ["№", "Номенклатура", "Ед.", "Кол-во", "Стоимость по данным заказчика, ₽",
+                    "Примечание"],
+    },
+    "inv3": {
+        "code": "ИНВ-3",
+        "title": "Инвентаризационная опись товарно-материальных ценностей",
+        "source": SOURCE_INV3,
+        "columns": ["№", "Номенклатура", "Ед.", "Факт по описи", "Учёт",
+                    "Отклонение", "Цена, ₽", "Сумма отклонения, ₽"],
+    },
 }
 
 
@@ -179,6 +250,20 @@ def requisites(*, object_name: str = "", contract: str = "", customer: str = "",
         "Заказчик": customer,
         "Подрядчик": contractor,
         "Отчётный период": period,
+    }
+    return {name: {"value": value, "missing": not bool(str(value).strip())}
+            for name, value in fields.items()}
+
+
+def stock_requisites(*, object_name: str = "", warehouse: str = "", mol: str = "",
+                     date: str = "", document: str = "") -> dict:
+    """Шапка складского бланка. Договор и заказчик здесь не нужны — нужны склад и МОЛ."""
+    fields = {
+        "Организация/объект": object_name,
+        "Склад": warehouse,
+        "МОЛ": mol,
+        "Документ": document,
+        "Дата": date,
     }
     return {name: {"value": value, "missing": not bool(str(value).strip())}
             for name, value in fields.items()}
@@ -841,6 +926,252 @@ def _deviation(rows: list[dict], index: int) -> Decimal:
     return _dec(rows[index]["cells"][6].replace(",", ".")) or Decimal("0")
 
 
+
+# ─────────────────────────── складские бланки (М-4 / М-11 / М-8 / М-15 / ИНВ-3) ───────────────────────────
+STOCK_FORMS = {"m4": "receipt", "m11": "issue", "m8": "limit", "m15": "transfer",
+               "inv3": "inventory", "writeoff": "writeoff",
+               "daval": ("daval_receipt", "daval_return")}
+
+
+def build_stock_form(kind: str, doc: dict, *, state: dict | None = None,
+                     requisites_dict: dict | None = None) -> dict:
+    """Бланк складского документа по его данным (и, если есть, по состоянию склада).
+
+    Форма печатает **документ**, а не остатки: приход показывает, что привезли и по какой
+    цене; требование — что отпущено и на какой объект; М-8 — сколько отпущено против
+    лимита; ИНВ-3 — расхождение факта с учётом. Если состояние склада передано, в ИНВ-3
+    появляется колонка «учёт», а в М-8 — остаток лимита; без него эти колонки честно
+    пустые и попадают в «что нужно запросить», а не заполняются нулями.
+    """
+    from . import stock as ledger  # локальный импорт: forms не тянет склад на старте
+
+    if kind not in STOCK_FORMS:
+        raise ValueError(f"не складской бланк: {kind}; есть: {', '.join(STOCK_FORMS)}")
+    expected = STOCK_FORMS[kind]
+    accepted = expected if isinstance(expected, tuple) else (expected,)
+    if doc.get("kind") and doc["kind"] not in accepted:
+        raise ValueError(f"документ вида «{doc['kind']}» не оформляется бланком "
+                         f"«{FORMS[kind]['code']}» (нужен один из: {', '.join(accepted)})")
+
+    warehouse = str(doc.get("warehouse") or "")
+    info = ledger.warehouse_info(state, warehouse) if state else {}
+    number = str(doc.get("number") or "без номера")
+    date = str(doc.get("date") or "")
+    req = requisites_dict or stock_requisites(
+        object_name=(state or {}).get("object") or "", warehouse=warehouse,
+        mol=info.get("mol") or "", date=date, document=number)
+    code = FORMS[kind]["code"]
+    gaps = _gaps_from_requisites(req, code)
+    if not (info.get("mol") or req.get("МОЛ", {}).get("value")):
+        gaps.append({"what": "МОЛ склада",
+                     "why": "в бланке нужна подпись материально ответственного лица, "
+                            "а склад не закреплён за человеком",
+                     "ask": f"закрепить МОЛ за складом {warehouse or '—'}"})
+    warnings: list[str] = []
+    rows: list[dict] = []
+    totals: dict = {}
+
+    for index, line in enumerate(doc.get("lines") or [], start=1):
+        item = str(line.get("item") or "")
+        item_title = (ledger.item_info(state, item).get("title") if state else "") or item
+        unit = str(line.get("unit") or (ledger.item_info(state, item).get("unit") if state else "") or "")
+        qty = _dec(line.get("qty"))
+        price = _dec(line.get("price"))
+        state_code = "ok"
+
+        if kind == "m4":
+            if price is None:
+                state_code = "no_price"
+                warnings.append(f"{item}: приход без цены — сумма не считается")
+            amount = (qty * price).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) \
+                if (qty is not None and price is not None) else None
+            rows.append(_base_row(c1=index, c2=item_title, c3=unit or "—",
+                                  c4=_qty(qty), c5=_rub(price), c6=_rub(amount),
+                                  c7=f"{number}:{index}", state=state_code,
+                                  source=number))
+
+        elif kind == "m11":
+            requested = qty
+            issued = _dec(line.get("issued")) if line.get("issued") is not None else requested
+            if issued is not None and requested is not None and issued > requested:
+                state_code = "over_issue"
+                warnings.append(f"{item}: отпущено {_qty(issued)} больше затребованного "
+                                f"{_qty(requested)}")
+            target = str(line.get("object") or line.get("target") or "")
+            if not target:
+                gaps.append({"what": f"объект/назначение для {item}",
+                             "why": "требование-накладная без назначения не закрывает списание",
+                             "ask": "указать объект, захватку или участок"})
+            rows.append(_base_row(c1=index, c2=item_title, c3=unit or "—",
+                                  c4=_qty(requested), c5=_qty(issued), c6=target or "не задано",
+                                  state=state_code, source=number))
+
+        elif kind == "m8":
+            limit = _dec(line.get("limit"))
+            used = _dec(line.get("used")) if line.get("used") is not None else None
+            if used is None and state is not None:
+                used = _qty_used(state, item, warehouse, date)
+            left = (limit - used).quantize(Decimal("0.001"), rounding=ROUND_HALF_UP) \
+                if (limit is not None and used is not None) else None
+            if limit is None:
+                state_code = "no_limit"
+                gaps.append({"what": f"лимит на {item}",
+                             "why": "лимитно-заборная карта без лимита бессмысленна",
+                             "ask": "утвердить лимит на месяц по норме расхода"})
+            elif left is not None and left < 0:
+                state_code = "over_limit"
+                warnings.append(f"{item}: отпущено сверх лимита на {_qty(-left)} {unit}")
+            rows.append(_base_row(c1=index, c2=item_title, c3=unit or "—", c4=_qty(limit),
+                                  c5=_qty(used), c6=_qty(left), state=state_code, source=number))
+
+        elif kind == "m15":
+            amount = (qty * price).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) \
+                if (qty is not None and price is not None) else None
+            if price is None:
+                warnings.append(f"{item}: в документе нет цены — сумма не показана; "
+                                f"цена берётся из партии при проведении")
+            target = str(doc.get("warehouse_to") or "")
+            if not target:
+                state_code = "no_target"
+                gaps.append({"what": "склад-получатель", "why": "перемещение без приёмника "
+                                                                "не проводится",
+                             "ask": "указать склад-получатель"})
+            rows.append(_base_row(c1=index, c2=item_title, c3=unit or "—", c4=_qty(qty),
+                                  c5=_rub(price), c6=_rub(amount), c7=warehouse or "—",
+                                  c8=target or "не задано", state=state_code, source=number))
+
+        elif kind == "writeoff":
+            reason = str(line.get("cause") or line.get("причина") or line.get("note") or "")
+            if not reason:
+                state_code = "no_reason"
+                gaps.append({"what": f"причина списания {item}",
+                             "why": "акт без причины не обосновывает списание в затраты",
+                             "ask": "указать причину (потери, бой, истечение срока)"})
+            rows.append(_base_row(c1=index, c2=item_title, c3=unit or "—", c4=_qty(qty),
+                                  c5=reason or "не задано", c6=number, state=state_code,
+                                  source=number))
+
+        elif kind == "daval":
+            price = _dec(line.get("price"))
+            rows.append(_base_row(c1=index, c2=item_title, c3=unit or "—", c4=_qty(qty),
+                                  c5=_rub(price) if price is not None else "по данным заказчика",
+                                  c6=str(line.get("note") or
+                                         ("приёмка" if doc.get("kind") == "daval_receipt"
+                                          else "возврат")),
+                                  state="ok", source=number))
+            if price is None:
+                warnings.append(f"{item}: стоимость по данным заказчика не передана — "
+                                f"в бланке «по данным заказчика», а не 0")
+
+        elif kind == "inv3":
+            fact = qty
+            book = _dec(line.get("book"))
+            if book is None and state is not None:
+                book = _qty_available(state, item, warehouse, date)
+            if book is None:
+                state_code = "no_book"
+                gaps.append({"what": f"учётный остаток {item}",
+                             "why": "без остатка по учёту расхождение не считается — "
+                                    "описи не с чем сверяться",
+                             "ask": "передать состояние склада или инвентаризационную ведомость "
+                                    "с учётными остатками"})
+            delta = (fact - book) if (fact is not None and book is not None) else None
+            if delta is not None and delta != 0:
+                state_code = "delta"
+                warnings.append(f"{item}: {'излишек' if delta > 0 else 'недостача'} "
+                                f"{_qty(abs(delta))} {unit}")
+            if price is None and state is not None:
+                batch_price = next((b.get("price") for b in
+                                    ledger.batches(state, item=item, warehouse=warehouse,
+                                                   as_of=date) if b.get("price")), None)
+                price = _dec(batch_price)
+            amount = (delta * price).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) \
+                if (delta is not None and price is not None) else None
+            rows.append(_base_row(c1=index, c2=item_title, c3=unit or "—", c4=_qty(fact),
+                                  c5=_qty(book), c6=("+" if (delta or 0) > 0 else "") + _qty(delta)
+                                  if delta is not None else "—",
+                                  c7=_rub(price), c8=_rub(amount), state=state_code,
+                                  source=number))
+
+    quantity = sum((_dec(r["values"][3]) or Decimal("0")) for r in rows)
+    amounts = [_dec(r["values"][5]) for r in rows] if kind in ("m4", "m15") else []
+    if kind == "inv3":
+        shortage = Decimal("0")
+        surplus = Decimal("0")
+        for row in rows:
+            delta = _dec(row["values"][5] if len(row["values"]) > 5 else None)
+            amount = _dec(row["values"][7] if len(row["values"]) > 7 else None)
+            if delta is None or amount is None:
+                continue
+            if delta < 0:
+                shortage += abs(amount)
+            elif delta > 0:
+                surplus += amount
+        totals = {"lines": len(rows), "charge": _money(shortage),
+                  "surplus_amount": _money(surplus)}
+    elif kind == "m8":
+        over = sum(1 for r in rows if r["state"] == "over_limit")
+        totals = {"lines": len(rows), "over_limit": over,
+                  "limit_total": _qty(sum((_dec(r["values"][3]) or Decimal("0")) for r in rows))}
+    elif kind in ("m4", "m15"):
+        known = [a for a in amounts if a is not None]
+        totals = {"lines": len(rows), "qty_total": _qty(quantity),
+                  "amount_total": _money(sum(known, Decimal("0"))) if known else None}
+    else:
+        # в М-11 и требовании количество — единственный числовой итог: деньги живут не в бланке
+        totals = {"lines": len(rows), "qty_total": _qty(quantity)}
+
+    totals["warehouse"] = warehouse or "не задано"
+    totals["mol"] = info.get("mol") or "не задано"
+
+    if state is not None:
+        from . import stock as ledger
+        posted = any(str(item.get("number")) == number and str(item.get("date")) == date
+                     and str(item.get("kind")) == str(doc.get("kind") or expected)
+                     for item in state.get("documents") or [])
+        if not posted:
+            warnings.append(f"документ {number} в учёте не проведён — бланк есть, "
+                            f"движений нет: сначала `stock post`")
+            gaps.append({"what": f"проведение {number}",
+                         "why": "бланк без проведённого документа не меняет остатки",
+                         "ask": "провести документ (или исправить причину отказа)"})
+
+    form = envelope(kind, period=date, req=req, rows=rows, totals=totals, gaps=gaps,
+                    warnings=warnings,
+                    sources=[f"документ {number} от {date or '—'}",
+                             "движения склада" if state is not None else "только документ"])
+    form["document"] = {"number": number, "date": date, "kind": doc.get("kind") or expected,
+                        "warehouse": warehouse, "warehouse_to": doc.get("warehouse_to") or ""}
+    form["built_from"] = ("данные документа; форма ничего не пересчитывает"
+                          if state is None else
+                          "данные документа и регистры склада; форма ничего не пересчитывает")
+    return form
+
+
+def _qty_available(state, item: str, warehouse: str, date: str) -> Decimal | None:
+    from . import stock as ledger
+    try:
+        return ledger.available(state, item=item, warehouse=warehouse, as_of=date or None,
+                                daval=False)
+    except Exception:
+        return None
+
+
+def _qty_used(state, item: str, warehouse: str, date: str) -> Decimal | None:
+    """Отпущено с начала месяца — из движений, а не из лимита."""
+    from . import stock as ledger
+    month_start = f"{date[:7]}-01" if len(date) >= 7 else ""
+    if not month_start:
+        return None
+    total = Decimal("0")
+    for move in ledger.moves_of(state, item=item, warehouse=warehouse):
+        if not (month_start <= (move["date"] or "") <= (date or "9999-12-31")):
+            continue
+        if move["kind"] in ("issue", "limit", "writeoff"):
+            total += _dec(move.get("qty")) or Decimal("0")
+    return total
+
+
 # ─────────────────────────── вывод ───────────────────────────
 def to_markdown(form: dict) -> str:
     lines = [f"# {form['title']} ({form['code']}) — {form['period_label'] or form['period']}", "",
@@ -1137,6 +1468,12 @@ def write(form: dict, out_dir: str | Path) -> dict:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     stem = f"{form['form']}_{form['period'].replace('-', '_') or 'без_периода'}"
+    document = form.get("document") or {}
+    if document.get("number"):
+        import re as _re
+        tail = _re.sub(r"[^0-9A-Za-zА-Яа-я]+", "_", str(document["number"])).strip("_")
+        if tail:
+            stem = f"{stem}_{tail}"
     payload = out / f"{stem}.json"
     payload.write_text(json.dumps(form, ensure_ascii=False, indent=2), encoding="utf-8")
     markdown = out / f"{stem}.md"

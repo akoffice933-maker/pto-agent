@@ -392,3 +392,184 @@ def test_ks2_numbers_are_numbers_in_excel(tmp_path):
     assert ws.cell(row, 8).value == 60000       # стоимость — число
     totals = [ws.cell(r, 2).value for r in range(1, ws.max_row + 1)]
     assert 60000 in totals and 40000 in totals  # предъявляется / не предъявляется
+
+
+# ─────────────────────────── складские бланки М-4 / М-11 / М-8 / М-15 / ИНВ-3 ───────────────────────────
+from pto_agent import stock as ledger                              # noqa: E402
+
+STOCK_DOCS = ROOT / "data" / "demo" / "stock" / "documents_2026_10.json"
+STOCK_LIMITS = ROOT / "data" / "demo" / "stock" / "limits_2026_10.json"
+
+
+@pytest.fixture(scope="module")
+def posted_state():
+    return ledger.demo_state()
+
+
+def test_m4_receipt_form_has_amounts_and_batch(posted_state):
+    form = forms.build_stock_form(
+        "m4", {"kind": "receipt", "number": "УПД №9", "date": "2026-10-01", "warehouse": "СК-1",
+               "lines": [{"item": "Бетон B25", "qty": 10, "price": 6200}]}, state=posted_state)
+    assert form["code"] == "М-4"
+    assert forms._dec(form["rows"][0]["values"][5]) == 62000   # сумма в бланке
+    assert form["rows"][0]["cells"][6].startswith("УПД №9")  # партия ссылается на документ
+    assert form["totals"]["amount_total"] == 62000.0
+    assert form["totals"]["mol"] == "Ким А.П."
+
+
+def test_m4_receipt_without_price_is_flagged(posted_state):
+    form = forms.build_stock_form(
+        "m4", {"kind": "receipt", "number": "УПД №10", "date": "2026-10-01", "warehouse": "СК-1",
+               "lines": [{"item": "Бетон B25", "qty": 10}]}, state=posted_state)
+    assert form["rows"][0]["state"] == "no_price"
+    assert any("без цены" in warning for warning in form["warnings"])
+
+
+def test_m11_requirement_keeps_object_and_flags_missing(posted_state):
+    form = forms.build_stock_form(
+        "m11", {"kind": "issue", "number": "М-11 №77", "date": "2026-10-05", "warehouse": "СК-1",
+                "lines": [{"item": "Бетон B25", "qty": 5, "object": "плита, захватка 2"},
+                          {"item": "Керамзит", "qty": 1}]}, state=posted_state)
+    assert form["rows"][0]["cells"][5] == "плита, захватка 2"
+    assert form["rows"][1]["cells"][5] == "не задано"
+    assert any("объект/назначение" in gap["what"] for gap in form["gaps"])
+    assert "amount_total" not in form["totals"]  # деньги живут не в требовании
+
+
+def test_m11_over_issue_is_flagged(posted_state):
+    form = forms.build_stock_form(
+        "m11", {"kind": "issue", "number": "М-11 №78", "date": "2026-10-05", "warehouse": "СК-1",
+                "lines": [{"item": "Бетон B25", "qty": 5, "issued": 7, "object": "плита"}]},
+        state=posted_state)
+    assert form["rows"][0]["state"] == "over_issue"
+    assert any("больше затребованного" in w for w in form["warnings"])
+
+
+@pytest.mark.skipif(not STOCK_LIMITS.exists(), reason="нет демо-лимитов")
+def test_m8_counts_used_from_moves_and_flags_overrun(posted_state):
+    doc = json.loads(STOCK_LIMITS.read_text(encoding="utf-8"))
+    form = forms.build_stock_form("m8", doc, state=posted_state)
+    row = next(r for r in form["rows"] if r["cells"][1].startswith("Бетон"))
+    assert forms._dec(row["values"][3]) == forms._dec("208.8")   # лимит
+    assert forms._dec(row["values"][4]) == 210                   # отпущено из движений
+    assert forms._dec(row["values"][5]) == forms._dec("-1.2")    # остаток лимита отрицательный
+    assert form["totals"]["over_limit"] >= 1
+    assert any("сверх лимита" in w for w in form["warnings"])
+
+
+def test_m8_without_limit_is_a_gap(posted_state):
+    form = forms.build_stock_form(
+        "m8", {"kind": "limit", "number": "М-8 №1", "date": "2026-10-31", "warehouse": "СК-1",
+               "lines": [{"item": "Бетон B25"}]}, state=posted_state)
+    assert form["rows"][0]["state"] == "no_limit"
+    assert any("лимит" in gap["what"].lower() for gap in form["gaps"])
+
+
+def test_m15_shows_both_warehouses(posted_state):
+    form = forms.build_stock_form(
+        "m15", {"kind": "transfer", "number": "М-15 №9", "date": "2026-10-06",
+                "warehouse": "СК-1", "warehouse_to": "ПР-2",
+                "lines": [{"item": "Труба ПВХ 110", "qty": 10}]}, state=posted_state)
+    row = form["rows"][0]
+    assert row["cells"][6] == "СК-1" and row["cells"][7] == "ПР-2"
+    assert any("цена берётся из партии" in w for w in form["warnings"])
+
+
+def test_m15_without_target_is_a_gap(posted_state):
+    form = forms.build_stock_form(
+        "m15", {"kind": "transfer", "number": "М-15 №10", "date": "2026-10-06",
+                "warehouse": "СК-1", "lines": [{"item": "Труба ПВХ 110", "qty": 10}]},
+        state=posted_state)
+    assert form["rows"][0]["state"] == "no_target"
+    assert any("склад-получатель" in gap["what"] for gap in form["gaps"])
+
+
+def test_inv3_shows_fact_book_and_delta(posted_state):
+    form = forms.build_stock_form(
+        "inv3", {"kind": "inventory", "number": "ИНВ-3 №9", "date": "2026-10-31",
+                 "warehouse": "СК-1",
+                 "lines": [{"item": "Бетон B25", "qty": 36, "price": 6200},
+                           {"item": "Керамзит", "qty": 20}]}, state=posted_state)
+    beton = form["rows"][0]
+    assert forms._dec(beton["values"][3]) == 36   # факт по описи
+    assert forms._dec(beton["values"][4]) == 35   # учёт — из движений склада
+    assert forms._dec(beton["values"][5]) == 1    # излишек
+    assert form["totals"]["surplus_amount"] > 0
+    assert form["totals"]["charge"] > 0                              # недостача керамзита
+
+
+def test_inv3_without_state_asks_for_book_balance():
+    form = forms.build_stock_form(
+        "inv3", {"kind": "inventory", "number": "ИНВ-3 №9", "date": "2026-10-31",
+                 "warehouse": "СК-1", "lines": [{"item": "Бетон", "qty": 36}]})
+    assert form["rows"][0]["state"] == "no_book"
+    assert any("учётный остаток" in gap["what"] for gap in form["gaps"])
+
+
+def test_writeoff_without_reason_is_flagged(posted_state):
+    form = forms.build_stock_form(
+        "writeoff", {"kind": "writeoff", "number": "акт №9", "date": "2026-10-20",
+                     "warehouse": "СК-1", "lines": [{"item": "Бетон B25", "qty": 1}]},
+        state=posted_state)
+    assert form["rows"][0]["state"] == "no_reason"
+    assert any("причина списания" in gap["what"] for gap in form["gaps"])
+
+
+def test_daval_form_is_free_form_and_not_zero_priced(posted_state):
+    form = forms.build_stock_form(
+        "daval", {"kind": "daval_receipt", "number": "М-35 №9", "date": "2026-10-07",
+                  "warehouse": "ПР-2", "lines": [{"item": "Труба ПВХ 110", "qty": 100}]},
+        state=posted_state)
+    assert "типовой бланк не установлен" in form["approved_by"]
+    assert form["rows"][0]["cells"][4] == "по данным заказчика"  # не 0 и не «—»
+    assert any("стоимость по данным заказчика" in w.lower() for w in form["warnings"])
+
+
+def test_stock_form_refuses_wrong_document_kind(posted_state):
+    with pytest.raises(ValueError):
+        forms.build_stock_form("m4", {"kind": "issue", "number": "X", "date": "2026-10-01",
+                                      "warehouse": "СК-1", "lines": []}, state=posted_state)
+
+
+def test_unposted_document_is_named_in_form(posted_state):
+    form = forms.build_stock_form(
+        "m11", {"kind": "issue", "number": "М-11 №999", "date": "2026-10-09",
+                "warehouse": "СК-1", "lines": [{"item": "Бетон B25", "qty": 1,
+                                                "object": "плита"}]}, state=posted_state)
+    assert any("не проведён" in w for w in form["warnings"])
+    assert any("проведение" in gap["what"] for gap in form["gaps"])
+
+
+def test_warehouse_mol_missing_is_a_gap():
+    state = ledger.new_state(warehouses=[{"code": "СК-9"}],
+                             items=[{"code": "Бетон", "unit": "м3"}])
+    form = forms.build_stock_form(
+        "m4", {"kind": "receipt", "number": "УПД №1", "date": "2026-10-01", "warehouse": "СК-9",
+               "lines": [{"item": "Бетон", "qty": 1, "price": 100}]}, state=state)
+    assert any("МОЛ" in gap["what"] for gap in form["gaps"])
+
+
+def test_stock_form_files_do_not_overwrite_each_other(tmp_path):
+    state = ledger.demo_state()
+    docs = [{"kind": "receipt", "number": "УПД №1", "date": "2026-10-01", "warehouse": "СК-1",
+             "lines": [{"item": "Бетон B25", "qty": 1, "price": 6200}]},
+            {"kind": "receipt", "number": "УПД №2", "date": "2026-10-01", "warehouse": "СК-1",
+             "lines": [{"item": "Бетон B25", "qty": 2, "price": 6200}]}]
+    paths = [forms.write(forms.build_stock_form("m4", doc, state=state), tmp_path) for doc in docs]
+    assert paths[0]["docx"] != paths[1]["docx"]
+    assert len(list(tmp_path.glob("m4_*.docx"))) == 2
+
+
+@pytest.mark.skipif(not STOCK_DOCS.exists(), reason="нет демо-документов склада")
+def test_every_demo_document_gets_its_form(tmp_path):
+    state = ledger.demo_state()
+    documents = json.loads(STOCK_DOCS.read_text(encoding="utf-8"))["documents"]
+    mapping = {"receipt": "m4", "issue": "m11", "transfer": "m15", "inventory": "inv3",
+               "writeoff": "writeoff", "daval_receipt": "daval", "daval_return": "daval"}
+    made = 0
+    for doc in documents:
+        form = forms.build_stock_form(mapping[doc["kind"]], doc, state=state)
+        forms.write(form, tmp_path)
+        made += 1
+    assert made == len(documents)
+    assert len(list(tmp_path.glob("*.docx"))) == made

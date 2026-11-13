@@ -591,6 +591,38 @@ def cmd_stock(args) -> int:
         print(f"  файлы: {paths['docx']}, {paths['xlsx']}, {paths['md']}")
         return 0
 
+    if action == "print":
+        documents = json.loads(Path(args.docs).read_text(encoding="utf-8"))
+        if isinstance(documents, dict) and "documents" in documents:
+            documents = documents["documents"]
+        elif isinstance(documents, dict):
+            documents = [documents]
+        mapping = {"receipt": "m4", "issue": "m11", "limit": "m8", "transfer": "m15",
+                   "inventory": "inv3", "writeoff": "writeoff",
+                   "daval_receipt": "daval", "daval_return": "daval"}
+        made = 0
+        for doc in documents:
+            kind = args.form or mapping.get(str(doc.get("kind") or ""))
+            if not kind:
+                print(f"  {doc.get('number')}: вид «{doc.get('kind')}» бланка не имеет",
+                      file=sys.stderr)
+                continue
+            try:
+                form = print_forms.build_stock_form(kind, doc, state=state or None)
+            except ValueError as error:
+                print(f"  {doc.get('number')}: {error}", file=sys.stderr)
+                continue
+            paths = print_forms.write(form, args.out)
+            made += 1
+            print(f"  {form['code']:<13} {form['document']['number']:<18} строк "
+                  f"{len(form['rows'])} → {Path(paths['docx']).name}")
+            for warning in form["warnings"]:
+                print(f"      замечание: {warning}", file=sys.stderr)
+            for gap in form["gaps"]:
+                print(f"      нужно запросить: {gap['what']} — {gap['ask']}", file=sys.stderr)
+        print(f"форм напечатано: {made} · {form['draft_notice'] if made else '—'}")
+        return 0 if made else 1
+
     if action == "moves":
         moves = stock_ledger.moves_of(state, item=args.item, warehouse=args.warehouse)
         for move in moves[-args.limit:]:
@@ -2141,6 +2173,16 @@ def main(argv=None):
     stk_ver = stks.add_parser("verify", help="сходится ли учёт: остатки против движений")
     stk_ver.add_argument("--state", default="out/stock/state.json")
     stk_ver.set_defaults(func=cmd_stock)
+
+    stk_pr = stks.add_parser("print",
+                             help="печатные бланки документов: М-4, М-11, М-8, М-15, ИНВ-3, "
+                                  "акт списания, акт давальческих")
+    stk_pr.add_argument("--state", default="out/stock/state.json")
+    stk_pr.add_argument("--docs", required=True, help="JSON: документ или список документов")
+    stk_pr.add_argument("--form", default=None,
+                        help="бланк принудительно (m4, m11, m8, m15, inv3, writeoff, daval)")
+    stk_pr.add_argument("--out", default="out/forms/stock")
+    stk_pr.set_defaults(func=cmd_stock)
 
     stk_m29 = stks.add_parser("m29", help="материальный отчёт М-29 из движений склада")
     stk_m29.add_argument("--state", default="out/stock/state.json")
