@@ -13,6 +13,7 @@ from .llm import describe_discrepancies, route
 from .norms import NormIndex, load_norms
 from .parsers import (WorkbookTooLarge, read_closed_ex, read_estimate_ex,
                       read_journal_ex)
+from . import forms as print_forms
 from .pdf_profiles import ProfileError, fact_rules, get_profile, schedule_markers
 from .kr_pdf import (derive_boq, extract_facts, extract_levels, find_schedules, kr_report,
                      read_pdf_text)
@@ -510,6 +511,37 @@ def cmd_materials(args) -> int:
     print(f"  файлы: {out_dir / 'materials.json'}, {out_dir / 'materials.xlsx'}, "
           f"{out_dir / 'materials.md'}")
     return 0 if report["status"] != "no_data" else 1
+
+
+# ─────────────────────────── печатные формы КС-3 / КС-6а / М-29 ───────────────────────────
+def cmd_forms(args) -> int:
+    req = {name: value for name, value in (("Объект", args.object_name),
+                                           ("Договор", args.contract),
+                                           ("Заказчик", args.customer),
+                                           ("Подрядчик", args.contractor)) if value}
+    try:
+        form = print_forms.build_from_files(
+            args.form, period=args.period, acts_path=getattr(args, "acts", None),
+            purchases_path=getattr(args, "purchases", None),
+            writeoffs_path=getattr(args, "writeoffs", None),
+            norms_path=getattr(args, "norms", None), works_path=getattr(args, "works", None),
+            opening_path=getattr(args, "opening", None),
+            req=req, vat_rate=getattr(args, "vat_rate", None))
+    except ValueError as error:
+        print(f"форма: {error}", file=sys.stderr)
+        return 2
+
+    paths = print_forms.write(form, args.out)
+    print(f"{form['code']} за {form['period_label'] or form['period']}: строк {len(form['rows'])} · "
+          f"{form['draft_notice']}")
+    for label, value in print_forms.totals_ru(form):
+        print(f"  {label}: {value}")
+    for warning in form["warnings"]:
+        print(f"  расхождение: {warning}", file=sys.stderr)
+    for gap in form["gaps"]:
+        print(f"  нужно запросить: {gap['what']} — {gap['ask']}", file=sys.stderr)
+    print(f"  файлы: {paths['docx']}, {paths['xlsx']}, {paths['md']}, {paths['json']}")
+    return 0
 
 
 # ─────────────────────────── takeoff → ведомость объёмов с ценами ───────────────────────────
@@ -1930,6 +1962,34 @@ def main(argv=None):
     tkp.add_argument("--profiles", default=None, help="путь к pdf_profiles.json")
     tkp.add_argument("--cache", default=None, help="кэш текста страниц (json)")
     tkp.set_defaults(func=cmd_takeoff)
+    fm = sub.add_parser("forms", help="печатные формы КС-3, КС-6а, М-29 из артефактов прогона")
+    fms = fm.add_subparsers(dest="form", required=True)
+    common = [("--period", {"required": True, "help": "отчётный период: 2026-09 или ISO-дата"}),
+              ("--out", {"default": "out/forms"}),
+              ("--object-name", {"default": ""}), ("--contract", {"default": ""}),
+              ("--customer", {"default": ""}), ("--contractor", {"default": ""})]
+    fk3 = fms.add_parser("ks3", help="справка о стоимости выполненных работ (КС-3)")
+    fk3.add_argument("--acts", default="data/demo/acts/acts.json")
+    fk3.add_argument("--vat-rate", default=None, help="ставка НДС из договора (20, 10, 0)")
+    for flag, options in common:
+        fk3.add_argument(flag, **options)
+    fk3.set_defaults(func=cmd_forms)
+    fk6 = fms.add_parser("ks6a", help="журнал учёта выполненных работ (КС-6а)")
+    fk6.add_argument("--acts", default="data/demo/acts/acts.json")
+    fk6.add_argument("--works", default=None, help="справочник «код → наименование»")
+    for flag, options in common:
+        fk6.add_argument(flag, **options)
+    fk6.set_defaults(func=cmd_forms)
+    fm2 = fms.add_parser("m29", help="отчёт о расходе материалов (М-29)")
+    fm2.add_argument("--purchases", default="data/demo/consumption/purchases.csv")
+    fm2.add_argument("--writeoffs", default="data/demo/consumption/writeoffs.csv")
+    fm2.add_argument("--norms", default="data/demo/consumption/norms.json")
+    fm2.add_argument("--works", default="data/demo/consumption/works.json")
+    fm2.add_argument("--opening", default=None, help='остаток на начало: json {материал: количество}')
+    for flag, options in common:
+        fm2.add_argument(flag, **options)
+    fm2.set_defaults(func=cmd_forms)
+
     tks = tksub.add_parser("schedules",
                            help="ведомости расхода стали и спецификации → проверка и черновик")
     tks.add_argument("--schedules", default="data/input/kr1_schedules.json",
@@ -2054,6 +2114,6 @@ def main(argv=None):
     if args.cmd in ("audit-verify", "approve", "prices", "materials", "procure", "audit",
                     "takeoff", "tk", "cumulative", "atn", "consumption", "checklist",
                     "journal", "quality", "docflow", "correspondence", "pack", "finance",
-                    "monthly"):
+                    "monthly", "forms"):
         return result
     return 0
