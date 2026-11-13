@@ -1,0 +1,131 @@
+{
+  "documents": [
+    {
+      "kind": "receipt",
+      "number": "УПД №118",
+      "date": "2026-10-01",
+      "warehouse": "СК-1",
+      "lines": [
+        {
+          "item": "Бетон B25",
+          "qty": 230,
+          "price": 6200
+        }
+      ]
+    },
+    {
+      "kind": "receipt",
+      "number": "УПД №119",
+      "date": "2026-10-02",
+      "warehouse": "СК-1",
+      "lines": [
+        {
+          "item": "Арматура A500",
+          "qty": 22,
+          "price": 68000
+        }
+      ]
+    },
+    {
+      "kind": "receipt",
+      "number": "УПД №120",
+      "date": "2026-10-03",
+      "warehouse": "СК-1",
+      "lines": [
+        {
+          "item": "Керамзит",
+          "qty": 40,
+          "price": 900
+        },
+        {
+          "item": "Труба ПВХ 110",
+          "qty": 200,
+          "price": 310
+        }
+      ]
+    },
+    {
+      "kind": "issue",
+      "number": "М-11 №4",
+      "date": "2026-10-05",
+      "warehouse": "СК-1",
+      "lines": [
+        {
+          "item": "Бетон B25",
+          "qty": 210,
+          "object": "корпус 2, плита"
+        },
+        {
+          "item": "Арматура A500",
+          "qty": 19.5,
+          "object": "корпус 2, каркас"
+        }
+      ]
+    },
+    {
+      "kind": "transfer",
+      "number": "М-15 №2",
+      "date": "2026-10-06",
+      "warehouse": "СК-1",
+      "warehouse_to": "ПР-2",
+      "lines": [
+        {
+          "item": "Труба ПВХ 110",
+          "qty": 120
+        }
+      ]
+    },
+    {
+      "kind": "writeoff",
+      "number": "акт списания №1",
+      "date": "2026-10-20",
+      "warehouse": "СК-1",
+      "lines": [
+        {
+          "item": "Керамзит",
+          "qty": 12,
+          "note": "потери при подаче"
+        }
+      ]
+    },
+    {
+      "kind": "daval_receipt",
+      "number": "М-35 №1",
+      "date": "2026-10-07",
+      "warehouse": "ПР-2",
+      "lines": [
+        {
+          "item": "Труба ПВХ 110",
+          "qty": 300,
+          "note": "давальческий заказчика"
+        }
+      ]
+    },
+    {
+      "kind": "issue",
+      "number": "М-11 №5",
+      "date": "2026-10-25",
+      "warehouse": "СК-1",
+      "lines": [
+        {
+          "item": "Арматура A500",
+          "qty": 5,
+          "object": "корпус 2, каркас"
+        }
+      ]
+    },
+    {
+      "kind": "daval_return",
+      "number": "М-35 №2",
+      "date": "2026-10-28",
+      "warehouse": "ПР-2",
+      "lines": [
+        {
+          "item": "Труба ПВХ 110",
+          "qty": 120,
+          "note": "возврат неиспользованного давальческого"
+        }
+      ]
+    }
+  ]
+}
