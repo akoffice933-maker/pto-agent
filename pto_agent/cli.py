@@ -14,6 +14,7 @@ from .norms import NormIndex, load_norms
 from .parsers import (WorkbookTooLarge, read_closed_ex, read_estimate_ex,
                       read_journal_ex)
 from . import forms as print_forms
+from . import stock as stock_ledger
 from .pdf_profiles import ProfileError, fact_rules, get_profile, schedule_markers
 from .kr_pdf import (derive_boq, extract_facts, extract_levels, find_schedules, kr_report,
                      read_pdf_text)
@@ -516,6 +517,118 @@ def cmd_materials(args) -> int:
     return 0 if report["status"] != "no_data" else 1
 
 
+# ─────────────────────────── складской контур ───────────────────────────
+def cmd_stock(args) -> int:
+    action = args.stock_action
+    state = stock_ledger.load(args.state)
+
+    if action == "demo":
+        state = stock_ledger.demo_state()
+        stock_ledger.save(state, args.state)
+        print(f"демо-склад собран: движений {len(state['moves'])}, "
+              f"документов {len(state['documents'])} → {args.state}")
+        return _stock_balances(state)
+
+    if action == "post":
+        documents = json.loads(Path(args.docs).read_text(encoding="utf-8"))
+        if isinstance(documents, dict):
+            documents = documents.get("documents") or [documents]
+        result = stock_ledger.post_many(state, documents,
+                                        allow_negative=args.allow_negative,
+                                        reason=args.reason or "",
+                                        as_of_closed=args.closed_before)
+        stock_ledger.save(state, args.state)
+        print(f"документов: проведено {result['posted']} · повторно {result['duplicates']} · "
+              f"отклонено {result['rejected']} · движений {result['moves']}")
+        for item in result["errors"]:
+            print(f"  отказано [{item['code']}] {item['what']}: {item['why']}", file=sys.stderr)
+        for warning in result["warnings"]:
+            print(f"  замечание: {warning}", file=sys.stderr)
+        for gap in result["gaps"]:
+            print(f"  нужно запросить: {gap['what']} — {gap['ask']}", file=sys.stderr)
+        return 0 if result["rejected"] == 0 else 1
+
+    if action == "inventory":
+        rows, problems = stock_ledger.read_inventory_file(args.file)
+        for problem in problems:
+            print(f"  {problem}", file=sys.stderr)
+        doc = {"kind": "inventory", "number": args.number or f"ИНВ-3 от {args.date}",
+               "date": args.date, "warehouse": args.warehouse,
+               "lines": rows}
+        result = stock_ledger.post_document(state, doc, allow_negative=args.allow_negative,
+                                            reason=args.reason or "")
+        stock_ledger.save(state, args.state)
+        print(f"инвентаризация {doc['number']}: {result['status']}, движений {len(result['moves'])}")
+        for warning in result["warnings"]:
+            print(f"  {warning}")
+        for item in result["errors"]:
+            print(f"  отказано [{item['code']}] {item['what']}: {item['why']}", file=sys.stderr)
+        return 0 if result["status"] == stock_ledger.STATUS_OK else 1
+
+    if action == "verify":
+        summary = stock_ledger.verify(state)
+        print(f"{'OK' if summary['ok'] else 'РАСХОЖДЕНИЯ'}: движений {summary['moves']}, "
+              f"документов {summary['documents']}, отклонено {summary['rejected']} — "
+              f"{summary['summary']}")
+        for problem in summary["problems"]:
+            print(f"  [{problem['code']}] {problem['what']}: {problem['why']}", file=sys.stderr)
+        return 0 if summary["ok"] else 1
+
+    if action == "m29":
+        rows = stock_ledger.m29_rows(state, period=args.period)
+        form = print_forms.build_m29(rows["purchases"], rows["writeoffs"], period=args.period,
+                                     opening=rows["opening"],
+                                     requisites_dict=print_forms.requisites(
+                                         period=print_forms._month_label(args.period),
+                                         object_name=state.get("object") or ""))
+        paths = print_forms.write(form, args.out)
+        print(f"М-29 из движений склада за {args.period}: строк {len(form['rows'])} · "
+              f"остаток на начало {'есть' if form['totals']['opening_given'] else 'НЕ ЗАДАН'}")
+        for label, value in print_forms.totals_ru(form):
+            print(f"  {label}: {value}")
+        for warning in form["warnings"]:
+            print(f"  расхождение: {warning}", file=sys.stderr)
+        print(f"  файлы: {paths['docx']}, {paths['xlsx']}, {paths['md']}")
+        return 0
+
+    if action == "moves":
+        moves = stock_ledger.moves_of(state, item=args.item, warehouse=args.warehouse)
+        for move in moves[-args.limit:]:
+            print(f"{move['date']} {move['kind']:<13} {move['doc_id']:<18} "
+                  f"{move['warehouse']:<6} {move['item']:<18} "
+                  f"{move['qty']:>9.3f} {move['unit']:<3} "
+                  f"{(move['price'] if move['price'] is not None else '—'):>10} "
+                  f"{'[давальческий]' if move['daval'] else ''}")
+        print(f"всего движений: {len(moves)}")
+        return 0
+
+    if getattr(args, "all_contours", False):
+        daval = None  # оба контура: собственный и давальческий
+    else:
+        daval = bool(getattr(args, "daval", False))
+    return _stock_balances(state, as_of=getattr(args, "as_of", None),
+                           warehouse=getattr(args, "warehouse", None), daval=daval)
+
+
+def _stock_balances(state: dict, *, as_of: str | None = None, warehouse: str | None = None,
+                    daval: bool | None = False) -> int:
+    """Остатки. По умолчанию — только собственные: давальческие живут на 003 отдельно."""
+    rows = stock_ledger.balances(state, as_of=as_of, warehouse=warehouse, daval=daval)
+    if not rows:
+        print("остатков нет")
+        return 0
+    print(f"{'склад':<8} {'номенклатура':<20} {'кол-во':>12} {'ед.':<4} {'цена':>10} {'сумма':>14}")
+    total = 0.0
+    for row in rows:
+        amount = row["amount"] or 0.0
+        total += amount
+        print(f"{row['warehouse']:<8} {row['item']:<20} {row['qty']:>12.3f} {row['unit']:<4} "
+              f"{(row['price'] if row['price'] is not None else '—'):>10} {amount:>14,.2f}"
+              f"{'  (003)' if row['daval'] else ''}")
+    print(f"{'итого по остаткам:':<46} {total:>14,.2f} ₽")
+    return 0
+
+
 # ─────────────────────────── печатные формы КС-3 / КС-6а / М-29 ───────────────────────────
 def cmd_forms(args) -> int:
     req = {name: value for name, value in (("Объект", args.object_name),
@@ -524,14 +637,27 @@ def cmd_forms(args) -> int:
                                            ("Подрядчик", args.contractor),
                                            ("Номер акта", getattr(args, "number", ""))) if value}
     try:
-        form = print_forms.build_from_files(
-            args.form, period=args.period,
-            acts_path=getattr(args, "acts", None) or getattr(args, "summary", None),
-            purchases_path=getattr(args, "purchases", None),
-            writeoffs_path=getattr(args, "writeoffs", None),
-            norms_path=getattr(args, "norms", None), works_path=getattr(args, "works", None),
-            opening_path=getattr(args, "opening", None),
-            req=req, vat_rate=getattr(args, "vat_rate", None))
+        if getattr(args, "stock", None):
+            state = stock_ledger.load(args.stock)
+            rows = stock_ledger.m29_rows(state, period=args.period)
+            form = print_forms.build_m29(
+                rows["purchases"], rows["writeoffs"], period=args.period,
+                opening=rows["opening"],
+                requisites_dict=print_forms.requisites(
+                    period=print_forms._month_label(args.period),
+                    object_name=req.get("Объект") or state.get("object") or "",
+                    contract=req.get("Договор", ""),
+                    customer=req.get("Заказчик", ""),
+                    contractor=req.get("Подрядчик", "")))
+        else:
+            form = print_forms.build_from_files(
+                args.form, period=args.period,
+                acts_path=getattr(args, "acts", None) or getattr(args, "summary", None),
+                purchases_path=getattr(args, "purchases", None),
+                writeoffs_path=getattr(args, "writeoffs", None),
+                norms_path=getattr(args, "norms", None), works_path=getattr(args, "works", None),
+                opening_path=getattr(args, "opening", None),
+                req=req, vat_rate=getattr(args, "vat_rate", None))
     except ValueError as error:
         print(f"форма: {error}", file=sys.stderr)
         return 2
@@ -1967,6 +2093,61 @@ def main(argv=None):
     tkp.add_argument("--profiles", default=None, help="путь к pdf_profiles.json")
     tkp.add_argument("--cache", default=None, help="кэш текста страниц (json)")
     tkp.set_defaults(func=cmd_takeoff)
+    stk = sub.add_parser("stock", help="складской контур: движения, партии, остатки")
+    stks = stk.add_subparsers(dest="stock_action", required=True)
+
+    stk_demo = stks.add_parser("demo", help="собрать демо-склад (два склада, приходы, списания)")
+    stk_demo.add_argument("--state", default="out/stock/state.json")
+
+    stk_demo.set_defaults(func=cmd_stock)
+
+    stk_post = stks.add_parser("post", help="провести документы (приход, М-11, М-8, М-15, списание)")
+    stk_post.add_argument("--state", default="out/stock/state.json")
+    stk_post.add_argument("--docs", required=True, help="JSON: документ или список документов")
+    stk_post.add_argument("--allow-negative", dest="allow_negative", action="store_true",
+                          help="провести с отрицательным остатком (нужна --reason)")
+    stk_post.add_argument("--reason", default="", help="причина разрешения отрицательного остатка")
+    stk_post.add_argument("--closed-before", dest="closed_before", default=None,
+                          help="период закрыт по дату: проведение в него запрещено")
+    stk_post.set_defaults(func=cmd_stock)
+
+    stk_inv = stks.add_parser("inventory", help="инвентаризация ИНВ-3 из CSV: факт против учёта")
+    stk_inv.add_argument("--state", default="out/stock/state.json")
+    stk_inv.add_argument("--file", required=True)
+    stk_inv.add_argument("--warehouse", required=True)
+    stk_inv.add_argument("--date", required=True)
+    stk_inv.add_argument("--number", default="")
+    stk_inv.add_argument("--allow-negative", dest="allow_negative", action="store_true")
+    stk_inv.add_argument("--reason", default="")
+    stk_inv.set_defaults(func=cmd_stock)
+
+    stk_bal = stks.add_parser("balances", help="остатки по складам")
+    stk_bal.add_argument("--state", default="out/stock/state.json")
+    stk_bal.add_argument("--warehouse", default=None)
+    stk_bal.add_argument("--as-of", dest="as_of", default=None)
+    stk_bal.add_argument("--daval", action="store_true", default=False,
+                         help="показать только давальческие материалы (счёт 003)")
+    stk_bal.add_argument("--all", dest="all_contours", action="store_true",
+                         help="показать оба контура: собственный и давальческий")
+    stk_bal.set_defaults(func=cmd_stock)
+
+    stk_moves = stks.add_parser("moves", help="журнал движений")
+    stk_moves.add_argument("--state", default="out/stock/state.json")
+    stk_moves.add_argument("--item", default=None)
+    stk_moves.add_argument("--warehouse", default=None)
+    stk_moves.add_argument("--limit", type=int, default=50)
+    stk_moves.set_defaults(func=cmd_stock)
+
+    stk_ver = stks.add_parser("verify", help="сходится ли учёт: остатки против движений")
+    stk_ver.add_argument("--state", default="out/stock/state.json")
+    stk_ver.set_defaults(func=cmd_stock)
+
+    stk_m29 = stks.add_parser("m29", help="материальный отчёт М-29 из движений склада")
+    stk_m29.add_argument("--state", default="out/stock/state.json")
+    stk_m29.add_argument("--period", required=True)
+    stk_m29.add_argument("--out", default="out/forms")
+    stk_m29.set_defaults(func=cmd_stock)
+
     fm = sub.add_parser("forms", help="печатные формы КС-3, КС-6а, М-29 из артефактов прогона")
     fms = fm.add_subparsers(dest="form", required=True)
     common = [("--period", {"required": True, "help": "отчётный период: 2026-09 или ISO-дата"}),
@@ -1999,6 +2180,9 @@ def main(argv=None):
     fm2.add_argument("--norms", default="data/demo/consumption/norms.json")
     fm2.add_argument("--works", default="data/demo/consumption/works.json")
     fm2.add_argument("--opening", default=None, help='остаток на начало: json {материал: количество}')
+    fm2.add_argument("--stock", default=None,
+                     help="состояние склада: приход/расход/остаток берутся из движений, "
+                          "а не из CSV (тогда --purchases/--writeoffs не нужны)")
     for flag, options in common:
         fm2.add_argument(flag, **options)
     fm2.set_defaults(func=cmd_forms)
@@ -2127,6 +2311,6 @@ def main(argv=None):
     if args.cmd in ("audit-verify", "approve", "prices", "materials", "procure", "audit",
                     "takeoff", "tk", "cumulative", "atn", "consumption", "checklist",
                     "journal", "quality", "docflow", "correspondence", "pack", "finance",
-                    "monthly", "forms"):
+                    "monthly", "forms", "stock"):
         return result
     return 0
