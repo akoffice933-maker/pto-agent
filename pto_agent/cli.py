@@ -2431,6 +2431,271 @@ def cmd_web(args) -> int:
     return 0
 
 
+def cmd_payroll(args) -> int:
+    """Зарплата: табель → начисление → НДФЛ и взносы → проводки → ведомость."""
+    from . import payroll as wage
+
+    action = getattr(args, "payroll_action", "")
+    if action == "rules":
+        rules = wage.load_rules()
+        source = rules.get("source") or {}
+        print(f"правила на {source.get('checked_on')}: НДФЛ "
+              f"{'/'.join(str(b['rate']) for b in rules['ndfl']['resident_brackets'])} % · "
+              f"взносы {rules['contributions']['rate']} % до "
+              f"{wage.rub(rules['contributions']['base_limit'])}, "
+              f"{rules['contributions']['over_rate']} % сверх · травматизм "
+              f"{rules['contributions']['injury']['rate']} % "
+              f"(класс {rules['contributions']['injury']['class']})")
+        for item in source.get("items") or []:
+            print(f"  {item['what']} — {item['basis']}")
+        for text in source.get("conflicts") or []:
+            print(f"  ВНИМАНИЕ: {text}")
+        for text in rules.get("not_implemented") or []:
+            print(f"  не сделано: {text}")
+        return 0
+
+    if action == "calendar":
+        rules = wage.load_rules()
+        norm = wage.work_calendar(args.period, rules)
+        print(f"{args.period}: рабочих дней {norm['days']}, часов {norm['hours']}")
+        print(f"  {norm['source']}")
+        return 0
+
+    staff = wage.load_json(args.staff)
+    rules = wage.load_rules()
+    state = wage.load_state(args.state)
+
+    if action == "accrue":
+        timesheet = wage.load_json(args.timesheet)
+        report = wage.accrue(state, timesheet, staff, rules)
+        for item in report["errors"]:
+            print(f"  отказ [{item['code']}] {item['what']}: {item['why']}", file=sys.stderr)
+        for gap in report["gaps"]:
+            print(f"  нужно запросить: {gap['what']} — {gap['ask']}", file=sys.stderr)
+        for text in report["warnings"]:
+            print(f"  замечание: {text}", file=sys.stderr)
+        if report["errors"]:
+            return 1
+        wage.remember(state, report, rules=rules)
+        wage.save_state(state, args.state)
+        totals = report["totals"]
+        print(f"начислено за {report['period']}: {wage.rub(totals['accrued'])} · НДФЛ "
+              f"{wage.rub(totals['ndfl'])} · взносы {wage.rub(totals['contrib'])} · "
+              f"травматизм {wage.rub(totals['injury'])} · к выплате {wage.rub(totals['net'])} · "
+              f"стоимость {wage.rub(totals['cost'])}")
+        for text in report.get("not_included") or []:
+            print(f"  не считано: {text['what']} — {text['why']}", file=sys.stderr)
+        return 0
+
+    if action == "sheet":
+        report = wage.sheet(state, args.period)
+        if not report["found"]:
+            print(f"за {args.period} начисления нет", file=sys.stderr)
+            return 1
+        print(wage.to_markdown(report))
+        if args.out:
+            path = Path(args.out)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(wage.to_markdown(report), encoding="utf-8")
+            print(f"  файл: {path}")
+        return 0
+
+    if action == "post":
+        row = next((item for item in state.get("periods") or []
+                    if item.get("period") == args.period), None)
+        if not row:
+            print(f"за {args.period} начисления нет: сначала payroll accrue", file=sys.stderr)
+            return 1
+        ledger_state = accounting.load(args.ledger)
+        result = wage.post_ledger(ledger_state, row, mode=args.mode)
+        accounting.save(ledger_state, args.ledger)
+        print(f"проводки по зарплате за {args.period}: создано {result['posted']} · повторно "
+              f"{result['duplicates']} · отказано {result['rejected']}")
+        for item in result["errors"]:
+            print(f"  отказано [{item['code']}] {item['what']}: {item['why']}", file=sys.stderr)
+        summary = accounting.verify(ledger_state)
+        print(f"  журнал: {'сходится' if summary['ok'] else 'НЕ сходится'} · {summary['summary']}")
+        return 0 if result["rejected"] == 0 and summary["ok"] else 1
+
+    if action == "fund":
+        report = wage.fund_report(state, rules=rules)
+        print(f"фонд оплаты труда: месяцев {report['periods']}")
+        print(f"{'месяц':<9} {'начислено':>14} {'НДФЛ':>12} {'взносы':>13} {'к выплате':>13}")
+        for row in report["rows"]:
+            print(f"{row['period']:<9} {row['accrued']:>14,.2f} {row['ndfl']:>12,.2f} "
+                  f"{row['contrib']:>13,.2f} {row['net']:>13,.2f}")
+        print(f"  {report['note']}")
+        return 0
+
+    if action == "verify":
+        report = wage.verify(state)
+        print(f"ведомости: {report['periods']} · {report['summary']}")
+        for item in report["problems"]:
+            print(f"  ✗ [{item['code']}] {item.get('period')} {item.get('what')}: {item['why']}")
+        return 0 if report["ok"] else 1
+
+    if action == "requests":
+        row = next((item for item in state.get("periods") or []
+                    if item.get("period") == args.period), None)
+        if not row:
+            print(f"за {args.period} начисления нет", file=sys.stderr)
+            return 1
+        requests = wage.payout_requests(row, date=args.date or f"{args.period}-30")
+        print(f"заявки на выплату за {args.period}: {len(requests)}")
+        for request in requests:
+            print(f"  {request['number']} · {request['counterparty']} · "
+                  f"{wage.rub(request['amount'])}")
+        if args.out:
+            path = Path(args.out)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(requests, ensure_ascii=False, indent=2),
+                            encoding="utf-8")
+            print(f"  файл: {path}")
+        return 0
+
+    print("что делать: rules · calendar · accrue · sheet · post · fund · verify · requests",
+          file=sys.stderr)
+    return 2
+
+
+def cmd_tax(args) -> int:
+    """Налоги: НДС, 6-НДФЛ, РСВ — из журнала и ведомости, с проверкой ставок и реквизитов."""
+    from . import payroll as wage
+    from . import tax as taxes
+
+    action = getattr(args, "tax_action", "")
+    rates = taxes.load_rates()
+
+    if action == "rates":
+        for row in rates["vat"]["periods"]:
+            print(f"НДС {row['rate']:>4} % · с {row['from']} по {row['to'] or '—'} · {row['basis']}")
+        forms = rates.get("forms") or {}
+        for key, title in (("vat", "НДС"), ("rsv", "РСВ"), ("profit", "прибыль"),
+                           ("property", "имущество")):
+            row = forms.get(key) or {}
+            if not row:
+                continue
+            flag = " ⚠ сверить" if row.get("verify") else ""
+            print(f"{title}: КНД {row.get('knd')} · {row.get('order')} · "
+                  f"формат {row.get('format_version') or '—'}{flag}")
+            if row.get("knd") is None:
+                print(f"  {row.get('knd_note') or 'номер формы не подтверждён'}")
+            if row.get("state"):
+                print(f"  {row['state']}")
+        organisation = rates.get("organisation") or {}
+        print(f"организация: {organisation.get('name')} · ИНН {organisation.get('inn')} "
+              f"({taxes.inn_ok(organisation.get('inn'))}) · КПП {organisation.get('kpp')} "
+              f"({taxes.kpp_ok(organisation.get('kpp'))})")
+        for text in rates.get("not_implemented") or []:
+            print(f"  не сделано: {text}")
+        return 0
+
+    kind = {"vat": "vat", "ndfl": "ndfl6", "ndfl6": "ndfl6", "rsv": "rsv"}.get(action) or \
+        getattr(args, "kind", "")
+    if action == "xml":
+        kind = getattr(args, "kind", "")
+        action = {"vat": "vat", "ndfl6": "ndfl", "ndfl": "ndfl", "rsv": "rsv"}.get(kind, "")
+
+    if action == "vat" or kind == "vat":
+        ledger_state = accounting.load(args.ledger)
+        report = taxes.vat_return(ledger_state, args.period, rates=rates)
+    elif action in ("ndfl", "ndfl6") or kind == "ndfl6":
+        payroll_state = wage.load_state(args.payroll)
+        ledger_state = accounting.load(args.ledger) if args.ledger else None
+        report = taxes.ndfl_return(payroll_state, args.period, ledger_state=ledger_state,
+                                   rates=rates)
+    elif action == "rsv" or kind == "rsv":
+        payroll_state = wage.load_state(args.payroll)
+        ledger_state = accounting.load(args.ledger) if args.ledger else None
+        report = taxes.rsv(payroll_state, args.period, ledger_state=ledger_state, rates=rates)
+    else:
+        print("что делать: rates · vat · ndfl · rsv · xml · check", file=sys.stderr)
+        return 2
+
+    if getattr(args, "tax_action", "") == "xml":
+        print(taxes.to_xml(report))
+        return 0
+
+    print(taxes.to_markdown(report))
+    problems = taxes.validate(report, rates=rates)
+    for item in problems:
+        print(f"  ✗ [{item['code']}] {item.get('what')}: {item['why']}", file=sys.stderr)
+    if args.out:
+        path = Path(args.out)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.with_suffix(".md").write_text(taxes.to_markdown(report), encoding="utf-8")
+        path.with_suffix(".xml").write_text(taxes.to_xml(report), encoding="utf-8")
+        path.with_suffix(".json").write_text(json.dumps(report, ensure_ascii=False, indent=2),
+                                             encoding="utf-8")
+        print(f"  файлы: {path.with_suffix('.md')}, {path.with_suffix('.xml')}, "
+              f"{path.with_suffix('.json')}")
+    return 0 if not report.get("problems") else 1
+
+
+def cmd_sign(args) -> int:
+    """Подпись: только провайдером. Без КриптоПро — отказ с кодом, а не «подписано»."""
+    from . import sign as signing
+
+    if getattr(args, "sign_action", "") == "tools":
+        for key, value in signing.toolchain().items():
+            print(f"{key}: {value}")
+        return 0
+    try:
+        result = signing.sign_file(args.file, provider=signing.get_provider(args.provider),
+                                   out=args.out, pin=args.pin)
+    except signing.SigningError as exc:
+        print(f"отказ [{exc.code}] {exc.why}", file=sys.stderr)
+        return 1
+    if result["status"] == signing.STATUS_SIGNED:
+        print(signing.scenario_report(result))
+        return 0
+    print(f"{result['status']}: {result['why']}", file=sys.stderr)
+    print(f"  отпечаток: {result['fingerprint']['sha256'][:32]}… "
+          f"({result['fingerprint']['kind']})")
+    return 1
+
+
+def cmd_edo(args) -> int:
+    """ЭДО: тренировка, отправка, статус. Дубль одного комплекта не отправляется дважды."""
+    from . import edo as exchange
+
+    action = getattr(args, "edo_action", "")
+    state = exchange.load_state(args.state)
+    if action == "outbox":
+        print(exchange.outbox_markdown(state))
+        return 0
+    if action == "status":
+        client = exchange.DiadocClient(base_url=args.base_url, login=args.box,
+                                       token=args.token or "")
+        try:
+            payload = client.get_message(box=args.box, message_id=args.message_id)
+        except exchange.EdoError as exc:
+            print(f"отказ [{exc.code}] {exc.why}", file=sys.stderr)
+            return 1
+        print(json.dumps(payload, ensure_ascii=False, indent=2)[:2000])
+        return 0
+    documents = [Path(item) for item in (args.documents or [])]
+    if action in ("send", "dry-run"):
+        client = None
+        if action == "send":
+            client = exchange.DiadocClient(base_url=args.base_url, login=args.box,
+                                           password=args.password or "",
+                                           token=args.token or "")
+        result = exchange.send(state, box=args.box, to_box=args.to, number=args.number,
+                               documents=documents, client=client,
+                               dry_run=(action == "dry-run"),
+                               document_type=args.document_type or "Договор")
+        exchange.save_state(state, args.state)
+        print(f"{result['status']}"
+              + (f" · повтор, второе сообщение не создано" if result.get("duplicate") else "")
+              + (f" · сообщение {result['message_id']}" if result.get("message_id") else ""))
+        if result.get("why"):
+            print(f"  {result['why']}")
+        return 0 if result["status"] in (exchange.STATUS_SENT, exchange.STATUS_QUEUED) else 1
+    print("что делать: dry-run · send · status · outbox", file=sys.stderr)
+    return 2
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     # подкоманды CAD и MCP живут в своих пакетах: делегируем до разбора argparse,
@@ -3218,6 +3483,96 @@ def main(argv=None):
     web.add_argument("--secret", default=None,
                      help="ключ сессии: без него сессии сбрасываются при перезапуске")
     web.set_defaults(func=cmd_web)
+
+    payroll = sub.add_parser("payroll", help="зарплата: табель, начисление, НДФЛ и взносы, проводки")
+    payroll.add_argument("--state", default="out/payroll/state.json")
+    payroll.add_argument("--staff", default="data/demo/payroll/staff.json")
+    payroll.add_argument("--ledger", default="out/ledger/state.json")
+    pay_sub = payroll.add_subparsers(dest="payroll_action")
+    pay_rules = pay_sub.add_parser("rules", help="ставки, пороги и источники")
+    pay_rules.set_defaults(func=cmd_payroll)
+    pay_cal = pay_sub.add_parser("calendar", help="норма дней и часов месяца")
+    pay_cal.add_argument("period")
+    pay_cal.set_defaults(func=cmd_payroll)
+    pay_accrue = pay_sub.add_parser("accrue", help="начислить за месяц по табелю")
+    pay_accrue.add_argument("--timesheet", required=True)
+    pay_accrue.set_defaults(func=cmd_payroll)
+    pay_sheet = pay_sub.add_parser("sheet", help="расчётная ведомость Т-51")
+    pay_sheet.add_argument("--period", required=True)
+    pay_sheet.add_argument("--out", default=None)
+    pay_sheet.set_defaults(func=cmd_payroll)
+    pay_post = pay_sub.add_parser("post", help="провести начисление в журнал")
+    pay_post.add_argument("--period", required=True)
+    pay_post.add_argument("--mode", default=None, choices=["проводить", "предлагать"])
+    pay_post.set_defaults(func=cmd_payroll)
+    pay_fund = pay_sub.add_parser("fund", help="фонд оплаты труда по месяцам")
+    pay_fund.set_defaults(func=cmd_payroll)
+    pay_verify = pay_sub.add_parser("verify", help="сходимость ведомостей")
+    pay_verify.set_defaults(func=cmd_payroll)
+    pay_req = pay_sub.add_parser("requests", help="заявки на выплату зарплаты")
+    pay_req.add_argument("--period", required=True)
+    pay_req.add_argument("--date", default=None)
+    pay_req.add_argument("--out", default=None)
+    pay_req.set_defaults(func=cmd_payroll)
+    payroll.set_defaults(func=cmd_payroll)
+
+    taxes = sub.add_parser("tax", help="налоги: НДС, 6-НДФЛ, РСВ, XML")
+    taxes.add_argument("--ledger", default="out/ledger/state.json")
+    taxes.add_argument("--payroll", default="out/payroll/state.json")
+    taxes.add_argument("--out", default=None)
+    tax_sub = taxes.add_subparsers(dest="tax_action")
+    tax_rates = tax_sub.add_parser("rates", help="ставки на дату и реквизиты")
+    tax_rates.set_defaults(func=cmd_tax)
+    for name, help_text in (("vat", "декларация по НДС из журнала"),
+                            ("ndfl", "6-НДФЛ из ведомости"),
+                            ("rsv", "РСВ и травматизм")):
+        node = tax_sub.add_parser(name, help=help_text)
+        node.add_argument("period")
+        node.set_defaults(func=cmd_tax)
+    tax_xml = tax_sub.add_parser("xml", help="XML отчёта")
+    tax_xml.add_argument("kind", choices=["vat", "ndfl6", "rsv"])
+    tax_xml.add_argument("period")
+    tax_xml.set_defaults(func=cmd_tax)
+    taxes.set_defaults(func=cmd_tax)
+
+    signing = sub.add_parser("sign", help="подпись документа (УКЭП через КриптоПро)")
+    signing.add_argument("--provider", default=None, choices=["pycades", "stub"])
+    sign_sub = signing.add_subparsers(dest="sign_action")
+    sign_tools = sign_sub.add_parser("tools", help="что в системе есть для подписи")
+    sign_tools.set_defaults(func=cmd_sign)
+    sign_sign = sign_sub.add_parser("file", help="подписать файл")
+    sign_sign.add_argument("file")
+    sign_sign.add_argument("--out", default=None)
+    sign_sign.add_argument("--pin", default=None)
+    sign_sign.set_defaults(func=cmd_sign)
+    signing.set_defaults(func=cmd_sign)
+
+    edo = sub.add_parser("edo", help="ЭДО: Диадок, тренировка и отправка")
+    edo.add_argument("--state", default="out/edo/state.json")
+    edo.add_argument("--box", default="")
+    edo.add_argument("--base-url", default="https://diadoc-api.kontur.ru")
+    edo.add_argument("--token", default="")
+    edo_sub = edo.add_subparsers(dest="edo_action")
+    edo_dry = edo_sub.add_parser("dry-run", help="проверить комплект без отправки")
+    edo_dry.add_argument("--to", required=True)
+    edo_dry.add_argument("--number", required=True)
+    edo_dry.add_argument("--documents", nargs="+", required=True)
+    edo_dry.add_argument("--document-type", default=None)
+    edo_dry.set_defaults(func=cmd_edo)
+    edo_send = edo_sub.add_parser("send", help="отправить комплект в Диадок")
+    edo_send.add_argument("--to", required=True)
+    edo_send.add_argument("--number", required=True)
+    edo_send.add_argument("--documents", nargs="+", required=True)
+    edo_send.add_argument("--document-type", default=None)
+    edo_send.add_argument("--password", default=None)
+    edo_send.set_defaults(func=cmd_edo)
+    edo_status = edo_sub.add_parser("status", help="статус сообщения")
+    edo_status.add_argument("message_id")
+    edo_status.set_defaults(func=cmd_edo)
+    edo_outbox = edo_sub.add_parser("outbox", help="журнал отправок")
+    edo_outbox.set_defaults(func=cmd_edo)
+    edo.set_defaults(func=cmd_edo)
+
 
     args = p.parse_args(argv)
     result = args.func(args)

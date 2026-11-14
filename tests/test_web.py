@@ -394,3 +394,79 @@ def test_login_page_shows_demo_roles_for_operator(client):
     assert page.status_code == 200
     assert "demo-prokhorov" in page.text
     assert "AD/LDAP" in page.text, "не сделано должно быть написано на экране, а не в отчёте"
+
+
+# ─────────────────────────── 10. зарплата ───────────────────────────
+def test_payroll_screen_shows_sheet_and_rates(client):
+    login(client, "buh")
+    page = client.get("/payroll")
+    assert page.status_code == 200, page.text
+    text = page.text
+    assert "Т-51" in text, "ведомость должна быть на экране, а не только в CLI"
+    assert "897 318,18" in text, "начисление за октябрь берётся из расчёта, а не рисуется"
+    assert "114 233,37" in text, "НДФЛ за октябрь"
+    assert "Не считается" in text, "на экране должно быть написано, чего нет"
+    assert "больничные" in text, "причина «не включено» — тоже на экране"
+    assert "2 979 000" in text or "30 %" in text
+
+
+def test_payroll_period_switch_reads_saved_month(client):
+    login(client, "buh")
+    september = client.get("/payroll?period=2026-09")
+    october = client.get("/payroll?period=2026-10")
+    assert "910 000,00" in september.text, "сентябрь — по сохранённому расчёту"
+    assert "897 318,18" in october.text
+
+
+def test_agent_sees_payroll_but_cannot_post_it(client):
+    login(client, "agent")
+    page = client.get("/payroll")
+    assert page.status_code == 200
+    assert "Провести начисление" not in page.text, "у ИИ-агента нет кнопки проведения"
+    response = client.post("/payroll/post", data={"period": "2026-10", "csrf": csrf(client)})
+    assert response.status_code == 403
+    assert "AGENT_FORBIDDEN" in response.text, "отказ должен быть техническим, с кодом"
+
+
+def test_foreman_cannot_post_payroll(client):
+    login(client, "prokhorov")
+    assert client.get("/payroll").status_code == 200
+    response = client.post("/payroll/post", data={"period": "2026-10", "csrf": csrf(client)})
+    assert response.status_code == 403
+    assert "FORBIDDEN" in response.text
+
+
+def test_accountant_posting_is_idempotent(root):
+    """Проводки зарплаты уже сделаны демо-сборкой: повтор даёт «повторно», а не дубль."""
+    client = TestClient(create_app(root=root))
+    login(client, "buh")
+    before = len(state(root, "ledger")["entries"])
+    response = client.post("/payroll/post", data={"period": "2026-10", "csrf": csrf(client)},
+                           follow_redirects=True)
+    assert response.status_code == 200
+    assert len(state(root, "ledger")["entries"]) == before, "повторное проведение создало дубль"
+    assert "повторно" in response.text
+
+
+def test_payroll_requests_go_to_treasury_with_route(root):
+    client = TestClient(create_app(root=root))
+    login(client, "buh")
+    response = client.post("/payroll/requests", data={"period": "2026-10",
+                                                      "date": "2026-11-05",
+                                                      "csrf": csrf(client)},
+                           follow_redirects=False)
+    assert response.status_code == 303
+    cash = state(root, "treasury")
+    numbers = [row["number"] for row in cash["requests"] if row["number"].startswith("ЗП-")]
+    assert len(numbers) == 7, f"заявок на выплату {len(numbers)}"
+    salary = next(row for row in cash["requests"] if row["number"] == numbers[0])
+    assert salary["route"] == ["руководитель"], "зарплату согласует руководитель, а не снабжение"
+    assert salary["article"] == "зарплата"
+    assert salary["basis"]["number"] == "Т-51 за 2026-10"
+
+
+def test_agent_cannot_create_payroll_requests(client):
+    login(client, "agent")
+    response = client.post("/payroll/requests", data={"period": "2026-10", "csrf": csrf(client)})
+    assert response.status_code == 403
+    assert "AGENT_FORBIDDEN" in response.text

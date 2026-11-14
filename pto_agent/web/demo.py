@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .. import ledger, stock, treasury
+from .. import ledger, payroll, stock, treasury
 from . import auth
 
 REPO = Path(__file__).resolve().parents[2]
@@ -52,6 +52,27 @@ def build(root: str | Path, *, demo_dir: str | Path | None = None,
         treasury.add_request(cash_state, dict(row))
     treasury.save(cash_state, root / "treasury" / "state.json")
 
+    # ── зарплата: табель → начисление → проводки (те же функции, что в CLI) ──
+    staff_payload = _load(demo_dir / "payroll" / "staff.json")
+    payroll_rules = payroll.load_rules()
+    payroll_state = payroll.new_state(object_name=staff_payload.get("object") or "")
+    payroll_done = []
+    for period in ("2026-09", "2026-10"):
+        path = demo_dir / "payroll" / f"timesheet_{period.replace('-', '_')}.json"
+        if not path.exists():
+            continue
+        report = payroll.accrue(payroll_state, _load(path), staff_payload, payroll_rules)
+        if report.get("errors"):
+            continue
+        payroll.remember(payroll_state, report, rules=payroll_rules)
+        payroll_done.append({"period": period, "accrued": report["totals"]["accrued"],
+                             "net": report["totals"]["net"]})
+    last = next((row for row in payroll_state["periods"]
+                 if row.get("period") == "2026-10"), None)
+    if last:
+        payroll.post_ledger(ledger_state, last)
+    payroll.save_state(payroll_state, root / "payroll" / "state.json")
+
     ledger.save(ledger_state, root / "ledger" / "state.json")
 
     users_path = Path(data_dir) / "users.json"
@@ -65,6 +86,8 @@ def build(root: str | Path, *, demo_dir: str | Path | None = None,
                   "rows": len(stock.balances(stock_state))},
         "treasury": {"requests": len(cash_state.get("requests") or []),
                      "paid": len(cash_state.get("payments") or [])},
+        "payroll": {"periods": payroll_done,
+                    "net": round(sum(float(row["net"]) for row in payroll_done), 2)},
         "ledger": {"entries": len(ledger_state.get("entries") or []),
                    "balanced": ledger.verify(ledger_state)["ok"]},
         "users": len(auth.load(users_path).get("users") or []),

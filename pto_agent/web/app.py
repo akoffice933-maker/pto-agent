@@ -25,7 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from .. import closing, forms, ledger, stock, treasury
+from .. import closing, forms, ledger, payroll, stock, treasury
 from . import auth, rbac
 from .store import Store
 
@@ -239,6 +239,7 @@ def create_app(*, root: str | Path | None = None, data_dir: str | Path | None = 
             ("act.view", "/acts", "Акты КС-2"),
             ("request.view", "/requests", "Заявки"),
             ("postings.view", "/postings", "Проводки и ОСВ"),
+            ("payroll.view", "/payroll", "Зарплата"),
             ("closing.view", "/closing", "Закрытие месяца"),
             ("audit.view", "/audit", "Аудит"),
             ("admin.rbac", "/roles", "Роли"),
@@ -645,6 +646,94 @@ def create_app(*, root: str | Path | None = None, data_dir: str | Path | None = 
         else:
             _flash(request, "ok", f"{number}: оплата проведена, статус "
                                   f"{status_text(result.get('status'))}")
+        return RedirectResponse("/requests", status_code=303)
+
+    # ─────────────────────────── зарплата ───────────────────────────
+    @app.get("/payroll", response_class=HTMLResponse)
+    def payroll_page(request: Request):
+        user = _require(request, "payroll.view")
+        state = store.payroll_state()
+        rules = payroll.load_rules()
+        periods = sorted({str(row.get("period") or "")
+                          for row in state.get("periods") or [] if row.get("period")})
+        period = request.query_params.get("period") or (periods[-1] if periods else
+                                                        _default_period(store))
+        sheet = payroll.sheet(state, period) if period in periods else None
+        timesheet = store.timesheet(period)
+        staff = store.staff()
+        check = (payroll.check_timesheet(timesheet, staff, rules)
+                 if timesheet else (None, [], []))
+        return render(request, "payroll.html", user, period=period, periods=periods,
+                      current=period, sheet=sheet, timesheet=timesheet,
+                      norm=check[0], problems=check[1], gaps=check[2],
+                      staff=staff, rules=rules,
+                      fund=payroll.fund_report(state, rules=rules),
+                      verify=payroll.verify(state) if periods else None,
+                      sources=(rules.get("source") or {}).get("items") or [],
+                      conflicts=(rules.get("source") or {}).get("conflicts") or [],
+                      checked_on=(rules.get("source") or {}).get("checked_on") or "",
+                      not_included=rules.get("not_implemented") or [])
+
+    @app.post("/payroll/post")
+    async def payroll_post(request: Request):
+        user = _guard(request, "payroll.post")
+        form = await request.form()
+        _check_csrf(request, str(form.get("csrf") or ""))
+        period = str(form.get("period") or "").strip()
+        state = store.payroll_state()
+        row = next((item for item in state.get("periods") or []
+                    if item.get("period") == period), None)
+        if not row:
+            _flash(request, "err", f"за {period} начисления нет: сначала считается табель")
+            return RedirectResponse(f"/payroll?period={quote(period)}", status_code=303)
+        ledger_state = store.ledger_state()
+        with store.lock:
+            result = payroll.post_ledger(ledger_state, row)
+            if result.get("posted"):
+                store.save_ledger(ledger_state)
+        _audit(request, user, "зарплата.проведена", period,
+               {"posted": result.get("posted"), "duplicates": result.get("duplicates"),
+                "rejected": result.get("rejected"),
+                "errors": [item.get("code") for item in result.get("errors") or []]})
+        _flash(request, "ok" if not result.get("errors") else "warn",
+               f"за {period}: проводок создано {result.get('posted')}, повторно "
+               f"{result.get('duplicates')}, отказано {result.get('rejected')}")
+        return RedirectResponse(f"/payroll?period={quote(period)}", status_code=303)
+
+    @app.post("/payroll/requests")
+    async def payroll_requests(request: Request):
+        user = _guard(request, "payroll.pay")
+        form = await request.form()
+        _check_csrf(request, str(form.get("csrf") or ""))
+        period = str(form.get("period") or "").strip()
+        date = str(form.get("date") or _date.today().isoformat())
+        state = store.payroll_state()
+        row = next((item for item in state.get("periods") or []
+                    if item.get("period") == period), None)
+        if not row:
+            _flash(request, "err", f"за {period} начисления нет")
+            return RedirectResponse(f"/payroll?period={quote(period)}", status_code=303)
+        cash_state = store.treasury_state()
+        created, refused = 0, []
+        with store.lock:
+            for item in payroll.payout_requests(row, date=date):
+                result = treasury.add_request(cash_state, item)
+                if result.get("errors"):
+                    refused.append({"number": item["number"],
+                                    "codes": [error.get("code") for error in result["errors"]],
+                                    "why": (result["errors"] or [{}])[0].get("why")})
+                else:
+                    created += 1
+            if created:
+                store.save_treasury(cash_state)
+        _audit(request, user, "зарплата.заявки", period,
+               {"created": created, "refused": refused, "date": date})
+        if refused:
+            _flash(request, "warn", f"заявок создано {created}, не принято {len(refused)}: "
+                                    f"{refused[0]['codes']} — {refused[0]['why']}")
+        else:
+            _flash(request, "ok", f"заявок на выплату за {period}: {created}. "
+                                  "Согласование и оплата — на экране «Заявки».")
         return RedirectResponse("/requests", status_code=303)
 
     # ─────────────────────────── проводки ───────────────────────────

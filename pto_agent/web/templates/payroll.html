@@ -1,0 +1,178 @@
+{% extends "base.html" %}
+{% block title %}Зарплата{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Зарплата</h1>
+  <div class="muted">Табель → начисление → НДФЛ и взносы → проводки → ведомость → заявки на выплату.
+    Каждая цифра — из табеля и справочника ставок, а не «по памяти».</div>
+</div>
+
+<section class="card">
+  <div class="row spread">
+    <h2>Период {{ period }}</h2>
+    <form method="get" action="/payroll" class="row">
+      <label class="inline">месяц
+        <select name="period" onchange="this.form.submit()">
+          {% for item in periods %}<option value="{{ item }}" {{ 'selected' if item == current else '' }}>{{ item }}</option>{% endfor %}
+          {% if not periods %}<option value="{{ current }}">{{ current }}</option>{% endif %}
+        </select>
+      </label>
+    </form>
+  </div>
+
+  {% if sheet %}
+  <div class="cards">
+    <div class="kpi"><div class="kpi-label">начислено</div><div class="kpi-value">{{ sheet.totals.accrued|rub }}</div></div>
+    <div class="kpi"><div class="kpi-label">НДФЛ</div><div class="kpi-value">{{ sheet.totals.ndfl|rub }}</div></div>
+    <div class="kpi"><div class="kpi-label">взносы</div><div class="kpi-value">{{ sheet.totals.contrib|rub }}</div></div>
+    <div class="kpi"><div class="kpi-label">травматизм</div><div class="kpi-value">{{ sheet.totals.injury|rub }}</div></div>
+    <div class="kpi"><div class="kpi-label">к выплате</div><div class="kpi-value">{{ sheet.totals.net|rub }}</div></div>
+    <div class="kpi"><div class="kpi-label">стоимость для организации</div><div class="kpi-value">{{ sheet.totals.cost|rub }}</div></div>
+  </div>
+  <p class="muted small">Стоимость = начислено + взносы + травматизм. НДФЛ в стоимость не входит:
+    это деньги работника, а не расход организации.</p>
+  {% else %}
+  <p class="muted">За {{ period }} начисления нет. Ниже — табель месяца, если он есть:
+    начисление делается из табеля, а не из оклада «на глаз».</p>
+  {% endif %}
+
+  {% if can('payroll.post') %}
+  <form method="post" action="/payroll/post" class="row">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="period" value="{{ period }}">
+    <button class="primary" type="submit" {{ 'disabled' if not sheet else '' }}>Провести начисление в журнал</button>
+    <span class="muted small">20.01 ← 70, 69.01, 69.11 · 70 → 68.01. Повторная проводка не задвоится.</span>
+  </form>
+  {% else %}
+  <p class="muted small">Начисление проводит бухгалтер: у вашей роли нет права <code>payroll.post</code>.
+    ИИ-агент видит ведомость, но не проводит её.</p>
+  {% endif %}
+
+  {% if can('payroll.pay') %}
+  <form method="post" action="/payroll/requests" class="row">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="period" value="{{ period }}">
+    <label class="inline">дата выплаты
+      <input type="date" name="date" value="{{ today }}">
+    </label>
+    <button type="submit" {{ 'disabled' if not sheet else '' }}>Выставить заявки на выплату</button>
+    <span class="muted small">Заявки идут в казначейство: маршрут «руководитель» → оплата Дт 70 Кт 51.</span>
+  </form>
+  {% endif %}
+</section>
+
+{% if sheet %}
+<section class="card">
+  <h2>Расчётно-платёжная ведомость (Т-51) за {{ sheet.period }}</h2>
+  <table class="table compact">
+    <thead>
+      <tr><th>таб.</th><th>сотрудник</th><th>объект</th><th class="num">оклад</th>
+          <th class="num">дни</th><th class="num">начислено</th><th class="num">вычет</th>
+          <th class="num">НДФЛ</th><th class="num">взносы</th><th class="num">травм.</th>
+          <th class="num">к выплате</th></tr>
+    </thead>
+    <tbody>
+      {% for row in sheet.rows %}
+      <tr>
+        <td>{{ row.tab }}</td>
+        <td>{{ row.name }}<div class="muted small">{{ row.position }}</div></td>
+        <td class="muted small">{{ row.object }}</td>
+        <td class="num">{{ row.salary|rub }}</td>
+        <td class="num">{{ row.worked_days }} / {{ row.norm_days }}</td>
+        <td class="num">{{ row.accrued|rub }}</td>
+        <td class="num">{{ row.deduction|rub }}{% if row.deduction_why %}<div class="muted small">{{ row.deduction_why }}</div>{% endif %}</td>
+        <td class="num">{{ row.ndfl|rub }}<div class="muted small">{{ row.ndfl_steps|length }} ступ.</div></td>
+        <td class="num">{{ row.contrib|rub }}</td>
+        <td class="num">{{ row.injury|rub }}</td>
+        <td class="num">{{ row.net|rub }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+    <tfoot>
+      <tr>
+        <th colspan="5">итого: {{ sheet.rows|length }} чел.</th>
+        <th class="num">{{ sheet.totals.accrued|rub }}</th>
+        <th class="num">{{ sheet.totals.deductions|rub }}</th>
+        <th class="num">{{ sheet.totals.ndfl|rub }}</th>
+        <th class="num">{{ sheet.totals.contrib|rub }}</th>
+        <th class="num">{{ sheet.totals.injury|rub }}</th>
+        <th class="num">{{ sheet.totals.net|rub }}</th>
+      </tr>
+    </tfoot>
+  </table>
+  <p class="muted small">Оклад делится на норму дней месяца: {{ sheet.norm.days }} дн. /
+    {{ sheet.norm.hours }} ч. Недоделанные дни уменьшают начисление, переработка не
+    оплачивается молча — она попадает в замечания.</p>
+</section>
+{% endif %}
+
+{% if timesheet %}
+<section class="card">
+  <h2>Табель {{ period }}</h2>
+  <p class="muted">норма: {{ norm.days if norm else '—' }} дн. · {{ norm.hours if norm else '—' }} ч.
+    {% if norm and norm.source %}<span class="small">({{ norm.source }})</span>{% endif %}</p>
+  {% if problems %}
+  <div class="flash flash-err">
+    {% for item in problems %}<div><b>{{ item.code }}</b> · {{ item.what }}: {{ item.why }}</div>{% endfor %}
+  </div>
+  {% endif %}
+  {% if gaps %}
+  <div class="flash flash-warn">
+    {% for item in gaps %}<div>нужно запросить: {{ item.what }} — {{ item.ask }}</div>{% endfor %}
+  </div>
+  {% endif %}
+  <table class="table compact">
+    <thead><tr><th>таб.</th><th>сотрудник</th><th class="num">отработано дней</th></tr></thead>
+    <tbody>
+      {% for row in timesheet.rows %}
+      <tr><td>{{ row.tab }}</td>
+          <td>{{ (staff.employees|selectattr('tab','equalto',row.tab)|list|first or {}).get('name','—') }}</td>
+          <td class="num">{{ row.worked_days }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>Фонд оплаты труда</h2>
+  {% if fund.rows %}
+  <table class="table compact">
+    <thead><tr><th>месяц</th><th class="num">начислено</th><th class="num">НДФЛ</th>
+      <th class="num">взносы</th><th class="num">к выплате</th><th class="num">стоимость</th></tr></thead>
+    <tbody>
+      {% for row in fund.rows %}
+      <tr><td>{{ row.period }}</td><td class="num">{{ row.accrued|rub }}</td>
+          <td class="num">{{ row.ndfl|rub }}</td><td class="num">{{ row.contrib|rub }}</td>
+          <td class="num">{{ row.net|rub }}</td><td class="num">{{ row.cost|rub }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="muted">Начислений ещё нет.</p>{% endif %}
+  <p class="muted small">{{ fund.note }}</p>
+  {% if verify %}
+  <p class="muted small">сходимость ведомостей: {{ verify.summary }}</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Ставки и что не считается</h2>
+  <table class="table compact">
+    <thead><tr><th>что</th><th>основание</th></tr></thead>
+    <tbody>
+      {% for item in sources %}
+      <tr><td>{{ item.what }}</td><td class="muted small">{{ item.basis }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% for text in conflicts %}
+  <div class="flash flash-warn">{{ text }}</div>
+  {% endfor %}
+  <h3>Не считается</h3>
+  <ul class="muted small">
+    {% for text in not_included %}<li>{{ text }}</li>{% endfor %}
+  </ul>
+  <p class="muted small">Спорное не досчитывается «примерно»: оно либо помечено «на проверку»
+    с причиной, либо не считается вовсе.</p>
+</section>
+{% endblock %}

@@ -1,0 +1,99 @@
+{
+  "schema": "pto-agent/staff@1",
+  "object": "ЖК «Северный», корпус 2",
+  "organization": "ООО «СтройМонтаж»",
+  "note": "Карточки сотрудников демо-объекта. Оклады — условные ставки организации, не норма. Детей указываем числом: от него зависит вычет по НК РФ.",
+  "employees": [
+    {
+      "tab": "001",
+      "name": "Прохоров Пётр Петрович",
+      "position": "прораб",
+      "object": "ЖК «Северный», корпус 2",
+      "salary": 145000,
+      "coefficient": 1.0,
+      "children": 2,
+      "sole_parent": false,
+      "resident": true,
+      "hired": "2026-02-01",
+      "status": "работает"
+    },
+    {
+      "tab": "002",
+      "name": "Ковалёв Игорь Львович",
+      "position": "мастер участка",
+      "object": "ЖК «Северный», корпус 2",
+      "salary": 120000,
+      "coefficient": 1.0,
+      "children": 3,
+      "sole_parent": false,
+      "resident": true,
+      "hired": "2026-01-12",
+      "status": "работает"
+    },
+    {
+      "tab": "003",
+      "name": "Асланов Тимур Ринатович",
+      "position": "сварщик",
+      "object": "ЖК «Северный», корпус 2",
+      "salary": 95000,
+      "coefficient": 1.0,
+      "children": 0,
+      "sole_parent": false,
+      "resident": true,
+      "hired": "2026-03-02",
+      "status": "работает"
+    },
+    {
+      "tab": "004",
+      "name": "Гусев Андрей Викторович",
+      "position": "монтажник",
+      "object": "ЖК «Северный», корпус 2",
+      "salary": 88000,
+      "coefficient": 1.0,
+      "children": 1,
+      "sole_parent": true,
+      "resident": true,
+      "hired": "2026-04-06",
+      "status": "работает"
+    },
+    {
+      "tab": "005",
+      "name": "Ершов Виктор Николаевич",
+      "position": "машинист крана",
+      "object": "ЖК «Северный», корпус 2",
+      "salary": 92000,
+      "coefficient": 1.0,
+      "children": 0,
+      "sole_parent": false,
+      "resident": true,
+      "hired": "2026-05-05",
+      "status": "работает"
+    },
+    {
+      "tab": "006",
+      "name": "Сметчикова Анна Андреевна",
+      "position": "инженер ПТО",
+      "object": "ЖК «Северный», корпус 2",
+      "salary": 110000,
+      "coefficient": 1.0,
+      "children": 1,
+      "sole_parent": false,
+      "resident": true,
+      "hired": "2026-01-12",
+      "status": "работает"
+    },
+    {
+      "tab": "007",
+      "name": "Директоров Дмитрий Дмитриевич",
+      "position": "генеральный директор",
+      "object": "ЖК «Северный», корпус 2",
+      "salary": 260000,
+      "coefficient": 1.0,
+      "children": 0,
+      "sole_parent": false,
+      "resident": true,
+      "hired": "2026-01-12",
+      "status": "работает"
+    }
+  ]
+}

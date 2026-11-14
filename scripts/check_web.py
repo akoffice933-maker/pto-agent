@@ -127,12 +127,67 @@ response = agent.post("/warehouse/issue", data={
     "object": OBJECT, "item_1": "Бетон B25", "qty_1": "1", "item_2": "", "qty_2": ""})
 check(response.status_code == 403 and "AGENT_FORBIDDEN" in response.text,
       "ИИ-агент смог провести требование")
-check("техническое" not in response.text.lower() or True, "")
+
 check(len(read(work, "stock")["moves"]) == before, "ИИ-агент изменил журнал склада")
 response = agent.post("/closing", data={"period": "2026-10", "csrf": csrf})
 check(response.status_code == 403 and "AGENT_FORBIDDEN" in response.text,
       "ИИ-агент смог закрыть месяц")
 stats["refusals"] += 2
+
+# ── 3б. зарплата: экран, права, заявки ──────────────────────────────────────
+payroll_buh = TestClient(app)
+login(payroll_buh, "buh")
+page = payroll_buh.get("/payroll")
+check(page.status_code == 200, f"экран зарплаты отдал {page.status_code}")
+check("Т-51" in page.text, "на экране зарплаты нет ведомости Т-51")
+check("Не считается" in page.text and "больничные" in page.text,
+      "на экране зарплаты не написано, чего в ней нет")
+check("2 979 000" in page.text or "30 %" in page.text,
+      "на экране зарплаты нет предельной базы взносов")
+check(payroll_buh.get("/payroll?period=2026-09").status_code == 200,
+      "переключение месяца в зарплате не работает")
+stats["screens"] += 1
+
+agent_payroll = agent.get("/payroll")
+check(agent_payroll.status_code == 200, "ИИ-агент не видит ведомость")
+check("Провести начисление" not in agent_payroll.text,
+      "у ИИ-агента на экране есть кнопка проведения зарплаты")
+csrf = token(agent)
+response = agent.post("/payroll/post", data={"period": "2026-10", "csrf": csrf})
+check(response.status_code == 403 and "AGENT_FORBIDDEN" in response.text,
+      "ИИ-агент смог провести начисление зарплаты")
+response = agent.post("/payroll/requests", data={"period": "2026-10", "csrf": csrf})
+check(response.status_code == 403 and "AGENT_FORBIDDEN" in response.text,
+      "ИИ-агент смог выставить заявки на зарплату")
+stats["refusals"] += 2
+
+csrf = token(prorab)
+response = prorab.post("/payroll/post", data={"period": "2026-10", "csrf": csrf})
+check(response.status_code == 403, "прораб смог провести начисление зарплаты")
+stats["refusals"] += 1
+
+before_entries = len(read(work, "ledger")["entries"])
+csrf = token(payroll_buh)
+payroll_buh.post("/payroll/post", data={"period": "2026-10", "csrf": csrf},
+                 follow_redirects=True)
+check(len(read(work, "ledger")["entries"]) == before_entries,
+      "повторное проведение зарплаты создало дубли проводок")
+
+csrf = token(payroll_buh)
+response = payroll_buh.post("/payroll/requests", data={"period": "2026-10",
+                                                      "date": "2026-11-05", "csrf": csrf},
+                            follow_redirects=False)
+check(response.status_code == 303, "заявки на выплату зарплаты не создались")
+salary_requests = [row for row in read(work, "treasury")["requests"]
+                   if str(row["number"]).startswith("ЗП-")]
+check(len(salary_requests) == 7, f"заявок на зарплату {len(salary_requests)}, а людей 7")
+check(all(row["route"] == ["руководитель"] for row in salary_requests),
+      "зарплату согласует не руководитель: маршрут подобран по сумме, а не по статье")
+check(all(row["basis"]["number"] == "Т-51 за 2026-10" for row in salary_requests),
+      "у заявок на зарплату нет основания Т-51")
+total_wages = round(sum(float(row["amount"]) for row in salary_requests), 2)
+check(abs(total_wages - 783084.81) < 0.05,
+      f"сумма заявок на зарплату {total_wages}, по ведомости 783 084,81")
 
 # ── 4. маршрут согласования и оплата ────────────────────────────────────────
 first = read(work, "treasury")["requests"][1]["number"]
