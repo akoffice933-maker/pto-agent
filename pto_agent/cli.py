@@ -2569,6 +2569,19 @@ def cmd_tax(args) -> int:
     if action == "rates":
         for row in rates["vat"]["periods"]:
             print(f"НДС {row['rate']:>4} % · с {row['from']} по {row['to'] or '—'} · {row['basis']}")
+        forms = rates.get("forms") or {}
+        for key, title in (("vat", "НДС"), ("rsv", "РСВ"), ("profit", "прибыль"),
+                           ("property", "имущество")):
+            row = forms.get(key) or {}
+            if not row:
+                continue
+            flag = " ⚠ сверить" if row.get("verify") else ""
+            print(f"{title}: КНД {row.get('knd')} · {row.get('order')} · "
+                  f"формат {row.get('format_version') or '—'}{flag}")
+            if row.get("knd") is None:
+                print(f"  {row.get('knd_note') or 'номер формы не подтверждён'}")
+            if row.get("state"):
+                print(f"  {row['state']}")
         organisation = rates.get("organisation") or {}
         print(f"организация: {organisation.get('name')} · ИНН {organisation.get('inn')} "
               f"({taxes.inn_ok(organisation.get('inn'))}) · КПП {organisation.get('kpp')} "

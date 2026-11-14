@@ -75,6 +75,8 @@ jobs:
         run: python scripts/check_payroll.py
       - name: Налоги, подпись и ЭДО (ставка по дате, сверка с журналом, XML, отказ без УКЭП)
         run: python scripts/check_tax.py
+      - name: Реестр опенсорса под этапы 6–7 (лицензии, покрытие задач, формы ФНС в данных)
+        run: python scripts/check_tax_edo_oss.py
       - name: Тесты
         run: pytest tests -q
       - name: MCP-сервер отвечает по stdio

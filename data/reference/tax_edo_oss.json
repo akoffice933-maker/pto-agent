@@ -1,0 +1,591 @@
+{
+  "schema": "pto-agent/tax-edo-oss@1",
+  "title": "Опенсорс и официальные источники под незакрытые задачи этапов 6–7",
+  "checked_at": "2026-11-12",
+  "checked_via": [
+    "GitHub REST API: /search/repositories (налоговая декларация xml, фнс xsd, ндс декларация, диадок api, сбис api, pycades, формат фнс, фнс xml, ЭТрН, КриптоПро python, xsd схемы), /orgs/diadoc/repos, /repos/{owner}/{repo}/contents",
+    "GitLab API v4: /projects?search= (фнс, декларация, налог, диадок, сбис, эдо, криптопро, бухгалтерия)",
+    "официальные сайты: format.nalog.ru, developer.kontur.ru, saby.ru/help, nalog.gov.ru, base.garant.ru"
+  ],
+  "our_license": "MIT",
+  "rules": {
+    "copy_code": "код берём только при MIT / Apache-2.0 / BSD / ISC и с сохранением уведомления об авторстве",
+    "weak_copyleft": "LGPL / MPL / EPL: только отдельной зависимостью или сервисом, код внутрь пакета не копируем",
+    "strong_copyleft": "GPL / AGPL: только идеи, схема данных или внешний сервис по сети; в MIT-поставку код не попадает",
+    "no_license": "без лицензии = все права защищены: читаем как идею, копировать нельзя",
+    "data": "XSD-схемы и справочники — не код: у них свой режим, скачиваются с первоисточника и не распространяются в поставке",
+    "verdicts": {
+      "берём": "есть что взять в работу сейчас (код при permissive, иначе идея/тест-кейс)",
+      "читаем": "полезно как образец, копировать нечего или нельзя",
+      "нельзя": "лицензия несовместима с MIT-поставкой",
+      "сами": "готового взять нечего — реализуем в контуре, внешний проект нужен только как проверка"
+    }
+  },
+  "gaps": {
+    "formats-fns": "Форматы ФНС (XSD): НДС 5.07, РСВ, прибыль, имущество",
+    "profit-property": "Налог на прибыль и налог на имущество",
+    "vat-advances": "НДС с авансов отдельными строками декларации",
+    "payroll-sick-vacation": "Больничные, отпускные, премии по приказам",
+    "ukep-keys": "Реальные ключи УКЭП (КриптоПро, CAdES)",
+    "diadoc-live": "Боевой ящик Диадока",
+    "sbis": "СБИС (Saby)",
+    "tax-screen": "Экран налогов в браузере"
+  },
+  "entries": [
+    {
+      "repo": "format.nalog.ru (каталог форматов ФНС)",
+      "url": "https://format.nalog.ru/spr_data.xml",
+      "source_kind": "official",
+      "license": "официальный документ ФНС (не ПО)",
+      "license_note": "XSD-схемы — нормативные документы; в поставку не включаем, скачиваем с первоисточника по ссылке из каталога",
+      "gap": "formats-fns",
+      "priority": "высокий",
+      "role": "единственный законный первоисточник XSD: каталог отдаёт ссылки вида nds/d/2020/NO_NDS_1_003_00_05_07_01.xsd — отсюда берём схему, по которой валидируем свою выгрузку",
+      "we_take": [
+        "справочник «имя схемы → приказ → версия формата» как источник для tax_rates.json",
+        "схему НДС NO_NDS_1_003_00_05_07_01.xsd и схему РСВ — для xmllint-валидации в отдельном шаге, не в CI по умолчанию",
+        "правило: версия формы и версия формата проверяются на дату отчёта, а не «один раз настроили»"
+      ],
+      "we_do_not_take": [
+        "сами файлы схем в репозиторий (обновляются приказами; хранение копии вводит в заблуждение)",
+        "скачивание схем в CI: сеть до format.nalog.ru из песочницы недоступна (TLS обрывается), шаг должен быть отдельным и с явным пропуском"
+      ],
+      "integration": "schema-reference",
+      "copy_allowed": false,
+      "note": "проверено 2026-11-12: сайт отдаёт spr_data.xml, но из песочницы TLS-соединение обрывается — схемы скачиваются в среде с доступом; в коде это оформлено как ручной шаг"
+    },
+    {
+      "repo": "Dectron807/EdoXmlGenerator",
+      "url": "https://github.com/Dectron807/EdoXmlGenerator",
+      "source_kind": "github",
+      "license": "MIT",
+      "stars": 2,
+      "gap": "formats-fns",
+      "priority": "средний",
+      "role": "«Глав.Документ» на .NET 8 WPF: 50 форм первички, УПД по формату 5.03 приказа № 970@, валидация по XSD — рабочий пример, как форма связана со схемой",
+      "we_take": [
+        "приём «шаблон формы + XSD-валидация перед выгрузкой» (у нас сейчас XML собирается без схемы)",
+        "набор тест-кейсов: какие поля ФНС считает обязательными и на чём валидатор ругается",
+        "идею разделения «черновик → проверен по схеме → готов к отправке»"
+      ],
+      "we_do_not_take": [
+        "код C#/.NET и WPF — другая платформа и другой стек",
+        "их бланки как источник истины: формы ФНС меняются приказами"
+      ],
+      "integration": "pattern-and-code",
+      "copy_allowed": true
+    },
+    {
+      "repo": "MaxiStyle/russian-etrn-builder",
+      "url": "https://github.com/MaxiStyle/russian-etrn-builder",
+      "source_kind": "github",
+      "license": "MIT",
+      "stars": 0,
+      "gap": "formats-fns",
+      "priority": "низкий",
+      "role": "PHP-библиотека сборки ЭТрН по формату ФНС: как раскладывают обязательные реквизиты и версии формата в коде",
+      "we_take": [
+        "структуру «формат → версия → обязательные блоки» как образец описания схемы в данных",
+        "подход к нумерации версий формата в конфиге, а не в коде"
+      ],
+      "we_do_not_take": [
+        "PHP-код",
+        "ЭТрН как таковой — нам нужны НДС/РСВ/прибыль"
+      ],
+      "integration": "reference-only",
+      "copy_allowed": true
+    },
+    {
+      "repo": "AnyKey1/xsd-viewer",
+      "url": "https://github.com/AnyKey1/xsd-viewer",
+      "source_kind": "github",
+      "license": "нет лицензии",
+      "stars": 0,
+      "gap": "formats-fns",
+      "priority": "низкий",
+      "role": "Electron-просмотрщик и валидатор XSD гос-сервисов (ЭТрН): показывает, как разбирать большие схемы ФНС и читать ошибки валидации",
+      "we_take": [
+        "идею человекочитаемого вывода ошибок XSD (путь до элемента, а не «invalid content»)",
+        "список типовых ошибок, которые дают схемы ФНС"
+      ],
+      "we_do_not_take": [
+        "код без лицензии — все права защищены"
+      ],
+      "integration": "reference-only",
+      "copy_allowed": false
+    },
+    {
+      "repo": "наш контур (tax.py: НДС с авансов)",
+      "url": "https://github.com/",
+      "source_kind": "own",
+      "license": "MIT",
+      "gap": "vat-advances",
+      "priority": "высокий",
+      "role": "НДС с авансов отдельными строками: готового OSS нет, поэтому реализуем сами — авансы уже живут на 62.02/62.01, осталось разделить налог с аванса и вычет",
+      "we_take": [
+        "правило: налог с полученного аванса начисляется отдельно (у нас 76.АВ ≡ 62.02), вычет по отгрузке — отдельно (76.ВА ≡ 62.01); суммы не сворачиваются",
+        "строки раздела 3 декларации: начисление с полученных авансов и вычет с авансов при отгрузке — конкретные номера строк сверять с формой в редакции приказа ФНС от 18.12.2025 № ЕД-7-3/1227@ (с 2026 добавлены строки для ставок 22 %, 22/122, 18,03 %)",
+        "проверку: если аванс получен и отгрузка в том же квартале, налог не должен задваиваться — сверка «начислено с аванса = вычет при отгрузке»"
+      ],
+      "we_do_not_take": [
+        "зарубежные VAT-движки: другая нормативная база",
+        "сворачивание авансового НДС в общий итог: тогда декларация сойдётся по сумме, но будет неверной по строкам"
+      ],
+      "integration": "pattern-and-code",
+      "copy_allowed": true,
+      "note": "номера строк и состав формы помечены «на проверку»: форма НДС менялась приказом от 18.12.2025 к отчётности за 1 квартал 2026 — перед сдачей сверять с действующей редакцией, а не с этой записью"
+    },
+    {
+      "repo": "SorokaUP/NdByNds (как образец строк декларации НДС)",
+      "url": "https://github.com/SorokaUP/NdByNds",
+      "source_kind": "github",
+      "license": "MIT",
+      "stars": 1,
+      "gap": "vat-advances",
+      "priority": "низкий",
+      "role": "Единственный найденный OSS-проект про декларацию НДС РФ: полезен как образец, как разложить раздел 3 по строкам",
+      "we_take": [
+        "идею таблицы «строка → смысл → источник в учёте»",
+        "перечень проверок, которые они делают"
+      ],
+      "we_do_not_take": [
+        "код C#",
+        "их версию формы: она про 2022–2024 годы"
+      ],
+      "integration": "reference-only",
+      "copy_allowed": true
+    },
+    {
+      "repo": "SorokaUP/NdByNds",
+      "url": "https://github.com/SorokaUP/NdByNds",
+      "source_kind": "github",
+      "license": "MIT",
+      "stars": 1,
+      "gap": "profit-property",
+      "priority": "низкий",
+      "role": "Декларация по НДС на C#: единственный найденный OSS-проект про декларацию РФ, полезен как образец структуры отчёта и проверок",
+      "we_take": [
+        "идею «строка декларации → проводка-источник» (у нас это уже есть в vat_return)",
+        "перечень контрольных соотношений, которые они проверяют"
+      ],
+      "we_do_not_take": [
+        "код C#",
+        "их расчёт: он про НДС, а не про прибыль и имущество"
+      ],
+      "integration": "reference-only",
+      "copy_allowed": true
+    },
+    {
+      "repo": "наш контур (payroll.py: больничные за 3 дня, отпускные по СДЗ)",
+      "url": "https://github.com/",
+      "source_kind": "own",
+      "license": "MIT",
+      "gap": "payroll-sick-vacation",
+      "priority": "высокий",
+      "role": "Модель расчёта придётся переделать: с 2026 работодатель начисляет только первые 3 дня болезни самого работника, остальное платит СФР напрямую; по уходу за ребёнком — СФР с первого дня",
+      "we_take": [
+        "в ведомости Т-51 — только пособие за счёт работодателя (3 дня), НДФЛ с него удерживается, страховые взносы не начисляются",
+        "в 6-НДФЛ и РСВ попадает только эта часть: показывать в отчётности сумму СФР — ошибка",
+        "отпускные: средний дневной заработок за 12 календарных месяцев и исключаемые периоды (больничные, прошлые отпуска) — логика из EyeOfWages",
+        "премия — только при наличии приказа (номер, дата, основание); без приказа «не включено»"
+      ],
+      "we_do_not_take": [
+        "расчёт пособия целиком «как в 2022 году»: правило трёх дней и прямые выплаты СФР изменили модель",
+        "начисление взносов на пособие: пособие взносами не облагается",
+        "больничные по ГПХ: там работодатель не платит вообще даже первые 3 дня"
+      ],
+      "integration": "pattern-and-code",
+      "copy_allowed": true,
+      "note": "базы за два предшествующих года в контуре нет: без неё сумма не считается, а показывается «не включено: нет базы для среднего заработка»"
+    },
+    {
+      "repo": "babamurad/Salary",
+      "url": "https://github.com/babamurad/Salary",
+      "source_kind": "github",
+      "license": "MIT",
+      "stars": 0,
+      "gap": "payroll-sick-vacation",
+      "priority": "высокий",
+      "role": "Расчёт зарплаты с больничными и отпускными: стаж до 5 / 5–8 / свыше 8 лет (60/80/100 %), производственный календарь, история начислений",
+      "we_take": [
+        "формулу пособия: средний дневной заработок × процент по стажу × дни",
+        "проценты по стажу 60/80/100 как данные справочника, а не константы в коде",
+        "набор тест-кейсов «мало заработка → считаем от МРОТ»"
+      ],
+      "we_do_not_take": [
+        "код: у нас Python и своя модель состояния",
+        "полный расчёт пособия целиком — с 2026 работодатель платит только первые 3 дня (см. docs/51)"
+      ],
+      "integration": "pattern-and-code",
+      "copy_allowed": true
+    },
+    {
+      "repo": "EgorPoprotskiy/EyeOfWages",
+      "url": "https://github.com/EgorPoprotskiy/EyeOfWages",
+      "source_kind": "github",
+      "license": "MIT",
+      "stars": 0,
+      "gap": "payroll-sick-vacation",
+      "priority": "средний",
+      "role": "Расчёт отпускных: средний дневной заработок за 12 месяцев и исключаемые периоды (больничные, прошлые отпуска)",
+      "we_take": [
+        "правило исключаемых периодов при расчёте среднего заработка — то, из-за чего отпускные считают неправильно",
+        "проверку «средний заработок за 12 календарных месяцев, предшествующих месяцу отпуска»"
+      ],
+      "we_do_not_take": [
+        "Android-приложение",
+        "их округления без указания основания"
+      ],
+      "integration": "pattern-and-code",
+      "copy_allowed": true
+    },
+    {
+      "repo": "NlightN22/Salary",
+      "url": "https://github.com/NlightN22/Salary",
+      "source_kind": "github",
+      "license": "MIT",
+      "stars": 0,
+      "gap": "payroll-sick-vacation",
+      "priority": "низкий",
+      "role": "Формирование расчётов сотрудников: структура расчётного листка и начислений",
+      "we_take": [
+        "идею разделения «начисление / удержание / к выплате» в листке"
+      ],
+      "we_do_not_take": [
+        "код без тестов"
+      ],
+      "integration": "reference-only",
+      "copy_allowed": true
+    },
+    {
+      "repo": "CryptoPro/pycades",
+      "url": "https://github.com/CryptoPro/pycades",
+      "source_kind": "github",
+      "license": "NOASSERTION (лицензия не распознана GitHub — читать LICENSE перед сборкой)",
+      "stars": 21,
+      "gap": "ukep-keys",
+      "priority": "высокий",
+      "role": "Официальное Python-расширение CAdES от КриптоПро: то, чем подписывают по-настоящему",
+      "we_take": [
+        "интерфейс: создать CadesSignedData, проверить подпись, выставить CadesType (BES/XLongType1)",
+        "требование к среде: КриптоПро CSP + контейнер закрытого ключа + сертификат"
+      ],
+      "we_do_not_take": [
+        "код в поставку: это бинарное расширение, ставится отдельно и требует лицензии CSP"
+      ],
+      "integration": "dependency",
+      "copy_allowed": false,
+      "note": "наш PycadesProvider уже написан под этот интерфейс; без установленного CSP честно отвечает «подпись недоступна»"
+    },
+    {
+      "repo": "devind-team/CryptoPro-pycades",
+      "url": "https://github.com/devind-team/CryptoPro-pycades",
+      "source_kind": "github",
+      "license": "MIT",
+      "stars": 25,
+      "gap": "ukep-keys",
+      "priority": "высокий",
+      "role": "Docker-сборка КриптоПро + pycades и FastAPI-сервис подписи: рецепт «как развернуть подпись рядом, а не внутри Python-процесса»",
+      "we_take": [
+        "Dockerfile: КриптоПро CSP 5 + pycades + проверка сертификата",
+        "схему отдельного сервиса подписи по HTTP: контур остаётся MIT, криптография — снаружи",
+        "пример fastapi_http.py как образец контракта «файл → .sig»"
+      ],
+      "we_do_not_take": [
+        "сертификаты и ключи из репозитория (tests only)",
+        "готовый образ как есть — версии CSP проверять"
+      ],
+      "integration": "pattern-and-code",
+      "copy_allowed": true
+    },
+    {
+      "repo": "JustUnknownDude/CryptoPro5docker",
+      "url": "https://github.com/JustUnknownDude/CryptoPro5docker",
+      "source_kind": "github",
+      "license": "нет лицензии",
+      "stars": 2,
+      "gap": "ukep-keys",
+      "priority": "низкий",
+      "role": "КриптоПро 5 в docker: минимальный Dockerfile, полезен как справка по пакетам и лицензии",
+      "we_take": [
+        "список пакетов и порядок установки CSP в контейнер"
+      ],
+      "we_do_not_take": [
+        "файлы без лицензии копировать нельзя"
+      ],
+      "integration": "reference-only",
+      "copy_allowed": false
+    },
+    {
+      "repo": "Keyintegrity/pycryptoprosdk",
+      "url": "https://github.com/Keyintegrity/pycryptoprosdk",
+      "source_kind": "github",
+      "license": "нет лицензии",
+      "stars": 37,
+      "gap": "ukep-keys",
+      "priority": "низкий",
+      "role": "Альтернативная обёртка КриптоПро CSP на C++ с Python-биндингами (более полный доступ к CSP, чем pycades)",
+      "we_take": [
+        "понимание, какие вызовы CSP нужны для проверки цепочки сертификатов"
+      ],
+      "we_do_not_take": [
+        "код без лицензии"
+      ],
+      "integration": "reference-only",
+      "copy_allowed": false
+    },
+    {
+      "repo": "kuznetsovin/py_cpcsp",
+      "url": "https://github.com/kuznetsovin/py_cpcsp",
+      "source_kind": "github",
+      "license": "MIT",
+      "stars": 4,
+      "gap": "ukep-keys",
+      "priority": "низкий",
+      "role": "Загрузка и проверка ЭЦП КриптоПро из Python: маленький, читаемый пример вызовов",
+      "we_take": [
+        "пример проверки подписи отдельно от подписания (нужно для verify_file)"
+      ],
+      "we_do_not_take": [
+        "только Windows-специфика, если она там есть — проверять перед использованием"
+      ],
+      "integration": "reference-only",
+      "copy_allowed": true
+    },
+    {
+      "repo": "diadoc/diadocsdk-java",
+      "url": "https://github.com/diadoc/diadocsdk-java",
+      "source_kind": "github",
+      "license": "MIT",
+      "stars": 26,
+      "gap": "diadoc-live",
+      "priority": "высокий",
+      "role": "Официальный SDK Диадока (Java) — эталон того, как устроены вызовы: авторизация, PostMessage, GetMessage",
+      "we_take": [
+        "порядок вызовов и обязательные поля сообщения (наши методы сверены с этой моделью)",
+        "модель статусов документа: как отличать «отправлено» от «доставлено» и «подписано получателем»"
+      ],
+      "we_do_not_take": [
+        "Java-код",
+        "генератор моделей"
+      ],
+      "integration": "reference-only",
+      "copy_allowed": true
+    },
+    {
+      "repo": "diadoc/integration-samples",
+      "url": "https://github.com/diadoc/integration-samples",
+      "source_kind": "github",
+      "license": "нет лицензии",
+      "stars": 2,
+      "gap": "diadoc-live",
+      "priority": "средний",
+      "role": "Примеры интеграции от самого Диадока (C#): сценарии отправки и приёма",
+      "we_take": [
+        "сценарии: черновик → подпись → отправка → ожидание титула",
+        "перечень ошибок, которые возвращает API"
+      ],
+      "we_do_not_take": [
+        "код без лицензии"
+      ],
+      "integration": "reference-only",
+      "copy_allowed": false
+    },
+    {
+      "repo": "AlexSuperStar/diadocProtoClass",
+      "url": "https://github.com/AlexSuperStar/diadocProtoClass",
+      "source_kind": "github",
+      "license": "MIT",
+      "stars": 1,
+      "gap": "diadoc-live",
+      "priority": "низкий",
+      "role": "PHP-классы для работы с API Диадока: минимальный клиент на «просто HTTP»",
+      "we_take": [
+        "проверка, что наш клиент не сложнее необходимого: авторизация + два вызова"
+      ],
+      "we_do_not_take": [
+        "PHP-код"
+      ],
+      "integration": "reference-only",
+      "copy_allowed": true
+    },
+    {
+      "repo": "ilyautov/business-mcp-ru",
+      "url": "https://github.com/ilyautov/business-mcp-ru",
+      "source_kind": "github",
+      "license": "MIT",
+      "stars": 2,
+      "gap": "diadoc-live",
+      "priority": "средний",
+      "role": "Четыре MCP-сервера для российских сервисов (Диадок, СБИС, Честный знак, VK) на Python: ближайший по стеку образец работы с этими API",
+      "we_take": [
+        "структуру клиента: конфиг, ретраи, разбор ошибок API на Python",
+        "список методов Диадока и СБИС, которые реально нужны в работе"
+      ],
+      "we_do_not_take": [
+        "MCP-обвязку как есть — у нас свой сервер и свои инструменты"
+      ],
+      "integration": "pattern-and-code",
+      "copy_allowed": true
+    },
+    {
+      "repo": "ilyautov/sbis-mcp-ru",
+      "url": "https://github.com/ilyautov/sbis-mcp-ru",
+      "source_kind": "github",
+      "license": "MIT",
+      "stars": 6,
+      "gap": "sbis",
+      "priority": "высокий",
+      "role": "MCP-сервер для API СБИС (Saby) на Python: 45 команд — документы, этапы, подписание, сертификаты, контрагенты",
+      "we_take": [
+        "перечень методов и параметров API СБИС (у Тензора нет OpenAPI — этот репозиторий его частично заменяет)",
+        "схему авторизации СБИС и разбор их ошибок",
+        "структуру «команда → вызов → результат» для нашего SbisProvider"
+      ],
+      "we_do_not_take": [
+        "их MCP-слой",
+        "захардкоженные тарифные допущения"
+      ],
+      "integration": "pattern-and-code",
+      "copy_allowed": true
+    },
+    {
+      "repo": "nikserg/sbis",
+      "url": "https://github.com/nikserg/sbis",
+      "source_kind": "github",
+      "license": "GPL-2.0",
+      "stars": 8,
+      "gap": "sbis",
+      "priority": "низкий",
+      "role": "Связь с API СБИС на PHP — пример потока авторизации",
+      "we_take": [
+        "идею авторизации и порядок вызовов"
+      ],
+      "we_do_not_take": [
+        "код: GPL-2.0 в MIT-поставку не попадает"
+      ],
+      "integration": "reference-only",
+      "copy_allowed": false
+    },
+    {
+      "repo": "om1ji/om1-saby",
+      "url": "https://github.com/om1ji/om1-saby",
+      "source_kind": "github",
+      "license": "нет лицензии",
+      "stars": 1,
+      "gap": "sbis",
+      "priority": "низкий",
+      "role": "Python-обёртка над API Saby",
+      "we_take": [
+        "список методов, если они новее, чем в sbis-mcp-ru"
+      ],
+      "we_do_not_take": [
+        "код без лицензии"
+      ],
+      "integration": "reference-only",
+      "copy_allowed": false
+    },
+    {
+      "repo": "sbis-api-client (PyPI)",
+      "url": "https://pypi.org/project/sbis-api-client/",
+      "source_kind": "pypi",
+      "license": "MIT",
+      "stars": 0,
+      "gap": "sbis",
+      "priority": "низкий",
+      "role": "Пакет на PyPI «для работы с API СБИС», версия 0.0.3, помечен как unverified: смотреть, но не полагаться",
+      "we_take": [
+        "только как перечень сервисов СБИС"
+      ],
+      "we_do_not_take": [
+        "как зависимость: версия 0.0.3 и нет тестов — риск, а не решение"
+      ],
+      "integration": "reference-only",
+      "copy_allowed": false
+    },
+    {
+      "repo": "developer.kontur.ru (OpenAPI Диадока)",
+      "url": "https://developer.kontur.ru/doc/diadoc-api",
+      "source_kind": "official",
+      "license": "документация оператора (API платный: лицензия ~26 900 ₽/год, песочница есть)",
+      "gap": "diadoc-live",
+      "priority": "высокий",
+      "role": "Единственная публичная OpenAPI 3.0 спецификация среди операторов ЭДО: из неё можно сгенерировать Python-клиент вместо ручного",
+      "we_take": [
+        "генерацию клиента из OpenAPI (openapi-generator) поверх нашего тонкого клиента — когда появится боевой ящик",
+        "песочницу для тестов вместо выдуманных ответов"
+      ],
+      "we_do_not_take": [
+        "закрытые детали тарификации в код",
+        "sdk-обёртки, которые тянут COM"
+      ],
+      "integration": "schema-reference",
+      "copy_allowed": false,
+      "note": "у СБИС OpenAPI нет (только HTML-справочник + ExtSDK2 OLE/COM), у Такскома и Астрала — HTML/XSD: у Диадока интеграция дешевле по разработке, дороже по лицензии"
+    },
+    {
+      "repo": "saby.ru/help (API СБИС)",
+      "url": "https://saby.ru/help",
+      "source_kind": "official",
+      "license": "документация оператора (API включён в тарифы ЭДО)",
+      "gap": "sbis",
+      "priority": "средний",
+      "role": "HTML-справочник методов СБИС; актуальный SDK — ExtSDK2 на OLE/COM (Windows)",
+      "we_take": [
+        "перечень методов и лимитов (до 5 потоков, 5 сессий)",
+        "понимание, что чистый Python-путь — только HTTP-вызовы по справочнику"
+      ],
+      "we_do_not_take": [
+        "ExtSDK2 в ядро: Windows-only COM, в Linux-контейнере не работает"
+      ],
+      "integration": "schema-reference",
+      "copy_allowed": false,
+      "note": "проверено 2026-11-12: OpenAPI у СБИС нет, только HTML-справочник методов и ExtSDK2 (OLE/COM, Windows); API включён в тарифы ЭДО, отдельной лицензии нет"
+    },
+    {
+      "repo": "наш контур (pto_agent/tax.py, pto_agent/web)",
+      "url": "https://github.com/",
+      "source_kind": "own",
+      "license": "MIT",
+      "gap": "profit-property",
+      "priority": "высокий",
+      "role": "Налог на прибыль, налог на имущество и НДС с авансов: готового OSS под РФ не найдено, реализуем сами по формам ФНС",
+      "we_take": [
+        "прибыль: КНД 1151006 (приказ ФНС от 02.10.2024 № ЕД-7-3/830@), ставки 8 % в федеральный и 17 % в региональный бюджет",
+        "имущество: декларация только за год (авансовые расчёты отменены с 2020), форма в редакции приказа от 17.03.2025 № ЕД-7-21/208@; по кадастровой стоимости налог считает ФНС",
+        "НДС с авансов: 76.АВ/76.ВА (у нас 62.02/62.01) и отдельные строки раздела 3 — сверить с формой в редакции приказа от 18.12.2025 № ЕД-7-3/1227@"
+      ],
+      "we_do_not_take": [
+        "зарубежные tax-движки: другая нормативная база"
+      ],
+      "integration": "pattern-and-code",
+      "copy_allowed": true,
+      "note": "это не «взяли из OSS», а собственное решение: в реестре помечено честно"
+    },
+    {
+      "repo": "наш контур (экран /taxes)",
+      "url": "https://github.com/",
+      "source_kind": "own",
+      "license": "MIT",
+      "gap": "tax-screen",
+      "priority": "средний",
+      "role": "Экран налогов: декларация на экране строится из тех же функций tax.py, что и CLI; сторонних UI-образцов под РФ-налоги нет",
+      "we_take": [
+        "принцип «строка декларации → проводка-источник → расхождение» (уже в to_markdown)",
+        "идею NdByNds: показывать контрольные соотношения рядом со строками"
+      ],
+      "we_do_not_take": [
+        "WPF/десктопные образцы",
+        "копирование чужих бланков"
+      ],
+      "integration": "pattern-and-code",
+      "copy_allowed": true
+    }
+  ],
+  "not_found": [
+    "GitLab: по запросам «фнс», «декларация», «налог», «диадок», «сбис», «эдо», «криптопро», «бухгалтерия» полезных проектов нет — только парсеры чеков ФНС, виджеты и учебные работы. Итог: GitLab как источник не используется.",
+    "РСВ/6-НДФЛ как библиотека расчёта: не найдено ни одного OSS-проекта на Python — считаем сами.",
+    "Налог на прибыль и имущество: найден только SorokaUP/NdByNds (НДС, C#) — прямых аналогов нет.",
+    "Генератор XML деклараций РФ на Python: не найдено; ближайшее — C#-проекты и ЭТрН-библиотеки."
+  ]
+}
