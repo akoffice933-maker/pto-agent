@@ -100,11 +100,20 @@ def load_rules(path: str | Path | None = None) -> dict:
     return payload
 
 
-def route_for(rules: dict, amount) -> dict:
-    """Маршрут по сумме: первый порог, в который сумма попадает; иначе последний."""
+def route_for(rules: dict, amount, article: str = "") -> dict:
+    """Маршрут: сначала по статье (если ей назначен свой), потом по сумме.
+
+    Статья важнее суммы: зарплату не согласует снабжение, даже если сумма мелкая.
+    """
     value = kopeck(amount)
     routes = rules.get("routes") or []
+    if article:
+        for route in routes:
+            if article in (route.get("articles") or []):
+                return route
     for route in routes:
+        if route.get("articles"):
+            continue      # маршрут по статье не участвует в подборе по сумме
         limit = dec(route.get("up_to"))
         if limit is None or value <= limit:
             return route
@@ -274,7 +283,7 @@ def add_request(state: dict, request: dict, *, rules: dict | None = None) -> dic
 
     date = str(request.get("date") or "")
     period = period_of(date)
-    route = route_for(rules, amount)
+    route = route_for(rules, amount, article=article)
     object_name = str(request.get("object") or state.get("object") or "")
     limit = _limit_for(state, article, period)
     used = committed(state, article=article, period=period)
@@ -773,6 +782,8 @@ def post_to_ledger(state: dict, ledger_state: dict, *, chart: dict | None = None
 
     chart = chart or ledger.load_chart()
     rules = rules or ledger.load_rules()
+    treasury_rules = load_rules()
+    treasury_rules_articles = treasury_rules.get("articles") or {}
     results: list[dict] = []
     opening = state.get("opening") or {}
     opening_amount = kopeck(opening.get("amount") or 0)
@@ -801,6 +812,43 @@ def post_to_ledger(state: dict, ledger_state: dict, *, chart: dict | None = None
         if key in known or f"{key}|advance" in known:
             # проверять долг уже поздно: прошлая проводка его погасила
             results.append(_already(key, payment["request"]))
+            continue
+        article_info = (treasury_rules_articles.get(str(payment.get("article") or "")) or {})
+        article_account = str(article_info.get("account") or "")
+        if article_account == "70":
+            # Зарплата: долг не поставщику, а работникам — он на 70 (начислено минус НДФЛ).
+            # Поэтому проверяется остаток 70, а не долг по 60.01: иначе любая выплата
+            # зарплаты выглядела бы «оплатой больше долга».
+            wages = -sum(ledger.balance_as_of(ledger_state, "70",
+                                              str(payment["date"])).values(), Decimal("0"))
+            amount = kopeck(payment["amount"])
+            if amount > wages + EPS:
+                results.append({"status": ledger.STATUS_REJECTED, "entry": None,
+                                "errors": [{"code": "PAYMENT_OVER_WAGES",
+                                            "what": f"{payment['request']} / "
+                                                    f"{payment['counterparty']}",
+                                            "why": f"выплата {rub(amount)} больше начисленного "
+                                                   f"к выплате {rub(wages)}: сначала "
+                                                   f"начисление (ведомость Т-51), потом деньги"}],
+                                "gaps": [{"what": "начисление зарплаты за период",
+                                          "why": "выплата вперёд начисления",
+                                          "ask": "ведомость Т-51 за месяц выплаты"}],
+                                "warnings": []})
+                continue
+            salary = ledger.post_entry(
+                ledger_state, event="salary_payment", date=str(payment["date"]),
+                doc={"number": f"п/п по заявке {payment['request']}",
+                     "date": str(payment["date"]), "kind": "payment"},
+                lines=[{"account": "70", "side": ledger.DEBIT, "amount": num(amount),
+                        "analytics": {"сотрудник": payment["counterparty"]}},
+                       {"account": "51", "side": ledger.CREDIT, "amount": num(amount),
+                        "analytics": {}}],
+                memo=(f"выплата зарплаты {payment['counterparty']} по заявке "
+                      f"{payment['request']}: {rub(amount)}"),
+                rule="treasury.salary_payment", key=key,
+                chart=chart, rules=rules, mode=mode or ledger.MODE_POST)
+            salary["payment"] = payment["id"]
+            results.append(salary)
             continue
         debt = ledger.balance_as_of(ledger_state, "60.01", str(payment["date"]),
                                     group_by=("контрагент",))

@@ -13,7 +13,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from ..audit import AuditLog
-from .. import closing, ledger, stock, treasury
+from .. import closing, ledger, payroll, stock, treasury
 
 
 class Store:
@@ -37,6 +37,10 @@ class Store:
     @property
     def ledger_path(self) -> Path:
         return self.root / "ledger" / "state.json"
+
+    @property
+    def payroll_path(self) -> Path:
+        return self.root / "payroll" / "state.json"
 
     @property
     def audit_path(self) -> Path:
@@ -76,6 +80,27 @@ class Store:
     def save_treasury(self, state: dict) -> None:
         with self.lock:
             treasury.save(state, self.treasury_path)
+
+    def payroll_state(self) -> dict:
+        return self._read(self.payroll_path, payroll.load_state,
+                          lambda: payroll.new_state(object_name=""))
+
+    def save_payroll(self, state: dict) -> None:
+        with self.lock:
+            payroll.save_state(state, self.payroll_path)
+
+    def timesheet(self, period: str) -> dict | None:
+        """Табель месяца из демо-данных. Нет файла — нет и табеля: выдумывать нечего."""
+        path = self.demo_dir / "payroll" / f"timesheet_{period.replace('-', '_')}.json"
+        if not path.exists():
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def staff(self) -> dict:
+        path = self.demo_dir / "payroll" / "staff.json"
+        if not path.exists():
+            return {"employees": [], "object": ""}
+        return json.loads(path.read_text(encoding="utf-8"))
 
     def save_ledger(self, state: dict) -> None:
         with self.lock:
