@@ -1,0 +1,167 @@
+{
+  "schema": "pto-agent/rbac@1",
+  "title": "Матрица ролей: кто что может и по каким объектам",
+  "source": {
+    "note": "Это настройка организации, а не норма. Проверка идёт на сервере по этому файлу; шаблон лишь прячет кнопки. Роль «ИИ-агент» существует отдельно и не имеет ни одного права на проведение документов."
+  },
+  "actors": {
+    "человек": {
+      "note": "сессия с логином и паролем; только человек проводит документы, подписывает и закрывает период"
+    },
+    "ИИ-агент": {
+      "note": "сервисный актор: читает и предлагает; проводить, согласовывать и закрывать не может",
+      "permissions": [
+        "dashboard.view",
+        "warehouse.view",
+        "act.view",
+        "request.view",
+        "postings.view",
+        "closing.view",
+        "treasury.view"
+      ],
+      "cannot": [
+        "postings.post",
+        "postings.accept",
+        "closing.run",
+        "request.approve",
+        "request.pay",
+        "warehouse.issue",
+        "warehouse.receipt",
+        "request.create",
+        "act.prepare"
+      ]
+    }
+  },
+  "roles": {
+    "прораб": {
+      "title": "Прораб участка",
+      "permissions": [
+        "warehouse.view",
+        "warehouse.issue",
+        "act.view",
+        "request.view",
+        "request.create",
+        "postings.view"
+      ],
+      "note": "подаёт требование М-11 и заявку на оплату по своим объектам; чужие объекты не видит"
+    },
+    "снабженец": {
+      "title": "Снабжение",
+      "permissions": [
+        "warehouse.view",
+        "warehouse.receipt",
+        "request.view",
+        "request.create",
+        "request.approve:снабжение",
+        "postings.view"
+      ]
+    },
+    "ПТО": {
+      "title": "ПТО / сметчик",
+      "permissions": [
+        "warehouse.view",
+        "act.view",
+        "act.prepare",
+        "request.view",
+        "request.approve:ПТО",
+        "postings.view",
+        "audit.view"
+      ]
+    },
+    "бухгалтер": {
+      "title": "Бухгалтер",
+      "permissions": [
+        "warehouse.view",
+        "act.view",
+        "postings.view",
+        "postings.post",
+        "postings.accept",
+        "closing.view",
+        "closing.run",
+        "request.view",
+        "request.pay",
+        "treasury.view",
+        "audit.view"
+      ]
+    },
+    "руководитель": {
+      "title": "Руководитель",
+      "permissions": [
+        "dashboard.view",
+        "warehouse.view",
+        "act.view",
+        "request.view",
+        "request.approve:финдиректор",
+        "postings.view",
+        "closing.view",
+        "treasury.view",
+        "audit.view"
+      ]
+    },
+    "администратор": {
+      "title": "Администратор",
+      "permissions": [
+        "admin.users",
+        "admin.rbac",
+        "audit.view"
+      ]
+    },
+    "ИИ-агент": {
+      "title": "ИИ-агент (сервис)",
+      "permissions": [
+        "dashboard.view",
+        "warehouse.view",
+        "act.view",
+        "request.view",
+        "postings.view",
+        "closing.view",
+        "treasury.view"
+      ],
+      "note": "читает и предлагает; ни одного права на проведение, согласование и закрытие"
+    }
+  },
+  "actions": {
+    "dashboard.view": "сводка",
+    "warehouse.view": "остатки склада",
+    "warehouse.issue": "требование на материалы (М-11)",
+    "warehouse.receipt": "приход на склад",
+    "act.view": "акты КС-2",
+    "act.prepare": "подготовить акт к предъявлению (не подпись: УКЭП не подключена)",
+    "request.view": "заявки на оплату",
+    "request.create": "подать заявку на оплату",
+    "request.approve": "согласовать ступень маршрута (роль в маршруте проверяется отдельно)",
+    "request.pay": "оплатить согласованную заявку",
+    "postings.view": "журнал проводок и ОСВ",
+    "postings.post": "провести предложенные проводки",
+    "postings.accept": "принять/отклонить предложение проводки",
+    "closing.view": "закрытие месяца",
+    "closing.run": "запустить закрытие месяца",
+    "treasury.view": "календарь и БДДС",
+    "audit.view": "журнал аудита",
+    "admin.users": "пользователи",
+    "admin.rbac": "матрица ролей"
+  },
+  "object_scope": {
+    "прораб": "own",
+    "снабженец": "own",
+    "ПТО": "own",
+    "бухгалтер": "all",
+    "руководитель": "all",
+    "администратор": "none",
+    "ИИ-агент": "none"
+  },
+  "rules": [
+    "Права проверяются на сервере по этому файлу: шаблон только скрывает кнопки, отказ приходит с кодом 403 и причиной.",
+    "Пользователь видит только свои объекты: заявка или требование по чужому объекту — отказ OBJECT_FORBIDDEN.",
+    "Ступень маршрута согласования проверяется дважды: право request.approve:роль и порядок маршрута в казначействе.",
+    "Роль «администратор» не имеет прав на проведение документов: администрирование — не учёт.",
+    "ИИ-агент не проводит, не согласовывает и не закрывает период. Это ограничение на уровне прав, а не договорённость.",
+    "Каждое действие пишется в журнал аудита: кто, роль, что, по какому объекту, с какого адреса.",
+    "Область объектов задана в `object_scope`: «own» — только объекты человека из users.json, «all» — все объекты, «none» — ни одного (администратор и ИИ-агент объектами не оперируют)."
+  ],
+  "not_implemented": [
+    "двухфакторная аутентификация и интеграция с AD/LDAP",
+    "подпись документов УКЭП из браузера (этап 7)",
+    "разграничение по сумме заявки внутри роли (сейчас — маршрут согласования)"
+  ]
+}

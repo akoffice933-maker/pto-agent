@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}Сводка{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Сводка участка</h1>
+  <div class="muted">на {{ summary.date }} · период {{ summary.period }}</div>
+</div>
+
+<section class="tiles">
+  <div class="tile">
+    <div class="tile-label">Материалы на складе</div>
+    <div class="tile-value">{{ summary.stock_amount|rub }}</div>
+    <div class="tile-note">{{ summary.stock_rows }} позиций{% if summary.stock_negative %} ·
+      <span class="bad">минус в {{ summary.stock_negative }}</span>{% endif %}</div>
+  </div>
+  <div class="tile">
+    <div class="tile-label">Деньги по казначейству</div>
+    <div class="tile-value">{{ summary.money|rub }}</div>
+    <div class="tile-note">на {{ summary.date }} ·
+      {% if summary.money_gap %}<span class="bad">в журнале 51 — {{ summary.money_ledger|rub }}:
+      входящий остаток не проведён</span>{% else %}совпадает с сальдо 51{% endif %}
+    </div>
+  </div>
+  <div class="tile">
+    <div class="tile-label">Журнал проводок</div>
+    <div class="tile-value">{{ summary.entries }}</div>
+    <div class="tile-note">
+      {% if summary.journal_ok %}<span class="ok">Дт = Кт</span>
+      {% else %}<span class="bad">не сходится</span>{% endif %}
+      · режим: {{ summary.mode }}
+    </div>
+  </div>
+  <div class="tile">
+    <div class="tile-label">Заявки на оплату</div>
+    <div class="tile-value">{{ summary.requests_open }}</div>
+    <div class="tile-note">в работе из {{ summary.requests_total }} · оплачено {{ summary.requests_paid|rub }}</div>
+  </div>
+  <div class="tile">
+    <div class="tile-label">Предложенные проводки</div>
+    <div class="tile-value">{{ summary.proposals }}</div>
+    <div class="tile-note">проводит человек с ролью бухгалтера</div>
+  </div>
+  <div class="tile">
+    <div class="tile-label">Закрытые месяцы</div>
+    <div class="tile-value">{{ summary.closed|length }}</div>
+    <div class="tile-note">{{ summary.closed|join(', ') or 'закрытий ещё не было' }}</div>
+  </div>
+</section>
+
+{% if open_requests and can('request.view') %}
+<section class="card">
+  <h2>Заявки в работе</h2>
+  <table class="table">
+    <thead><tr><th>номер</th><th>дата</th><th>получатель</th><th>статья</th><th class="num">сумма</th><th>статус</th><th></th></tr></thead>
+    <tbody>
+    {% for row in open_requests %}
+      <tr>
+        <td>{{ row.number }}</td>
+        <td>{{ row.date }}</td>
+        <td>{{ row.counterparty }}</td>
+        <td>{{ row.article }}</td>
+        <td class="num">{{ row.amount|rub }}</td>
+        <td><span class="badge">{{ status_label(row.status) }}</span></td>
+        <td><a href="/requests">открыть</a></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% if history and can('audit.view') %}
+<section class="card">
+  <h2>Последние действия</h2>
+  <table class="table compact">
+    <thead><tr><th>когда</th><th>кто</th><th>что</th><th>объект записи</th><th>IP</th></tr></thead>
+    <tbody>
+    {% for rec in history %}
+      <tr>
+        <td>{{ rec.ts }}</td>
+        <td>{{ rec.actor }} <span class="muted">({{ (rec.payload or {}).get('role','—') }})</span></td>
+        <td>{{ rec.action }}</td>
+        <td>{{ rec.entity }}</td>
+        <td class="muted">{{ (rec.payload or {}).get('ip','—') }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+{% endblock %}

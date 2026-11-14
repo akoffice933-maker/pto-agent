@@ -2412,6 +2412,25 @@ def cmd_monthly(args) -> int:
     return 0 if plan["verdict"]["ready_to_invoice"] else 2
 
 
+def cmd_web(args) -> int:
+    """Поднять экраны учёта. Права проверяются на сервере по data/reference/rbac.json."""
+    from .web.app import create_app
+    from .web.demo import build as build_web_demo
+
+    print("Экраны учёта: FastAPI + Jinja2/HTMX")
+    print(f"1. Состояния контуров: {args.root}")
+    if args.demo:
+        report = build_web_demo(args.root)
+        print(f"   демо собрано: склад {report['stock']}, казначейство {report['treasury']}, "
+              f"журнал {report['ledger']}, пользователей {report['users']}")
+    app = create_app(root=args.root, secret=args.secret)
+    print(f"2. Вход: http://{args.host}:{args.port}/login")
+    print("   роли и права — data/reference/rbac.json; демо-логины показаны на странице входа")
+    import uvicorn
+    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+    return 0
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     # подкоманды CAD и MCP живут в своих пакетах: делегируем до разбора argparse,
@@ -3190,6 +3209,15 @@ def main(argv=None):
     rv.add_argument("--object-name", default=None)
     rv.add_argument("--out", default="out/review")
     rv.set_defaults(func=cmd_review)
+
+    web = sub.add_parser("web", help="экраны учёта: роли, склад, акты, заявки, проводки, закрытие")
+    web.add_argument("--root", default="out", help="каталог состояний контуров")
+    web.add_argument("--host", default="127.0.0.1")
+    web.add_argument("--port", type=int, default=8000)
+    web.add_argument("--demo", action="store_true", help="собрать демо-состояния перед запуском")
+    web.add_argument("--secret", default=None,
+                     help="ключ сессии: без него сессии сбрасываются при перезапуске")
+    web.set_defaults(func=cmd_web)
 
     args = p.parse_args(argv)
     result = args.func(args)

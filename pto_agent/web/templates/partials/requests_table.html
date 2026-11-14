@@ -1,0 +1,48 @@
+<div id="requests-table">
+  {% if rows %}
+  <table class="table">
+    <thead>
+      <tr><th>номер</th><th>дата</th><th>получатель</th><th>статья</th><th class="num">сумма</th>
+          <th class="num">оплачено</th><th>статус</th><th>маршрут</th><th>подписи</th><th>действия</th></tr>
+    </thead>
+    <tbody>
+    {% for row in rows %}
+      <tr class="{{ 'mine' if row.can_approve else '' }}">
+        <td>{{ row.number }}<div class="muted small">{{ row.object }}</div></td>
+        <td>{{ row.date }}</td>
+        <td>{{ row.counterparty }}</td>
+        <td>{{ row.article }}</td>
+        <td class="num">{{ row.amount|rub }}</td>
+        <td class="num">{{ row.paid|rub }}</td>
+        <td><span class="badge">{{ status_label(row.status) }}</span>
+          {% if row.next_step %}<div class="muted small">ждёт: {{ row.next_step }}</div>{% endif %}</td>
+        <td class="small">{{ row.route_text }}</td>
+        <td class="small">{{ row.approved_text }}</td>
+        <td class="actions">
+          {% if row.can_approve %}
+            <form method="post" action="/requests/{{ row.number }}/approve">
+              <input type="hidden" name="csrf" value="{{ csrf }}">
+              <input name="comment" placeholder="комментарий" class="w-comment">
+              <button class="primary small" type="submit">Согласовать «{{ row.next_step }}»</button>
+            </form>
+            <form method="post" action="/requests/{{ row.number }}/reject">
+              <input type="hidden" name="csrf" value="{{ csrf }}">
+              <input name="reason" placeholder="причина отказа" class="w-comment" required>
+              <button class="small" type="submit">Отклонить</button>
+            </form>
+          {% endif %}
+          {% if row.can_pay %}
+            <form method="post" action="/requests/{{ row.number }}/pay">
+              <input type="hidden" name="csrf" value="{{ csrf }}">
+              <input name="amount" placeholder="сумма (пусто — вся)" class="w-comment">
+              <button class="small" type="submit">Оплатить</button>
+            </form>
+          {% endif %}
+          {% if not row.can_approve and not row.can_pay %}<span class="muted small">—</span>{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="muted">Заявок нет.</p>{% endif %}
+</div>

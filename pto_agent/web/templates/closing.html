@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Закрытие месяца{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Закрытие месяца</h1>
+  <div class="muted">Шаги закрытия идут по порядку; каждый шаг отчитывается, а не молчит.</div>
+</div>
+
+<section class="card">
+  <h2>Запуск</h2>
+  {% if can('closing.run') %}
+  <form method="post" action="/closing" class="row">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label class="inline">период
+      <select name="period">
+        {% for period in periods %}<option value="{{ period }}" {{ 'selected' if period == current else '' }}>{{ period }}</option>{% endfor %}
+      </select>
+    </label>
+    <label class="inline check"><input type="checkbox" name="dry_run" value="1"> проба (ничего не сохранять)</label>
+    <button class="primary" type="submit">Закрыть месяц</button>
+  </form>
+  {% else %}
+  <p class="muted">Закрывает месяц бухгалтер: у вашей роли нет права <code>closing.run</code>.</p>
+  {% endif %}
+  {% if closed %}
+  <p class="muted small">Закрытые периоды: {{ closed|map(attribute='period')|join(', ') }}</p>
+  {% else %}<p class="muted small">Закрытых периодов пока нет.</p>{% endif %}
+</section>
+
+{% if report %}
+<section class="card">
+  <h2>Результат за {{ report.period }}{% if report.mode %} · режим {{ report.mode }}{% endif %}</h2>
+  {% if report.problems %}
+    <div class="flash flash-err">
+      {% for item in report.problems %}<div><b>{{ item.code }}</b> · {{ item.what }}: {{ item.why }}</div>{% endfor %}
+    </div>
+  {% endif %}
+  {% if report.warnings %}
+    <div class="flash flash-warn">{% for text in report.warnings %}<div>{{ text }}</div>{% endfor %}</div>
+  {% endif %}
+  <table class="table compact">
+    <thead><tr><th>шаг</th><th>что делает</th><th>статус</th><th class="num">сумма</th></tr></thead>
+    <tbody>
+    {% for step in report.steps %}
+      <tr>
+        <td>{{ step.id }}</td>
+        <td>{{ step.title }}</td>
+        <td><span class="badge">{{ step.status }}</span></td>
+        <td class="num">{{ step.amount|rub }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if report.not_done %}
+    <h3>Не сделано</h3>
+    <ul class="muted small">
+      {% for item in report.not_done %}<li>{{ item.what if item.what is defined else item }}: {{ item.why|default('') }}</li>{% endfor %}
+    </ul>
+  {% endif %}
+  <p class="muted small">Закрытие делает человек с ролью бухгалтера; ИИ-агент может только показать,
+    что не сходится.</p>
+</section>
+{% endif %}
+
+{% if last %}
+<section class="card">
+  <h2>Последнее закрытие</h2>
+  <p class="muted">период {{ last.period }} · шагов {{ (last.steps or [])|length }}</p>
+  <table class="table compact">
+    <thead><tr><th>шаг</th><th>статус</th><th class="num">сумма</th></tr></thead>
+    <tbody>
+    {% for step in last.steps or [] %}
+      <tr><td>{{ step.title or step.id }}</td><td>{{ step.status }}</td><td class="num">{{ step.amount|rub }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+{% endblock %}

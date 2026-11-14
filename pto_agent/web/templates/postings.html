@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}Проводки и ОСВ{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Проводки и оборотная ведомость</h1>
+  <div class="muted">режим контура: {{ mode }} · периоды:</div>
+</div>
+
+<form method="get" action="/postings" class="card inline-form">
+  <label class="inline">период
+    <select name="period" onchange="this.form.submit()">
+      {% for period in periods %}<option value="{{ period }}" {{ 'selected' if period == current else '' }}>{{ period }}</option>{% endfor %}
+    </select>
+  </label>
+  <noscript><button type="submit">показать</button></noscript>
+</form>
+
+<section class="card">
+  <div class="row-between">
+    <h2>ОСВ за {{ period }}</h2>
+    <div>
+      {% if report.balanced %}<span class="ok">Дт = Кт</span>{% else %}<span class="bad">не сходится</span>{% endif %}
+      · записей {{ report.entries }}
+    </div>
+  </div>
+  <table class="table compact">
+    <thead><tr><th>счёт</th><th>наименование</th><th class="num">сальдо нач.</th><th class="num">об. Дт</th>
+               <th class="num">об. Кт</th><th class="num">сальдо кон.</th></tr></thead>
+    <tbody>
+    {% for row in report.rows %}
+      <tr>
+        <td>{{ row.code }}</td>
+        <td>{{ row.title }}</td>
+        <td class="num">{{ row.opening|rub }}</td>
+        <td class="num">{{ row.debit|rub }}</td>
+        <td class="num">{{ row.credit|rub }}</td>
+        <td class="num">{{ row.closing|rub }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+    <tfoot>
+      <tr><td colspan="3">итого</td>
+          <td class="num">{{ report.totals.debit|rub }}</td>
+          <td class="num">{{ report.totals.credit|rub }}</td>
+          <td class="num">{{ report.totals.closing_debit|rub }}</td></tr>
+    </tfoot>
+  </table>
+  {% if report.off_balance %}
+  <h3>Забалансовые счета (количество)</h3>
+  <table class="table compact">
+    <thead><tr><th>счёт</th><th>наименование</th><th class="num">приход</th><th class="num">расход</th><th class="num">остаток</th></tr></thead>
+    <tbody>
+    {% for row in report.off_balance %}
+      <tr><td>{{ row.code }}</td><td>{{ row.title }}</td>
+          <td class="num">{{ row.qty_debit|qty }}</td><td class="num">{{ row.qty_credit|qty }}</td>
+          <td class="num">{{ row.qty_closing|qty }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+
+{% if proposals %}
+<section class="card">
+  <h2>Предложенные проводки ({{ proposals|length }})</h2>
+  <p class="muted small">Предложения готовит контур, проводит человек с правом <code>postings.accept</code>.
+    ИИ-агент их не проводит.</p>
+  {% for row in proposals %}
+    <div class="proposal">
+      <div><b>{{ row.id }}</b> · {{ row.event }} · {{ row.date }} · {{ row.memo|default('') }}</div>
+      <table class="table compact">
+        <thead><tr><th>счёт</th><th>Дт</th><th>Кт</th><th class="num">сумма</th><th>аналитика</th></tr></thead>
+        <tbody>
+        {% for line in row.lines %}
+          <tr><td>{{ line.account }}</td>
+              <td>{{ '✓' if line.side == 'Дт' else '' }}</td>
+              <td>{{ '✓' if line.side == 'Кт' else '' }}</td>
+              <td class="num">{{ line.amount|rub }}</td>
+              <td class="small">{{ line.analytics|default({})|tojson }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% if can('postings.accept') and user.kind == 'human' %}
+      <div class="row">
+        <form method="post" action="/postings/proposals/{{ row.id }}/accept">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button class="primary small" type="submit">Провести</button>
+        </form>
+        <form method="post" action="/postings/proposals/{{ row.id }}/reject" class="row">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <input name="reason" placeholder="причина отклонения">
+          <button class="small" type="submit">Отклонить</button>
+        </form>
+      </div>
+      {% endif %}
+    </div>
+  {% endfor %}
+</section>
+{% endif %}
+
+<section class="card">
+  <div class="row-between">
+    <h2>Журнал проводок за {{ period }}</h2>
+    {% if can('postings.post') %}
+    <form method="post" action="/postings/sync">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button class="small" type="submit">Провести оплаты казначейства</button>
+    </form>
+    {% endif %}
+  </div>
+  {% if entries %}
+  <table class="table compact">
+    <thead><tr><th>id</th><th>дата</th><th>событие</th><th>Дт</th><th>Кт</th><th>основание</th></tr></thead>
+    <tbody>
+    {% for entry in entries %}
+      <tr>
+        <td>{{ entry.id }}</td>
+        <td>{{ entry.date }}</td>
+        <td>{{ entry.event }}</td>
+        <td class="small">{% for line in entry.lines if line.side == 'Дт' %}{{ line.account }} {{ line.amount|rub }}{% if not loop.last %}<br>{% endif %}{% endfor %}</td>
+        <td class="small">{% for line in entry.lines if line.side == 'Кт' %}{{ line.account }} {{ line.amount|rub }}{% if not loop.last %}<br>{% endif %}{% endfor %}</td>
+        <td class="small muted">{{ entry.memo|short(80) }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="muted">Проводок за период нет.</p>{% endif %}
+</section>
+{% endblock %}

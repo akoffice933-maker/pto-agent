@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Новая заявка{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Заявка на оплату</h1>
+  <div class="muted">Заявка без документа-основания не принимается: «оплатить» без счёта, УПД или акта — не заявка.</div>
+</div>
+
+{% if problem %}<div class="flash flash-err">{{ problem }}</div>{% endif %}
+{% if result and result.errors %}
+  <div class="flash flash-err">
+    {% for item in result.errors %}<div><b>{{ item.code }}</b> · {{ item.what }}: {{ item.why }}</div>{% endfor %}
+  </div>
+{% endif %}
+{% if result and result.gaps %}
+  <div class="flash flash-warn">
+    {% for item in result.gaps %}<div>— {{ item.what }}: {{ item.ask }}</div>{% endfor %}
+  </div>
+{% endif %}
+
+<form method="post" action="/requests/new" class="card">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <div class="grid-3">
+    <label>Номер заявки<input name="number" value="{{ form.number }}" required></label>
+    <label>Дата<input name="date" type="date" value="{{ form.date }}" required></label>
+    <label>Объект
+      <select name="object" required>
+        {% for name in objects %}<option value="{{ name }}" {{ 'selected' if name == form.object else '' }}>{{ name }}</option>{% endfor %}
+      </select>
+    </label>
+  </div>
+  <div class="grid-3">
+    <label>Получатель денег<input name="counterparty" value="{{ form.counterparty }}" required></label>
+    <label>Сумма, ₽<input name="amount" value="{{ form.amount }}" inputmode="decimal" required></label>
+    <label>Статья БДДС
+      <select name="article">
+        {% for row in articles %}<option value="{{ row.name }}" {{ 'selected' if row.name == form.article else '' }}>{{ row.name }} — {{ row.note|short(48) }}</option>{% endfor %}
+      </select>
+    </label>
+  </div>
+  <div class="grid-2">
+    <label>Документ-основание: номер<input name="basis_number" value="{{ form.basis_number }}" required></label>
+    <label>Дата основания<input name="basis_date" type="date" value="{{ form.basis_date }}"></label>
+  </div>
+  <label>Примечание<input name="note" value="{{ form.note }}"></label>
+  <p class="muted small">Лимит по статье и лимит объекта проверяются при подаче. Маршрут согласования зависит
+    от суммы — его назначает казначейство, а не заявитель.</p>
+  <button class="primary" type="submit">Подать заявку</button>
+</form>
+{% endblock %}

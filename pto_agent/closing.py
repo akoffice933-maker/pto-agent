@@ -153,30 +153,38 @@ def step_overheads(state: dict, period: str, *, policy: dict, mode: str,
 
     Два разных случая, и путать их нельзя:
     * счёт **с аналитикой по объекту** (25) уже собран по объектам — переносим как есть,
-      распределять нечего;
-    * счёт **без аналитики** (26) — общий на всю организацию, его раскладываем по объектам
-      пропорционально прямым затратам периода. База и доли уходят в проводку.
+      сохраняя и объект, и статью затрат;
+    * счёт **без объекта** (26) — общий на всю организацию, его раскладываем по объектам
+      пропорционально прямым затратам периода. Раскладываем **по каждой статье затрат
+      отдельно**, иначе статья потеряется при переносе и БДР покажет «не разнесено».
     """
     accounts = [str(code) for code in (policy.get("overheads") or {}).get("accounts") or []]
     target = str((policy.get("overheads") or {}).get("target") or "20.01")
-    balances: dict[str, tuple[Decimal, dict[tuple, Decimal], bool]] = {}
+    # Разрез берём по всей аналитике, которая объявлена у счёта: у 25 это (объект, статья
+    # затрат), у 26 — только статья затрат. Иначе статья теряется при переносе и БДР
+    # снова показывает «не разнесено».
+    dims_of: dict[str, tuple[str, ...]] = {}
+    totals: dict[str, Decimal] = {}
+    pieces: dict[str, list[tuple[tuple, Decimal]]] = {}
     for account in accounts:
         info = ledger.account_of(chart, account) or {}
-        by_object = bool(info.get("analytics"))
-        rows = _positive(balance_of(state, account, date=date, group="объект" if by_object else None))
+        dims = tuple(info.get("analytics") or ())
+        dims_of[account] = dims
+        rows = _positive(balance_of(state, account, date=date, group=dims or None))
         total = _total(rows)
         if total:
-            balances[account] = (total, rows, by_object)
-    if not balances:
+            totals[account] = total
+            pieces[account] = sorted(rows.items())
+    if not totals:
         return _step("overheads", "Косвенные расходы 25/26 → 20.01", NOT_NEEDED,
                      amount=Decimal("0"), why="на 25 и 26 нет сальдо за период")
 
-    grand_total = ledger.kopeck(sum(value for value, _, _ in balances.values()))
-
-    # база нужна только для счетов без аналитики
+    grand_total = ledger.kopeck(sum(totals.values(), Decimal("0")))
+    # «Общий» счёт — тот, у которого нет аналитики по объекту: его и распределяем.
+    shared = [account for account, dims in dims_of.items() if "объект" not in dims]
     base_by_object: dict[str, Decimal] = {}
     base_total = Decimal("0")
-    if any(not by_object for _, _, by_object in balances.values()):
+    if shared:
         direct = turnover_in_period(state, target, period, group="объект")
         for (name,), row in direct.items():
             object_name = rollup_of(policy, name)
@@ -194,45 +202,57 @@ def step_overheads(state: dict, period: str, *, policy: dict, mode: str,
     lines: list[dict] = []
     bases: list[dict] = []
     detail: list[dict] = []
-    for account, (total, rows, by_object) in balances.items():
-        if by_object:
-            for (name,), value in sorted(rows.items()):
+    for account, total in totals.items():
+        dims = dims_of[account]
+        if "объект" in dims:
+            for key, value in pieces[account]:
                 if abs(value) <= ledger.EPS:
                     continue
+                analytics = {name: value_ for name, value_ in zip(dims, key)}
                 lines.append({"account": target, "side": ledger.DEBIT, "amount": value,
-                              "analytics": {"объект": name}})
+                              "analytics": dict(analytics)})
                 lines.append({"account": account, "side": ledger.CREDIT, "amount": value,
-                              "analytics": {"объект": name}})
-                detail.append({"объект": name, "счёт": account, "база": "собрано по объекту",
-                               "доля": "100 %", "распределено": ledger.as_float(value)})
+                              "analytics": analytics})
+                detail.append({"объект": analytics.get("объект", ""), "счёт": account,
+                               "статья": analytics.get("статья затрат", ""),
+                               "база": "собрано по объекту", "доля": "100 %",
+                               "распределено": ledger.as_float(value)})
             continue
+        # счёт без объекта: распределяем каждую статью отдельно, сохраняя статью в проводке
+        articles: dict[str, Decimal] = {}
+        for key, value in pieces[account]:
+            article = str(key[0]) if key else ""
+            articles[article] = articles.get(article, Decimal("0")) + value
         objects = sorted(base_by_object)
-        allocated = Decimal("0")
-        for index, object_name in enumerate(objects):
-            base_amount = base_by_object[object_name]
-            share = base_amount / base_total
-            piece = (total - allocated) if index == len(objects) - 1 else ledger.kopeck(total * share)
-            allocated += piece
-            if piece == 0:
-                continue
-            lines.append({"account": target, "side": ledger.DEBIT, "amount": piece,
-                          "analytics": {"объект": object_name}})
-            bases.append({"object": object_name, "base": "прямые затраты 20.01 за " + period,
-                          "base_amount": ledger.as_float(base_amount),
-                          "share": float(round(share, 6)), "account": account,
-                          "amount": ledger.as_float(piece)})
-            detail.append({"объект": object_name, "счёт": account,
-                           "база": ledger.as_float(base_amount),
-                           "доля": f"{float(share) * 100:.2f} %",
-                           "распределено": ledger.as_float(piece)})
-        lines.append({"account": account, "side": ledger.CREDIT, "amount": total,
-                      "analytics": {}})
+        for article, article_total in sorted(articles.items()):
+            allocated = Decimal("0")
+            for index, object_name in enumerate(objects):
+                base_amount = base_by_object[object_name]
+                share = base_amount / base_total
+                piece = (article_total - allocated) if index == len(objects) - 1 \
+                    else ledger.kopeck(article_total * share)
+                allocated += piece
+                if piece == 0:
+                    continue
+                analytics = {"объект": object_name, "статья затрат": article}
+                lines.append({"account": target, "side": ledger.DEBIT, "amount": piece,
+                              "analytics": dict(analytics)})
+                bases.append({"object": object_name, "base": "прямые затраты 20.01 за " + period,
+                              "base_amount": ledger.as_float(base_amount),
+                              "share": float(round(share, 6)), "account": account,
+                              "article": article, "amount": ledger.as_float(piece)})
+                detail.append({"объект": object_name, "счёт": account, "статья": article,
+                               "база": ledger.as_float(base_amount),
+                               "доля": f"{float(share) * 100:.2f} %",
+                               "распределено": ledger.as_float(piece)})
+            lines.append({"account": account, "side": ledger.CREDIT, "amount": article_total,
+                          "analytics": {"статья затрат": article}})
 
     result = ledger.post_entry(
         state, event="close.overheads", date=date,
         doc={"number": f"закрытие {period}: распределение 25/26", "date": date, "kind": "closing"},
         lines=lines, memo=(f"25/26 → 20.01: {ledger._rub(grand_total)} "
-                           f"({', '.join(sorted(balances))})"),
+                           f"({', '.join(sorted(totals))})"),
         rule="close.overheads", bases=bases, chart=chart, rules=rules, mode=mode,
         key=f"close.overheads|{period}")
     status = DONE if result["status"] == ledger.STATUS_OK else (

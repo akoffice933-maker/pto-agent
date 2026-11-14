@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Учёт ПТО{% endblock %} · ИИ-агент ПТО</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/htmx.min.js" defer></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark">ПТО</span>
+    <span class="brand-text">учёт участка</span>
+  </div>
+  {% if user %}
+  <nav class="nav">
+    {% for item in nav %}
+      <a href="{{ item.href }}" class="{{ 'active' if request.url.path == item.href else '' }}">{{ item.title }}</a>
+    {% endfor %}
+  </nav>
+  <div class="who">
+    <div class="who-name">{{ user.name }}</div>
+    <div class="who-role">{{ role_title }}</div>
+    <form method="post" action="/logout">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button class="link">выйти</button>
+    </form>
+  </div>
+  {% endif %}
+</header>
+
+<main class="page">
+  {% for message in flash %}
+    <div class="flash flash-{{ message.kind }}">{{ message.text }}</div>
+  {% endfor %}
+  {% if user and user.kind != 'human' %}
+    <div class="flash flash-warn">Сервисный актор: может смотреть и предлагать. Проводить документы,
+      согласовывать и закрывать период он не может — это право человека с ролью.</div>
+  {% endif %}
+  {% block content %}{% endblock %}
+</main>
+
+<footer class="foot">
+  <span>Все цифры берутся из журналов контура: склад, казначейство, ядро учёта.</span>
+  <span>Действия пишутся в хэш-цепочку аудита.</span>
+</footer>
+</body>
+</html>

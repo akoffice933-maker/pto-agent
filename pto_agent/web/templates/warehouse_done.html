@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Требование проведено{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Требование {{ number }} проведено</h1></div>
+<section class="card">
+  <table class="table">
+    <thead><tr><th>номенклатура</th><th>склад</th><th class="num">количество</th><th class="num">цена</th><th>партия</th></tr></thead>
+    <tbody>
+    {% for row in moves %}
+      <tr><td>{{ row.item }}</td><td>{{ row.warehouse }}</td>
+          <td class="num">{{ row.qty|qty }}</td><td class="num">{{ row.price|rub }}</td>
+          <td class="muted small">{{ row.batch }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p><a class="button" href="/warehouse/issue/{{ number }}.docx">Печатная форма М-11 (черновик, без подписи)</a></p>
+  <p class="muted small">Форма — черновик: подпись УКЭП не подключена (этап 7).</p>
+  <p><a href="/warehouse">вернуться на склад</a> · <a href="/warehouse/issue">ещё одно требование</a></p>
+</section>
+{% endblock %}

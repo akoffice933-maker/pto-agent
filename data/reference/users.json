@@ -1,0 +1,159 @@
+{
+  "schema": "pto-agent/users@1",
+  "title": "Пользователи демонстрационного контура",
+  "note": "Пароли — PBKDF2-SHA256. Логины и пароли ниже только для демонстрации; боевая аутентификация (AD/LDAP, 2FA) не сделана.",
+  "demo_logins": [
+    {
+      "login": "prokhorov",
+      "password": "demo-prokhorov",
+      "role": "прораб"
+    },
+    {
+      "login": "snab",
+      "password": "demo-snab",
+      "role": "снабженец"
+    },
+    {
+      "login": "pto",
+      "password": "demo-pto",
+      "role": "ПТО"
+    },
+    {
+      "login": "buh",
+      "password": "demo-buh",
+      "role": "бухгалтер"
+    },
+    {
+      "login": "dir",
+      "password": "demo-dir",
+      "role": "руководитель"
+    },
+    {
+      "login": "admin",
+      "password": "demo-admin",
+      "role": "администратор"
+    },
+    {
+      "login": "agent",
+      "password": "demo-agent",
+      "role": "ИИ-агент"
+    }
+  ],
+  "users": [
+    {
+      "login": "prokhorov",
+      "name": "Прохоров П.П.",
+      "role": "прораб",
+      "kind": "human",
+      "objects": [
+        "ЖК «Северный», корпус 2"
+      ],
+      "active": true,
+      "note": "подаёт требование М-11 и заявку по своему объекту",
+      "password": {
+        "algo": "pbkdf2_sha256",
+        "salt": "ecee1856c41b3e72586f32968ff9622e",
+        "iterations": 200000,
+        "hash": "139ec198798b74d7df23e3c8eadb265d19b6ca18039053a3c043fc5f7bfbcacc"
+      }
+    },
+    {
+      "login": "snab",
+      "name": "Снабженцев С.С.",
+      "role": "снабженец",
+      "kind": "human",
+      "objects": [
+        "ЖК «Северный», корпус 2"
+      ],
+      "active": true,
+      "note": "приход на склад и первая ступень согласования",
+      "password": {
+        "algo": "pbkdf2_sha256",
+        "salt": "ee6068f03a6b1351028f95c1d1fa32fa",
+        "iterations": 200000,
+        "hash": "41a8cf8dad1aef4b3cbf442116a48dfe039f1a88e092b781472fe7b928b15834"
+      }
+    },
+    {
+      "login": "pto",
+      "name": "Сметчикова А.А.",
+      "role": "ПТО",
+      "kind": "human",
+      "objects": [
+        "ЖК «Северный», корпус 2"
+      ],
+      "active": true,
+      "note": "акты КС-2 и вторая ступень согласования",
+      "password": {
+        "algo": "pbkdf2_sha256",
+        "salt": "fbefebb8ca62bfa8dee8abb46aebba76",
+        "iterations": 200000,
+        "hash": "9d42efb395adc57f2ec1a62e1fb897428e9a195ccd845ed1115451ed6cc48ba0"
+      }
+    },
+    {
+      "login": "buh",
+      "name": "Бухгалтерова Б.Б.",
+      "role": "бухгалтер",
+      "kind": "human",
+      "objects": [
+        "*"
+      ],
+      "active": true,
+      "note": "проводки, оплата, закрытие месяца",
+      "password": {
+        "algo": "pbkdf2_sha256",
+        "salt": "5e00623dab2e7f8bb6fcb629fb793a30",
+        "iterations": 200000,
+        "hash": "fdd575b375092d7c0ec40e2127e4eba481b0c5d5d4195127c18ac5cc231caf52"
+      }
+    },
+    {
+      "login": "dir",
+      "name": "Директоров Д.Д.",
+      "role": "руководитель",
+      "kind": "human",
+      "objects": [
+        "*"
+      ],
+      "active": true,
+      "note": "дашборд и ступень «финдиректор»",
+      "password": {
+        "algo": "pbkdf2_sha256",
+        "salt": "d811a40e628a37e62d8e634c6dc20043",
+        "iterations": 200000,
+        "hash": "6b0ae5e5371019d4b7ee61fd21290947e8f4b900274746f4b7f0cceb00dbed6c"
+      }
+    },
+    {
+      "login": "admin",
+      "name": "Админов А.А.",
+      "role": "администратор",
+      "kind": "human",
+      "objects": [],
+      "active": true,
+      "note": "администрирование: прав на проводки нет",
+      "password": {
+        "algo": "pbkdf2_sha256",
+        "salt": "9e81b0cf9e6b013d3f1b7aa1d1b03c00",
+        "iterations": 200000,
+        "hash": "640796303407d54b0a025490af42ae5dcec9f153fc7ee1f6aa8615f875af7870"
+      }
+    },
+    {
+      "login": "agent",
+      "name": "ИИ-агент (сервис)",
+      "role": "ИИ-агент",
+      "kind": "agent",
+      "objects": [],
+      "active": true,
+      "note": "читает и предлагает; проводить, согласовывать и закрывать не может",
+      "password": {
+        "algo": "pbkdf2_sha256",
+        "salt": "99f3a3a5304f660a399c342f7f24f5a9",
+        "iterations": 200000,
+        "hash": "b934081e3b3f922d973000c52aba19ea66600391cd722f720bf3250cafd164df"
+      }
+    }
+  ]
+}

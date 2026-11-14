@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Роли{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Роли и права</h1>
+  <div class="muted">матрица читается из <code>data/reference/rbac.json</code> и проверяется на сервере</div>
+</div>
+
+<section class="card">
+  <h2>Роль × право</h2>
+  <table class="table compact">
+    <thead><tr><th>роль</th><th>область объектов</th><th>права</th></tr></thead>
+    <tbody>
+    {% for role in matrix.roles %}
+      <tr>
+        <td><b>{{ matrix.role_title(role) }}</b><div class="muted small">{{ role }}</div></td>
+        <td class="small">{{ matrix.scope_of(role) }}</td>
+        <td class="small">
+          {% for grant in matrix.permissions(role)|sort %}<span class="badge">{{ grant }}</span> {% endfor %}
+          {% if not matrix.permissions(role) %}<span class="bad">нет прав</span>{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="card">
+  <h2>Пользователи</h2>
+  <table class="table compact">
+    <thead><tr><th>логин</th><th>ФИО</th><th>роль</th><th>тип</th><th>объекты</th><th>активен</th></tr></thead>
+    <tbody>
+    {% for row in users %}
+      <tr>
+        <td>{{ row.login }}</td><td>{{ row.name }}</td><td>{{ row.role }}</td>
+        <td class="small">{{ row.kind }}</td>
+        <td class="small">{{ (row.objects or [])|join(', ') or '—' }}</td>
+        <td>{{ 'да' if row.active else 'нет' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="card">
+  <h2>Правила</h2>
+  <ul class="small">{% for text in rules %}<li>{{ text }}</li>{% endfor %}</ul>
+  <h2>Не сделано</h2>
+  <ul class="small muted">{% for text in not_implemented %}<li>{{ text }}</li>{% endfor %}</ul>
+</section>
+{% endblock %}

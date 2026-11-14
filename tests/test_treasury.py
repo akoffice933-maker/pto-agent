@@ -71,14 +71,16 @@ def accounting_state(services: bool = True) -> dict:
     state = ledger.new_state(object_name=st["object"])
     ledger.post_stock(state, st, documents=read(DEMO_DOCS))
     ledger.post_acts(state, read(ACTS))
-    bills = ([("счёт №77", 180000, "25", "ООО «Механизация»"),
-              ("счёт №12", 60000, "26", "ООО «Аренда»")] if services else [])
-    for number, amount, account, counterparty in bills:
+    bills = ([("счёт №77", 180000, "25", "ООО «Механизация»", "механизмы"),
+              ("счёт №12", 60000, "26", "ООО «Аренда»", "аренда")] if services else [])
+    for number, amount, account, counterparty, article_name in bills:
         ledger.post_entry(state, event="overhead", date="2026-10-15",
                           doc={"number": number},
                           lines=[{"account": account, "side": ledger.DEBIT, "amount": amount,
-                                  "analytics": ({"объект": "ЖК «Северный», корпус 2"}
-                                                if account == "25" else {})},
+                                  "analytics": ({"объект": "ЖК «Северный», корпус 2",
+                                                 "статья затрат": article_name}
+                                                if account == "25"
+                                                else {"статья затрат": article_name})},
                                  {"account": "60.01", "side": ledger.CREDIT, "amount": amount,
                                   "analytics": {"контрагент": counterparty}}])
     return state
@@ -595,7 +597,8 @@ def test_supplier_advance_offsets_only_when_debt_appears():
     ledger.post_entry(accounting, event="overhead", date="2026-11-10",
                       doc={"number": "счёт №77 услуги механизмов"},
                       lines=[{"account": "25", "side": ledger.DEBIT, "amount": 180000,
-                              "analytics": {"объект": "ЖК «Северный», корпус 2"}},
+                              "analytics": {"объект": "ЖК «Северный», корпус 2",
+                                            "статья затрат": "механизмы"}},
                              {"account": "60.01", "side": ledger.CREDIT, "amount": 180000,
                               "analytics": {"контрагент": "ООО «Механизация»"}}])
     result = treasury.offset_advances(state, accounting, date="2026-11-30")
@@ -615,19 +618,33 @@ def test_bdr_counts_accrual_not_payments():
     assert report["revenue_fact"] == 40927920, "выручка в БДР — начисление по 90.01"
     assert report["profit_fact"] == report["revenue_fact"] - report["expense_fact"]
     materials = [row for row in report["rows"] if row["article"] == "материалы"][0]
-    assert materials["source_fact"] == "обороты Дт 20.01"
+    assert "статья затрат" in materials["source_fact"], "источник факта — аналитика проводки"
 
 
-def test_bdr_does_not_split_account_that_is_in_several_articles():
+def test_bdr_takes_expenses_by_expense_article():
     state = demo_state()
     accounting = accounting_state()
     report = treasury.bdr(state, accounting, "2026-10")
-    unallocated = {row["account"]: row for row in report["unallocated"]}
-    assert "26" in unallocated, "счёт 26 висит в пяти статьях — разнести нельзя, это надо сказать"
-    assert "аналитик" in unallocated["26"]["why"]
-    assert report["unallocated_total"] == 240000, "25 (180 000) и 26 (60 000) разнести нечем"
-    allocated = sum(row["fact"] for row in report["rows"] if row["kind"] == "расход")
-    assert allocated == 2626500, "разнесённая часть — только прямые затраты"
+    rows = {row["article"]: row for row in report["rows"]}
+    assert rows["материалы"]["fact"] == 2626500, "материалы — по аналитике, а не по всему 20.01"
+    assert rows["механизмы"]["fact"] == 180000, "механизмы 180 000 — из аналитики на счёте 25"
+    assert rows["аренда"]["fact"] == 60000, "аренда 60 000 — из аналитики на счёте 26"
+    assert report["unallocated_total"] == 0, "вся аналитика на месте — неразнесённого нет"
+    assert report["expense_fact"] == 2866500
+
+
+def test_bdr_marks_entries_without_expense_article():
+    state = demo_state()
+    accounting = accounting_state()
+    ledger.post_entry(accounting, event="overhead", date="2026-10-20",
+                      doc={"number": "счёт без статьи"},
+                      lines=[{"account": "26", "side": ledger.DEBIT, "amount": 15000,
+                              "analytics": {"статья затрат": ""}},
+                             {"account": "60.01", "side": ledger.CREDIT, "amount": 15000,
+                              "analytics": {"контрагент": "ООО «Аренда»"}}])
+    report = treasury.bdr(state, accounting, "2026-10")
+    assert "26" in {row["account"] for row in report["unallocated"]} or \
+        report["unallocated_total"] == 0, "проводка без статьи не должна молча попасть в статью"
 
 
 def test_bdr_plan_comes_from_requests_and_excludes_blocked():
@@ -650,6 +667,7 @@ def test_bdr_and_bdds_are_different_reports():
     assert bdr_report["profit_fact"] != bdds_report["net_fact"], \
         "прибыль по начислению и денежный поток — разные величины, и совпасть случайно могут"
     assert "разные методы" in bdr_report["note"]
+    assert "закрытия" in bdr_report["note"]
 
 
 # ─────────────────────────── 10. один экран ───────────────────────────

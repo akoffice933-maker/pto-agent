@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Склад{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Склад{% if object_name %} · {{ object_name }}{% endif %}</h1>
+  <div class="tools">
+    {% if can('warehouse.issue') %}<a class="button primary" href="/warehouse/issue">Требование М-11</a>{% endif %}
+  </div>
+</div>
+
+<section class="card">
+  <div class="row-between">
+    <h2>Остатки</h2>
+    <label class="inline">
+      склад
+      <select name="warehouse" hx-get="/warehouse/table" hx-target="#stock-table" hx-include="this">
+        <option value="">все</option>
+        {% for row in warehouses %}
+          <option value="{{ row.code }}" {{ 'selected' if row.code == warehouse_code else '' }}>{{ row.code }} — {{ row.title }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </div>
+  {% include "partials/stock_table.html" %}
+</section>
+
+<section class="card">
+  <h2>Последние документы</h2>
+  {% if documents %}
+  <table class="table compact">
+    <thead><tr><th>номер</th><th>дата</th><th>вид</th><th>склад</th><th class="num">движений</th><th></th></tr></thead>
+    <tbody>
+    {% for doc in documents %}
+      <tr>
+        <td>{{ doc.number }}</td>
+        <td>{{ doc.date }}</td>
+        <td>{{ doc.kind }}</td>
+        <td>{{ doc.warehouse }}</td>
+        <td class="num">{{ doc.moves }}</td>
+        <td>{% if doc.kind == 'issue' and can('warehouse.issue') %}
+          <a href="/warehouse/issue/{{ doc.number }}.docx">бланк М-11</a>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="muted">Документов ещё нет.</p>{% endif %}
+</section>
+{% endblock %}
