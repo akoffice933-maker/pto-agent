@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Акты КС-2{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Акты КС-2</h1>
+  <div class="muted">{{ object_name }}{% if contract %} · договор {{ contract }}{% endif %}</div>
+</div>
+<section class="card">
+  <h2>Реестр актов</h2>
+  {% if rows %}
+  <table class="table">
+    <thead><tr><th>акт</th><th>период</th><th>дата</th><th class="num">сумма</th><th>проверка</th>
+               <th>в проводках</th><th class="num">позиций</th></tr></thead>
+    <tbody>
+    {% for row in rows %}
+      <tr>
+        <td>{{ row.act_id }}</td>
+        <td>{{ row.period }}</td>
+        <td>{{ row.act_date }}</td>
+        <td class="num">{{ row.amount_rub|rub }}</td>
+        <td><span class="badge">{{ row.status or '—' }}</span></td>
+        <td>{% if row.posted %}<span class="ok">признан</span>{% else %}<span class="muted">не проведён</span>{% endif %}</td>
+        <td class="num">{{ (row.positions or [])|length }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="muted">Реестра актов нет.</p>{% endif %}
+  {% if note %}<p class="muted small">{{ note }}</p>{% endif %}
+  <p class="muted small">Выручка признаётся только по подписанному заказчиком акту. Подпись УКЭП не подключена
+    (этап 7), поэтому акт попадает в проводки через CLI-проведение с указанием подписанта — экран этого не делает.</p>
+</section>
+{% endblock %}

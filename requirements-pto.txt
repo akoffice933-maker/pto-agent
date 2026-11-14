@@ -8,6 +8,13 @@ pydantic==2.14.1        # MIT   — валидация схем (опциона�
 ezdxf==1.4.5            # MIT   — headless-разбор DXF/DWG-производных (модуль CAD, этап 2)
 pytest==9.0.3           # MIT   — тесты
 matplotlib==3.10.9      # PSF-based (BSD-совместимая) — растровый предпросмотр чертежей
+# --- экраны учёта (этап 5: FastAPI + Jinja2/HTMX) ---
+fastapi==0.162.7        # MIT   — сервер экранов, схема OpenAPI
+uvicorn==0.54.0         # BSD-3 — ASGI-сервер
+jinja2==3.1.6           # BSD-3 — серверные шаблоны
+itsdangerous==2.2.0     # BSD-3 — подпись сессионной куки
+python-multipart==0.0.33  # Apache-2.0 — разбор форм
+httpx==0.28.1           # BSD-3 — TestClient в тестах экранов
 # --- распознавание сканов redline (модуль vision) ---
 numpy==2.3.5            # BSD-3   — маски чернил, анализ скана
 scipy==1.17.1           # BSD-3   — морфология маски и склейка штрихов (ndimage)

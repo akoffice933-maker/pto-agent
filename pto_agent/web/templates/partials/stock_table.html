@@ -1,0 +1,25 @@
+<div id="stock-table">
+  {% if rows %}
+  <table class="table">
+    <thead>
+      <tr><th>номенклатура</th><th>склад</th><th class="num">количество</th><th>ед.</th>
+          <th class="num">средняя цена</th><th class="num">сумма</th></tr>
+    </thead>
+    <tbody>
+    {% for row in rows %}
+      <tr class="{{ 'negative' if row.negative else '' }}">
+        <td>{{ row.item }}{% if row.daval %} <span class="badge daval">давальческий</span>{% endif %}</td>
+        <td>{{ row.warehouse }}</td>
+        <td class="num">{{ row.qty|qty }}</td>
+        <td>{{ row.unit }}</td>
+        <td class="num">{{ row.price|rub }}</td>
+        <td class="num">{{ row.amount|rub }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+    <tfoot><tr><td colspan="5">итого по складам</td><td class="num">{{ total|rub }}</td></tr></tfoot>
+  </table>
+  {% else %}
+  <p class="muted">Остатков нет: движений по складу ещё не было.</p>
+  {% endif %}
+</div>

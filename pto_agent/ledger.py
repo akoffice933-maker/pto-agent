@@ -56,6 +56,9 @@ RULES_PATH = Path(__file__).resolve().parents[1] / "data" / "reference" / "posti
 
 #: копейка — предел точности учёта; всё, что мельче, обязано быть показано строкой «округление»
 EPS = Decimal("0.01")
+# Статья затрат, под которой материалы попадают в производство. Пока одна: разделение
+# «материалы / запчасти / спецодежда» — вопрос справочника номенклатуры, а не учёта.
+EXPENSE_ARTICLE = "материалы"
 
 STATUS_OK = "проведено"
 STATUS_DUPLICATE = "уже проведено"
@@ -585,7 +588,10 @@ def post_stock(state: dict, stock_state: dict, *, documents: dict | None = None,
                                             "не сформирована, чтобы не выдумывать налог",
                                      "ask": "ставка НДС (в том числе или сверху)"})
             elif event in ("issue", "limit"):
-                debit_analytics = {"объект": object_of.get(item) or ""}
+                # статья затрат нужна и на 20.01: без неё БДР не отличит материалы
+                # от распределённых позже косвенных расходов
+                debit_analytics = {"объект": object_of.get(item) or "",
+                                   "статья затрат": EXPENSE_ARTICLE}
                 if not debit_analytics["объект"]:
                     results.append({"status": STATUS_REJECTED, "entry": None,
                                     "errors": [{"code": "NO_OBJECT", "what": f"{number} / {item}",

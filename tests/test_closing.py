@@ -71,8 +71,10 @@ def book(*, with_stock: bool = True, with_revenue: bool = False,
 
 
 def add_overheads(state: dict, *, account: str = "26", amount: float = 50000,
-                  object_name: str = "") -> dict:
-    analytics = {"объект": object_name} if object_name else {}
+                  object_name: str = "", article: str = "аренда") -> dict:
+    analytics = {"статья затрат": article}
+    if object_name:
+        analytics["объект"] = object_name
     return ledger.post_entry(state, event="overhead", date="2026-10-31",
                              doc={"number": f"счёт за услуги по {account}"}, rule="demo",
                              lines=[{"account": account, "side": "Дт", "amount": amount,

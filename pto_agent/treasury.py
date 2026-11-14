@@ -1084,9 +1084,10 @@ def offset_advances(state: dict, ledger_state: dict, *, date: str, chart: dict |
 def bdr(state: dict, ledger_state: dict, period: str, *, rules: dict | None = None) -> dict:
     """Бюджет доходов и расходов на том же справочнике статей, что и БДДС.
 
-    Факт — начисление из журнала (обороты по счетам затрат и выручки), а не оплата.
-    План — заявки периода (обязательства) и ожидаемые поступления. Это разные методы:
-    план и факт в БДР показываются рядом, но не складываются.
+    Факт берётся из аналитики проводки: `статья затрат` на счетах 20.01/25/26. Именно
+    поэтому она стала обязательной в плане счетов — иначе сумму нечем отнести к статье.
+    Переносы закрытия (`close.*`) исключаются: это внутренние перераспределения, и без
+    исключения одна и та же сумма считалась бы дважды — на 26 и на 20.01.
     """
     from . import ledger
 
@@ -1094,39 +1095,51 @@ def bdr(state: dict, ledger_state: dict, period: str, *, rules: dict | None = No
     mapping = (rules.get("bdr") or {}).get("articles") or {}
     articles = rules.get("articles") or {}
     index = ledger.accounts_index(ledger.load_chart())
-    trial = ledger.trial_balance(ledger_state, period)
-    turnover = {row["code"]: row for row in trial.get("rows") or []}
 
-    # счёт, указанный в нескольких статьях, по статьям не делится: без аналитики
-    # «статья затрат» в проводке любое распределение будет выдумкой
-    owners: dict[str, list[str]] = {}
+    expense_accounts: set[str] = set()
+    revenue_accounts: dict[str, str] = {}
     for article, plan_row in mapping.items():
-        for code in (plan_row.get("cost_accounts") or []):
-            owners.setdefault(code, []).append(article)
+        expense_accounts |= {str(code) for code in (plan_row.get("cost_accounts") or [])}
         for code in (plan_row.get("revenue_accounts") or []):
-            owners.setdefault(code, []).append(article)
-    shared = {code: names for code, names in owners.items() if len(set(names)) > 1}
+            revenue_accounts[str(code)] = article
+    missing = sorted(code for code in (expense_accounts | set(revenue_accounts))
+                     if code not in index)
 
-    missing: list[str] = [code for code in owners if code not in index]
+    fact: dict[str, Decimal] = {article: Decimal("0") for article in mapping}
+    unallocated: dict[str, dict] = {}
+    unknown_articles: dict[str, Decimal] = {}
+    for entry in ledger_state.get("entries") or []:
+        if str(entry.get("period") or "") != period:
+            continue
+        if str(entry.get("rule") or "").startswith("close.") or \
+                str(entry.get("event") or "").startswith("close."):
+            continue      # внутренние переносы закрытия — не расход и не доход
+        for line in entry.get("lines") or []:
+            account = str(line.get("account") or "")
+            analytics = line.get("analytics") or {}
+            amount = kopeck(line.get("amount"))
+            if account in expense_accounts and line.get("side") == ledger.DEBIT:
+                article = str(analytics.get("статья затрат") or "").strip()
+                if not article:
+                    row = unallocated.setdefault(account, {"account": account, "amount": 0.0,
+                                                           "entries": 0,
+                                                           "why": (f"в проводках на {account} нет "
+                                                                   f"аналитики «статья затрат» — "
+                                                                   f"отнести к статье БДР нечем")})
+                    row["amount"] = round(row["amount"] + num(amount), 2)
+                    row["entries"] += 1
+                elif article not in fact:
+                    unknown_articles[article] = unknown_articles.get(article, Decimal("0")) + amount
+                else:
+                    fact[article] += amount
+            elif account in revenue_accounts and line.get("side") == ledger.CREDIT:
+                fact[revenue_accounts[account]] += amount
+
     rows: list[dict] = []
-    unallocated: list[dict] = []
     for article, plan_row in mapping.items():
         info = articles.get(article) or {}
         kind = info.get("kind") or ("поступление" if plan_row.get("revenue_accounts")
                                     else "расход")
-        cost_accounts = [code for code in (plan_row.get("cost_accounts") or [])
-                         if code not in shared and code in index]
-        revenue_accounts = [code for code in (plan_row.get("revenue_accounts") or [])
-                            if code not in shared and code in index]
-        fact = Decimal("0")
-        for code in cost_accounts:
-            row = turnover.get(code)
-            if row is not None:
-                fact += kopeck(row.get("debit") or 0)
-        for code in revenue_accounts:
-            row = turnover.get(code)
-            if row is not None:
-                fact += kopeck(row.get("credit") or 0)
         plan = Decimal("0")
         if kind == "расход":
             for request in state.get("requests") or []:
@@ -1146,27 +1159,17 @@ def bdr(state: dict, ledger_state: dict, period: str, *, rules: dict | None = No
                     continue
                 plan += kopeck(receipt.get("amount"))
             source_plan = "ожидаемые и фактические поступления периода"
-        rows.append({"article": article, "kind": kind, "fact": num(fact), "plan": num(plan),
-                     "cost_accounts": cost_accounts, "revenue_accounts": revenue_accounts,
-                     "source_fact": (("обороты Дт " + ", ".join(cost_accounts))
-                                     if cost_accounts else
-                                     ("обороты Кт " + ", ".join(revenue_accounts))
-                                     if revenue_accounts else "счёт не назначен"),
-                     "source_plan": source_plan,
-                     "shared_accounts": sorted({code for code in
-                                                (plan_row.get("cost_accounts") or [])
-                                                + (plan_row.get("revenue_accounts") or [])
-                                                if code in shared})})
-    for code, names in sorted(shared.items()):
-        row = turnover.get(code) or {}
-        amount = kopeck(row.get("debit") or 0) + kopeck(row.get("credit") or 0)
-        if abs(amount) <= EPS:
-            continue
-        unallocated.append({"account": code, "amount": num(amount),
-                            "articles": sorted(set(names)),
-                            "why": (f"счёт {code} указан в {len(set(names))} статьях "
-                                    f"({', '.join(sorted(set(names)))}) — без аналитики "
-                                    f"«статья затрат» в проводке разнести нельзя")})
+        accounts = [str(code) for code in (plan_row.get("cost_accounts") or [])] \
+            if kind == "расход" else [str(code) for code in (plan_row.get("revenue_accounts") or [])]
+        rows.append({"article": article, "kind": kind, "fact": num(fact[article]),
+                     "plan": num(plan), "accounts": accounts,
+                     "cost_accounts": accounts if kind == "расход" else [],
+                     "revenue_accounts": accounts if kind == "поступление" else [],
+                     "source_fact": (f"аналитика «статья затрат» в проводках Дт "
+                                     f"{', '.join(accounts)}" if kind == "расход"
+                                     else f"обороты Кт {', '.join(accounts)}"),
+                     "source_plan": source_plan})
+
     used = [row for row in rows if abs(row["fact"]) > 0.004 or abs(row["plan"]) > 0.004]
     revenue_fact = sum((Decimal(str(row["fact"])) for row in used
                         if row["kind"] == "поступление"), Decimal("0"))
@@ -1176,16 +1179,19 @@ def bdr(state: dict, ledger_state: dict, period: str, *, rules: dict | None = No
                         if row["kind"] == "поступление"), Decimal("0"))
     expense_plan = sum((Decimal(str(row["plan"])) for row in used
                         if row["kind"] == "расход"), Decimal("0"))
-    return {"period": period, "rows": used, "unallocated": unallocated,
-            "unallocated_total": round(sum(row["amount"] for row in unallocated), 2),
+    unallocated_rows = [row for row in unallocated.values() if abs(row["amount"]) > 0.004]
+    return {"period": period, "rows": used, "unallocated": unallocated_rows,
+            "unallocated_total": round(sum(row["amount"] for row in unallocated_rows), 2),
+            "unknown_articles": {name: num(value) for name, value in unknown_articles.items()},
             "revenue_fact": num(revenue_fact), "expense_fact": num(expense_fact),
             "profit_fact": num(revenue_fact - expense_fact),
             "revenue_plan": num(revenue_plan), "expense_plan": num(expense_plan),
             "profit_plan": num(revenue_plan - expense_plan),
-            "missing_accounts": sorted(set(missing)),
+            "missing_accounts": missing,
             "note": ("факт — начисление по журналу, план — заявки и ожидаемые поступления: "
                      "разные методы, складывать нельзя. Прибыль по БДР — это прибыль по "
-                     "начислению, а не деньги на счёте")}
+                     "начислению, а не деньги на счёте. Переносы закрытия в факт не входят: "
+                     "это перераспределение уже учтённых расходов")}
 
 
 # ─────────────────────────── один экран ───────────────────────────

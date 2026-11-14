@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Отказ{% endblock %}
+{% block content %}
+<section class="card error-card">
+  <div class="error-code">{{ code }}</div>
+  <h1>Действие не выполнено</h1>
+  <p class="error-why">{{ why }}</p>
+  {% if action %}<p class="muted">право: <code>{{ action }}</code> · роль: {{ role_title }}</p>{% endif %}
+  <p class="muted small">Отказ записан в журнал аудита: кто, с какого адреса, что пытался сделать.</p>
+  <p><a href="/">на сводку</a></p>
+</section>
+{% endblock %}

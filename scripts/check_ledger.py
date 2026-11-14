@@ -468,7 +468,7 @@ check(Decimal(str(check_or_break["diff"])) == Decimal("60000"),
 ledger.post_entry(cash_ledger, event="overhead", date="2026-10-15",
                   doc={"number": "счёт №12 аренда бытовки"},
                   lines=[{"account": "26", "side": ledger.DEBIT, "amount": 60000,
-                          "analytics": {}},
+                          "analytics": {"статья затрат": "аренда"}},
                          {"account": "60.01", "side": ledger.CREDIT, "amount": 60000,
                           "analytics": {"контрагент": "ООО «Аренда»"}}])
 reposted = treasury.post_to_ledger(cash_state, cash_ledger)
@@ -545,7 +545,8 @@ check(advance_report["given"][0]["can_offset"] == 0,
 ledger.post_entry(advance_ledger, event="overhead", date="2026-11-10",
                   doc={"number": "счёт №77 услуги механизмов"},
                   lines=[{"account": "25", "side": ledger.DEBIT, "amount": 180000,
-                          "analytics": {"объект": stock_state["object"]}},
+                          "analytics": {"объект": stock_state["object"],
+                                        "статья затрат": "механизмы"}},
                          {"account": "60.01", "side": ledger.CREDIT, "amount": 180000,
                           "analytics": {"контрагент": "ООО «Механизация»"}}])
 offset = treasury.offset_advances(advance_state, advance_ledger, date="2026-11-30")
@@ -582,6 +583,17 @@ planned_result = treasury.post_to_ledger(planned_state, planned_ledger)
 check(planned_result["skipped"] >= 1, "ожидаемое поступление попало в проводки как факт")
 check(not planned_ledger["entries"], "план поступления создал движение по счёту 51")
 
+nowhere = ledger.post_entry(customer_ledger, event="overhead", date="2026-10-20",
+                            doc={"number": "счёт без статьи затрат"},
+                            lines=[{"account": "26", "side": ledger.DEBIT, "amount": 1000,
+                                    "analytics": {}},
+                                   {"account": "60.01", "side": ledger.CREDIT, "amount": 1000,
+                                    "analytics": {"контрагент": "ООО «Без статьи»"}}])
+check(nowhere["status"] == ledger.STATUS_REJECTED,
+      "проводка на 26 без «статьи затрат» прошла: расход некуда отнести в БДР")
+check(any(item["code"] == "ANALYTICS_MISSING" for item in nowhere["errors"]),
+      "отказ по аналитике не назвал ANALYTICS_MISSING")
+
 bdr_report = treasury.bdr(customer_state, customer_ledger, "2026-11")
 check(bdr_report["revenue_fact"] == 0,
       f"аванс заказчика попал в доходы БДР ({bdr_report['revenue_fact']}): аванс — не выручка")
@@ -590,15 +602,32 @@ check(bdr_october["revenue_fact"] == 40927920,
       f"выручка в БДР {bdr_october['revenue_fact']}: ожидалось начисление 40 927 920")
 unallocated = {row["account"]: row for row in bdr_report["unallocated"]}
 check("26" not in unallocated or True, "служебная проверка разбора счёта 26")
+for number, amount, account, counterparty, article in (
+        ("счёт №77 услуги механизмов (БДР)", 180000, "25", "ООО «Механизация»", "механизмы"),):
+    overhead = ledger.post_entry(
+        cash_ledger, event="overhead", date="2026-10-15", doc={"number": number},
+        lines=[{"account": account, "side": ledger.DEBIT, "amount": amount,
+                "analytics": ({"объект": stock_state["object"], "статья затрат": article}
+                              if account == "25" else {"статья затрат": article})},
+               {"account": "60.01", "side": ledger.CREDIT, "amount": amount,
+                "analytics": {"контрагент": counterparty}}])
+    check(overhead["status"] == ledger.STATUS_OK, f"счёт {account} без статьи затрат не провёлся")
 bdr_state = treasury.bdr(cash_state, cash_ledger, "2026-10")
 allocated = sum(row["fact"] for row in bdr_state["rows"] if row["kind"] == "расход")
 rows = {row["code"]: row for row in ledger.trial_balance(cash_ledger, "2026-10")["rows"]}
 direct = sum(rows.get(code, {}).get("debit", 0) for code in ("20.01", "25", "26"))
-total_expense = allocated + bdr_state["unallocated_total"]
-check(abs(total_expense - direct) < 0.01,
-      f"расходы БДР {total_expense}: разнесённые плюс неразнесённые не равны оборотам "
-      f"Дт 20.01+25+26 ({direct}) — значит часть расходов потерялась или посчитана дважды")
-check(bdr_state["unallocated"], "счёт 25/26 разнесён по статьям «на глаз» — это выдумка")
+check(abs(allocated + bdr_state["unallocated_total"] - direct) < 0.01,
+      f"расходы БДР {allocated + bdr_state['unallocated_total']}: разнесённые плюс "
+      f"неразнесённые не равны оборотам Дт 20.01+25+26 ({direct}) — часть расходов "
+      f"потерялась или посчитана дважды")
+check(bdr_state["unallocated_total"] == 0,
+      "в демо есть проводки без аналитики «статья затрат»: БДР не может их разнести — "
+      + "; ".join(f"{row['account']}: {row['amount']:,.2f}" for row in bdr_state["unallocated"]))
+article_facts = {row["article"]: row["fact"] for row in bdr_state["rows"]}
+check(article_facts.get("механизмы") == 180000,
+      f"механизмы в БДР {article_facts.get('механизмы')}: аналитика на 25 не сработала")
+check(article_facts.get("аренда") == 60000,
+      f"аренда в БДР {article_facts.get('аренда')}: аналитика на 26 не сработала")
 cash_bdds = treasury.bdds(cash_state, "2026-10")
 check(bdr_state["profit_fact"] != cash_bdds["net_fact"],
       "БДР и БДДС совпали: это разные отчёты и совпадать не обязаны")

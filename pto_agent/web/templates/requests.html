@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Заявки{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Заявки на оплату</h1>
+  <div class="tools">
+    {% if can('request.create') %}<a class="button primary" href="/requests/new">Подать заявку</a>{% endif %}
+    <button class="button" hx-get="/requests/table" hx-target="#requests-table">обновить</button>
+  </div>
+</div>
+
+{% if rows|selectattr('can_approve')|list %}
+<div class="flash flash-info">
+  Ваша ступень: {% for row in rows %}{% if row.can_approve %}{{ row.number }} — «{{ row.next_step }}»{% if not loop.last %}, {% endif %}{% endif %}{% endfor %}.
+  Порядок ступеней проверяет казначейство, право на ступень — матрица прав.
+</div>
+{% endif %}
+
+<section class="card">
+  {% include "partials/requests_table.html" %}
+</section>
+{% endblock %}

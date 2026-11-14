@@ -1,0 +1,140 @@
+/* Экраны учёта ПТО: спокойная типографика, таблицы читаются на ноутбуке прораба. */
+:root {
+  --ink: #1c2430;
+  --muted: #6b7685;
+  --line: #dfe4ec;
+  --bg: #f4f6fa;
+  --card: #ffffff;
+  --accent: #1f5fd1;
+  --accent-soft: #e8f0fd;
+  --ok: #177a4b;
+  --bad: #b3261e;
+  --warn: #8a5a00;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font: 15px/1.5 -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code { font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: #eef1f6; padding: 0 4px; border-radius: 4px; }
+
+/* ── шапка ── */
+.topbar {
+  display: flex; align-items: center; gap: 20px;
+  padding: 10px 20px; background: #10233f; color: #fff; flex-wrap: wrap;
+}
+.brand { display: flex; align-items: baseline; gap: 8px; }
+.brand-mark { background: #f0b429; color: #10233f; font-weight: 700; padding: 2px 7px; border-radius: 5px; letter-spacing: .04em; }
+.brand-text { font-size: 13px; color: #b9c6da; }
+.nav { display: flex; gap: 4px; flex-wrap: wrap; }
+.nav a { color: #cfdaea; padding: 6px 10px; border-radius: 6px; font-size: 14px; }
+.nav a:hover { background: #1b3559; text-decoration: none; }
+.nav a.active { background: #22436e; color: #fff; }
+.who { margin-left: auto; text-align: right; font-size: 13px; }
+.who-name { font-weight: 600; }
+.who-role { color: #9fb1c9; }
+.who form { display: inline; }
+button.link { background: none; border: 0; color: #9fb1c9; cursor: pointer; font-size: 12px; padding: 0; text-decoration: underline; }
+
+/* ── страница ── */
+.page { max-width: 1180px; margin: 0 auto; padding: 22px 20px 40px; }
+.page-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 14px; }
+.page-head h1 { font-size: 22px; margin: 0; }
+h2 { font-size: 16px; margin: 0 0 10px; }
+h3 { font-size: 14px; margin: 16px 0 8px; }
+.muted { color: var(--muted); }
+.small { font-size: 12.5px; }
+.ok { color: var(--ok); font-weight: 600; }
+.bad { color: var(--bad); font-weight: 600; }
+.row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+.row-between { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+
+.card {
+  background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+  padding: 16px 18px; margin-bottom: 16px;
+}
+.tools { display: flex; gap: 8px; align-items: center; }
+
+/* ── плитки сводки ── */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.tile { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+.tile-label { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.tile-value { font-size: 22px; font-weight: 650; margin: 6px 0 2px; }
+.tile-note { font-size: 12.5px; color: var(--muted); }
+
+/* ── таблицы ── */
+.table { width: 100%; border-collapse: collapse; }
+.table th, .table td { text-align: left; padding: 7px 9px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.table thead th { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 600; background: #fafbfd; }
+.table tfoot td { font-weight: 600; border-top: 2px solid var(--line); }
+.table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.table.compact th, .table.compact td { padding: 5px 8px; font-size: 13px; }
+.table tr.negative td { background: #fdf0ef; }
+.table tr.mine td { background: var(--accent-soft); }
+.form-table select { width: 100%; }
+.actions form { display: flex; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
+
+/* ── элементы форм ── */
+label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 10px; }
+label.inline { display: inline-flex; gap: 6px; align-items: center; margin-bottom: 0; }
+label.check { gap: 6px; }
+input, select, button, textarea { font: inherit; color: var(--ink); }
+input:not([type=checkbox]), select, textarea {
+  width: 100%; padding: 7px 9px; border: 1px solid var(--line); border-radius: 7px; background: #fff; margin-top: 4px;
+}
+label.inline input:not([type=checkbox]), label.inline select { width: auto; margin-top: 0; }
+input:focus, select:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+.w-qty { width: 110px; text-align: right; }
+.w-comment { width: 190px; }
+.button, button {
+  display: inline-block; padding: 7px 12px; border: 1px solid var(--line); border-radius: 7px;
+  background: #fff; color: var(--ink); cursor: pointer;
+}
+.button:hover, button:hover { border-color: var(--accent); text-decoration: none; }
+.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.primary:hover { background: #1a4fb0; }
+button.small, .button.small { padding: 4px 9px; font-size: 12.5px; }
+.grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0 16px; }
+.grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0 16px; }
+.inline-form { padding: 10px 18px; }
+.stack { display: grid; gap: 10px; }
+
+/* ── сообщения ── */
+.flash { padding: 9px 12px; border-radius: 8px; margin-bottom: 12px; font-size: 14px; border: 1px solid; }
+.flash-ok { background: #e9f7ef; border-color: #b7e2c9; color: #145c39; }
+.flash-err { background: #fdeceb; border-color: #f3c2be; color: #8c1d17; }
+.flash-warn { background: #fdf6e3; border-color: #ecd9a6; color: #6f4a00; }
+.flash-info { background: var(--accent-soft); border-color: #c3d7f7; color: #143f8c; }
+.badge { display: inline-block; padding: 1px 7px; border-radius: 999px; background: #eef1f6; font-size: 12px; color: #3c4859; }
+.badge.daval { background: #eae4f8; color: #4b2c8f; }
+
+/* ── вход ── */
+.login-body { display: grid; place-items: center; min-height: 100vh; background: #10233f; }
+.login-card { background: #fff; border-radius: 14px; padding: 26px 26px 20px; width: min(440px, 92vw); }
+.login-card h1 { margin: 14px 0 6px; font-size: 20px; }
+.login-card .brand-mark { background: #f0b429; }
+.demo { margin-top: 14px; font-size: 13px; }
+.demo summary { cursor: pointer; color: var(--accent); }
+
+/* ── проводки и отказы ── */
+.proposal { border: 1px dashed var(--line); border-radius: 9px; padding: 10px 12px; margin-bottom: 12px; }
+.error-card { border-color: #f3c2be; }
+.error-code { font: 700 13px/1 ui-monospace, monospace; color: var(--bad); letter-spacing: .06em; }
+.error-why { font-size: 15px; margin: 8px 0 12px; }
+
+.foot {
+  display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  max-width: 1180px; margin: 0 auto; padding: 14px 20px 30px; color: var(--muted); font-size: 12px;
+}
+
+@media (max-width: 720px) {
+  .who { text-align: left; margin-left: 0; }
+  .table.compact th, .table.compact td { font-size: 12px; }
+}

@@ -26,15 +26,21 @@ dependencies = [
     "numpy==2.3.5",
     "scipy==1.17.1",
     "Pillow==12.3.0",
+    "fastapi==0.162.7",
+    "uvicorn==0.54.0",
+    "jinja2==3.1.6",
+    "itsdangerous==2.2.0",
+    "python-multipart==0.0.33",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest==9.0.3"]
+dev = ["pytest==9.0.3", "httpx==0.28.1"]
 
 [project.scripts]
 pto-agent = "pto_agent.cli:main"
 pto-cad = "pto_agent.cad.cli:main"
 pto-mcp = "pto_agent.mcp_server:main"
+pto-web = "pto_agent.web.__main__:main"
 
 [project.urls]
 Homepage = "https://github.com/USER/pto-agent"

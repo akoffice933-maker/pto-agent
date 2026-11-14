@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}Требование М-11{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Требование на материалы (М-11)</h1>
+  <div class="muted">Прораб списывает материалы на объект. Проведение — в журнале склада, отказы видны сразу.</div>
+</div>
+
+{% if problem %}<div class="flash flash-err">{{ problem }}</div>{% endif %}
+{% if result and result.errors %}
+  <div class="flash flash-err">
+    {% for item in result.errors %}<div><b>{{ item.code }}</b> · {{ item.what }}: {{ item.why }}</div>{% endfor %}
+  </div>
+{% endif %}
+{% if result and result.gaps %}
+  <div class="flash flash-warn">
+    <div>что нужно запросить:</div>
+    {% for item in result.gaps %}<div>— {{ item.what }}: {{ item.ask }}</div>{% endfor %}
+  </div>
+{% endif %}
+{% if result and result.warnings %}
+  <div class="flash flash-warn">
+    {% for text in result.warnings %}<div>{{ text }}</div>{% endfor %}
+  </div>
+{% endif %}
+
+<form method="post" action="/warehouse/issue" class="card">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <div class="grid-3">
+    <label>Номер требования<input name="number" value="{{ form.number }}" required></label>
+    <label>Дата<input name="date" type="date" value="{{ form.date }}" required></label>
+    <label>Склад
+      <select name="warehouse" required>
+        {% for row in state.warehouses %}
+          <option value="{{ row.code }}" {{ 'selected' if row.code == form.warehouse else '' }}>{{ row.code }} — {{ row.title }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </div>
+  <div class="grid-2">
+    <label>Объект списания
+      <select name="object" required>
+        {% for name in objects %}
+          <option value="{{ name }}" {{ 'selected' if name == form.object else '' }}>{{ name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Примечание (захватка, основание)<input name="note" value="{{ form.note }}"></label>
+  </div>
+
+  <h2>Материалы</h2>
+  <table class="table form-table">
+    <thead><tr><th>номенклатура</th><th class="num">количество</th><th>ед.</th></tr></thead>
+    <tbody>
+    {% for index in range(1, 6) %}
+      {% set row = lines[index - 1] if lines|length >= index else {'item': '', 'qty': ''} %}
+      <tr>
+        <td>
+          <select name="item_{{ index }}">
+            <option value="">—</option>
+            {% for item in state['items'] %}
+              <option value="{{ item.code }}" {{ 'selected' if item.code == row.item else '' }}>{{ item.code }} — {{ item.title }}</option>
+            {% endfor %}
+          </select>
+        </td>
+        <td class="num"><input name="qty_{{ index }}" value="{{ row.qty if row.qty is string else row.qty|qty }}" class="w-qty"></td>
+        <td class="muted small">ед. по справочнику</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">Количество не пересчитывается: если единица в документе не совпадает со справочником,
+    склад откажет с кодом <code>UNIT_MISMATCH</code>, а не подставит коэффициент.</p>
+  <button class="primary" type="submit">Провести требование</button>
+</form>
+{% endblock %}

@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Аудит{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Журнал аудита</h1>
+  <div class="muted">хэш-цепочка: каждая запись ссылается на предыдущую</div>
+</div>
+<section class="card">
+  <div class="row-between">
+    <h2>Целостность</h2>
+    <div>{% if ok %}<span class="ok">цепочка сходится</span>{% else %}<span class="bad">нарушена</span>{% endif %}
+      · записей {{ count }} · {{ why }}</div>
+  </div>
+  <table class="table compact">
+    <thead><tr><th>когда</th><th>кто</th><th>тип</th><th>действие</th><th>объект</th><th>роль</th><th>IP</th><th>причина/код</th></tr></thead>
+    <tbody>
+    {% for rec in records %}
+      <tr>
+        <td class="small">{{ rec.ts }}</td>
+        <td>{{ rec.actor }}</td>
+        <td class="small">{{ rec.actor_type }}</td>
+        <td>{{ rec.action }}</td>
+        <td class="small">{{ rec.entity }}</td>
+        <td class="small">{{ (rec.payload or {}).get('role','—') }}</td>
+        <td class="small muted">{{ (rec.payload or {}).get('ip','—') }}</td>
+        <td class="small muted">{{ (rec.payload or {}).get('code') or (rec.payload or {}).get('why','')|short(40) }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}
