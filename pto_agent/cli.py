@@ -794,6 +794,88 @@ def cmd_ledger(args) -> int:
             print(f"  {analytics:<52} Дт {row['debit']:>13,.2f} · Кт {row['credit']:>13,.2f}")
         return 0
 
+    if action == "advances":
+        ledger_state = accounting.load(args.ledger)
+        report = cash.advances(state, ledger_state, as_of=args.as_of or None)
+        print(f"авансы на {report['as_of']}: выдано {report['given_total']:,.2f} ₽ · "
+              f"получено {report['received_total']:,.2f} ₽ · можно зачесть "
+              f"{report['offsettable']:,.2f} ₽")
+        for row in report["given"]:
+            print(f"  выдан  {row['counterparty']:<26} аванс {row['advance']:>14,.2f} ₽ "
+                  f"долг {row['debt']:>14,.2f} ₽ к зачёту {row['can_offset']:>14,.2f} ₽")
+        for row in report["received"]:
+            print(f"  получен {row['counterparty']:<26} аванс {row['advance']:>14,.2f} ₽ "
+                  f"долг {row['due']:>14,.2f} ₽ к зачёту {row['can_offset']:>14,.2f} ₽ "
+                  f"({row['contract']})")
+        print(f"  {report['note']}")
+        return 0
+
+    if action == "offset":
+        ledger_state = accounting.load(args.ledger)
+        result = cash.offset_advances(state, ledger_state, date=args.date,
+                                      mode=getattr(args, "mode", None) or None)
+        accounting.save(ledger_state, args.ledger)
+        print(f"зачёт авансов на {args.date}: проведено {result['posted']} · "
+              f"повторно {result['duplicates']} · отказано {result['rejected']}")
+        for row in result["results"]:
+            if row.get("entry"):
+                print(f"  {row.get('counterparty')}: {cash.rub(row['amount'])}")
+        for item in result["errors"]:
+            print(f"  отказано [{item['code']}] {item['what']}: {item['why']}", file=sys.stderr)
+        return 0 if not result["errors"] else 1
+
+    if action == "bdr":
+        ledger_state = accounting.load(args.ledger)
+        report = cash.bdr(state, ledger_state, args.period)
+        print(f"БДР за {args.period}: факт — доходы {report['revenue_fact']:,.2f} ₽, расходы "
+              f"{report['expense_fact']:,.2f} ₽, прибыль {report['profit_fact']:,.2f} ₽")
+        print(f"план — доходы {report['revenue_plan']:,.2f} ₽, расходы "
+              f"{report['expense_plan']:,.2f} ₽, план по прибыли {report['profit_plan']:,.2f} ₽")
+        print(f"{'статья':<14} {'тип':<12} {'факт':>16} {'план':>16}  источник факта")
+        for row in report["rows"]:
+            print(f"{row['article']:<14} {row['kind']:<12} {row['fact']:>16,.2f} "
+                  f"{row['plan']:>16,.2f}  {row['source_fact']}")
+        if report["unallocated"]:
+            print(f"  не разнесено по статьям: {report['unallocated_total']:,.2f} ₽ "
+                  f"(эти расходы есть, но в статьи БДР не попали)")
+            for row in report["unallocated"]:
+                print(f"    счёт {row['account']}: {row['amount']:,.2f} ₽ — {row['why']}")
+        if report["missing_accounts"]:
+            print(f"  счета вне рабочего плана: {', '.join(report['missing_accounts'])}",
+                  file=sys.stderr)
+        print(f"  {report['note']}")
+        if getattr(args, "out", None):
+            path = Path(args.out)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(cash.bdr_markdown(report), encoding="utf-8")
+            print(f"  файл: {path}")
+        return 0
+
+    if action == "screen":
+        funding = (json.loads(Path(args.funding).read_text(encoding="utf-8"))
+                   if getattr(args, "funding", None) else None)
+        ledger_state = accounting.load(args.ledger) if getattr(args, "ledger", None) else None
+        report = cash.screen(state, args.period, funding=funding, ledger_state=ledger_state)
+        print(cash.screen_text(report))
+        if getattr(args, "out", None):
+            path = Path(args.out)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(cash.screen_markdown(report), encoding="utf-8")
+            print(f"  файл: {path}")
+        return 0
+
+    if action == "limits":
+        rows = cash.limits_usage(state, args.period)
+        if not rows:
+            print(f"лимитов на {args.period} нет")
+            return 0
+        print(f"лимиты на {args.period}")
+        for row in rows:
+            pct = "—" if row["pct"] is None else f"{row['pct']:.1f} %"
+            print(f"  {row['scope']:<7} {row['name']:<44} лимит {row['limit']:>14,.2f} ₽ "
+                  f"занято {row['used']:>14,.2f} ₽ остаток {row['left']:>14,.2f} ₽ {pct:>7}")
+        return 0
+
     if action == "reconcile":
         stock_state = stock_ledger.load(args.stock)
         result = accounting.reconcile_stock(state, stock_state, as_of=args.as_of or None)
@@ -943,6 +1025,7 @@ def cmd_treasury(args) -> int:
         state = cash.new_state(object_name=payload.get("object") or "",
                                opening=payload.get("opening"), limits=payload.get("limits"),
                                contract=payload.get("contract") or "")
+        state["object_limits"] = payload.get("object_limits") or {}
         added = 0
         rules = cash.load_rules(args.rules or None)
         for request in payload.get("requests") or []:
@@ -1007,7 +1090,8 @@ def cmd_treasury(args) -> int:
     if action == "pay":
         result = cash.pay(state, args.number, date=args.date,
                           amount=args.amount, allow_overdraft=args.allow_overdraft,
-                          reason=args.reason or "", person=args.person or "")
+                          reason=args.reason or "", person=args.person or "",
+                          advance=getattr(args, "advance", False))
         cash.save(state, args.state)
         payment = result.get("payment") or {}
         print(f"{args.number}: {result['status']}"
@@ -1096,7 +1180,9 @@ def cmd_treasury(args) -> int:
         result = cash.post_to_ledger(state, ledger_state, mode=getattr(args, "mode", None) or None)
         accounting.save(ledger_state, args.ledger)
         print(f"проводок по казначейству: создано {result['posted']} · повторно "
-              f"{result['duplicates']} · отказано {result['rejected']}")
+              f"{result['duplicates']} · отказано {result['rejected']}"
+              + (f" · только авансом {result['advances']}" if result.get("advances") else "")
+              + (f" · план не проведён {result['skipped']}" if result.get("skipped") else ""))
         for item in result["errors"]:
             print(f"  отказано [{item['code']}] {item['what']}: {item['why']}", file=sys.stderr)
         for gap in result["gaps"]:
@@ -1104,6 +1190,88 @@ def cmd_treasury(args) -> int:
         for warning in result["warnings"]:
             print(f"  замечание: {warning}", file=sys.stderr)
         return 0 if result["rejected"] == 0 else 1
+
+    if action == "advances":
+        ledger_state = accounting.load(args.ledger)
+        report = cash.advances(state, ledger_state, as_of=args.as_of or None)
+        print(f"авансы на {report['as_of']}: выдано {report['given_total']:,.2f} ₽ · "
+              f"получено {report['received_total']:,.2f} ₽ · можно зачесть "
+              f"{report['offsettable']:,.2f} ₽")
+        for row in report["given"]:
+            print(f"  выдан  {row['counterparty']:<26} аванс {row['advance']:>14,.2f} ₽ "
+                  f"долг {row['debt']:>14,.2f} ₽ к зачёту {row['can_offset']:>14,.2f} ₽")
+        for row in report["received"]:
+            print(f"  получен {row['counterparty']:<26} аванс {row['advance']:>14,.2f} ₽ "
+                  f"долг {row['due']:>14,.2f} ₽ к зачёту {row['can_offset']:>14,.2f} ₽ "
+                  f"({row['contract']})")
+        print(f"  {report['note']}")
+        return 0
+
+    if action == "offset":
+        ledger_state = accounting.load(args.ledger)
+        result = cash.offset_advances(state, ledger_state, date=args.date,
+                                      mode=getattr(args, "mode", None) or None)
+        accounting.save(ledger_state, args.ledger)
+        print(f"зачёт авансов на {args.date}: проведено {result['posted']} · "
+              f"повторно {result['duplicates']} · отказано {result['rejected']}")
+        for row in result["results"]:
+            if row.get("entry"):
+                print(f"  {row.get('counterparty')}: {cash.rub(row['amount'])}")
+        for item in result["errors"]:
+            print(f"  отказано [{item['code']}] {item['what']}: {item['why']}", file=sys.stderr)
+        return 0 if not result["errors"] else 1
+
+    if action == "bdr":
+        ledger_state = accounting.load(args.ledger)
+        report = cash.bdr(state, ledger_state, args.period)
+        print(f"БДР за {args.period}: факт — доходы {report['revenue_fact']:,.2f} ₽, расходы "
+              f"{report['expense_fact']:,.2f} ₽, прибыль {report['profit_fact']:,.2f} ₽")
+        print(f"план — доходы {report['revenue_plan']:,.2f} ₽, расходы "
+              f"{report['expense_plan']:,.2f} ₽, план по прибыли {report['profit_plan']:,.2f} ₽")
+        print(f"{'статья':<14} {'тип':<12} {'факт':>16} {'план':>16}  источник факта")
+        for row in report["rows"]:
+            print(f"{row['article']:<14} {row['kind']:<12} {row['fact']:>16,.2f} "
+                  f"{row['plan']:>16,.2f}  {row['source_fact']}")
+        if report["unallocated"]:
+            print(f"  не разнесено по статьям: {report['unallocated_total']:,.2f} ₽ "
+                  f"(эти расходы есть, но в статьи БДР не попали)")
+            for row in report["unallocated"]:
+                print(f"    счёт {row['account']}: {row['amount']:,.2f} ₽ — {row['why']}")
+        if report["missing_accounts"]:
+            print(f"  счета вне рабочего плана: {', '.join(report['missing_accounts'])}",
+                  file=sys.stderr)
+        print(f"  {report['note']}")
+        if getattr(args, "out", None):
+            path = Path(args.out)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(cash.bdr_markdown(report), encoding="utf-8")
+            print(f"  файл: {path}")
+        return 0
+
+    if action == "screen":
+        funding = (json.loads(Path(args.funding).read_text(encoding="utf-8"))
+                   if getattr(args, "funding", None) else None)
+        ledger_state = accounting.load(args.ledger) if getattr(args, "ledger", None) else None
+        report = cash.screen(state, args.period, funding=funding, ledger_state=ledger_state)
+        print(cash.screen_text(report))
+        if getattr(args, "out", None):
+            path = Path(args.out)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(cash.screen_markdown(report), encoding="utf-8")
+            print(f"  файл: {path}")
+        return 0
+
+    if action == "limits":
+        rows = cash.limits_usage(state, args.period)
+        if not rows:
+            print(f"лимитов на {args.period} нет")
+            return 0
+        print(f"лимиты на {args.period}")
+        for row in rows:
+            pct = "—" if row["pct"] is None else f"{row['pct']:.1f} %"
+            print(f"  {row['scope']:<7} {row['name']:<44} лимит {row['limit']:>14,.2f} ₽ "
+                  f"занято {row['used']:>14,.2f} ₽ остаток {row['left']:>14,.2f} ₽ {pct:>7}")
+        return 0
 
     if action == "reconcile":
         ledger_state = accounting.load(args.ledger)
@@ -2699,6 +2867,8 @@ def main(argv=None):
                         help="оплатить сверх остатка (нужна --reason)")
     tr_pay.add_argument("--reason", default="")
     tr_pay.add_argument("--person", default="")
+    tr_pay.add_argument("--advance", action="store_true",
+                        help="платёж авансом: часть сверх долга уйдёт на 60.02")
     tr_pay.set_defaults(func=cmd_treasury)
 
     tr_rc = trss.add_parser("receipt", help="поступления от заказчика")
@@ -2725,6 +2895,39 @@ def main(argv=None):
     tr_post.add_argument("--ledger", default="out/ledger/state.json")
     tr_post.add_argument("--mode", default=None, choices=["проводить", "предлагать"])
     tr_post.set_defaults(func=cmd_treasury)
+
+    tr_adv = trss.add_parser("advances", help="авансы на 60.02 и 62.02 и что можно зачесть")
+    tr_adv.add_argument("--state", default="out/treasury/state.json")
+    tr_adv.add_argument("--ledger", default="out/ledger/state.json")
+    tr_adv.add_argument("--as-of", dest="as_of", default=None)
+    tr_adv.set_defaults(func=cmd_treasury)
+
+    tr_off = trss.add_parser("offset", help="зачесть авансы: Дт 60.01 Кт 60.02, Дт 62.02 Кт 62.01")
+    tr_off.add_argument("--state", default="out/treasury/state.json")
+    tr_off.add_argument("--ledger", default="out/ledger/state.json")
+    tr_off.add_argument("--date", required=True)
+    tr_off.add_argument("--mode", default=None, choices=["проводить", "предлагать"])
+    tr_off.set_defaults(func=cmd_treasury)
+
+    tr_bdr = trss.add_parser("bdr", help="БДР: начисление по журналу на справочнике статей БДДС")
+    tr_bdr.add_argument("--state", default="out/treasury/state.json")
+    tr_bdr.add_argument("--ledger", default="out/ledger/state.json")
+    tr_bdr.add_argument("--period", required=True)
+    tr_bdr.add_argument("--out", default=None)
+    tr_bdr.set_defaults(func=cmd_treasury)
+
+    tr_scr = trss.add_parser("screen", help="один экран: деньги, лимиты, БДДС, БДР, авансы")
+    tr_scr.add_argument("--state", default="out/treasury/state.json")
+    tr_scr.add_argument("--ledger", default=None)
+    tr_scr.add_argument("--period", required=True)
+    tr_scr.add_argument("--funding", default=None)
+    tr_scr.add_argument("--out", default=None)
+    tr_scr.set_defaults(func=cmd_treasury)
+
+    tr_lim = trss.add_parser("limits", help="использование лимитов по статьям и объектам")
+    tr_lim.add_argument("--state", default="out/treasury/state.json")
+    tr_lim.add_argument("--period", required=True)
+    tr_lim.set_defaults(func=cmd_treasury)
 
     tr_rc2 = trss.add_parser("reconcile", help="сверка: деньги в казначействе против сальдо 51")
     tr_rc2.add_argument("--state", default="out/treasury/state.json")

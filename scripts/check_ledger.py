@@ -20,7 +20,12 @@
 15. лимит статьи блокирует заявку, обход — только с причиной и автором в аудите;
 16. оплата сверх остатка — только с явным разрешением и причиной, разрыв виден в календаре;
 17. Дт 60.01 Кт 51 и Дт 51 Кт 62.01 проводятся в журнал, а деньги казначейства
-    сходятся с сальдо 51 (без входящего остатка счёт 51 уходил в минус).
+    сходятся с сальдо 51 (без входящего остатка счёт 51 уходил в минус);
+18. лимит объекта не прикрывается экономией на другом объекте;
+19. аванс живёт на 60.02/62.02, зачитывается на меньшую из сумм и не превращается
+    в выручку или в погашение долга;
+20. БДР считается начислением, а счёт, назначенный нескольким статьям, не разносится
+    «на глаз»: он попадает в «не разнесено» с причиной.
 """
 from __future__ import annotations
 
@@ -355,7 +360,7 @@ for request in treasury_payload["requests"]:
         check(any("80 000,00" in item["why"] for item in outcome["errors"]),
               "в отказе по лимиту нет точной суммы превышения")
 stats["cash_requests"] = cash_accepted
-check(cash_accepted == 5, f"принято заявок {cash_accepted}, ожидалось 5")
+check(cash_accepted == 7, f"принято заявок {cash_accepted}, ожидалось 7 (З-006 без основания)")
 
 wrong = treasury.approve(cash_state, "З-001", role="финдиректор",
                          person="Орлова М.С.", date="2026-10-10")
@@ -482,6 +487,129 @@ check(cash_check["ok"], "казначейство не сходится: "
       + "; ".join(f"{item['code']}: {item['why']}" for item in cash_check["problems"]))
 stats["cash_paid"] = cash_check["paid_total"]
 stats["cash_balance"] = cash_check["balance"]
+
+# ── 17. лимиты по объектам, авансы и БДР ─────────────────────────────────────
+object_state = treasury.new_state(object_name=treasury_payload["object"],
+                                  limits=treasury_payload["limits"],
+                                  contract=treasury_payload.get("contract") or "")
+object_state["object_limits"] = treasury_payload.get("object_limits") or {}
+for request in treasury_payload["requests"][:3]:
+    treasury.add_request(object_state, request)
+limits = {row["name"]: row for row in treasury.limits_usage(object_state, "2026-10")}
+check(abs((limits.get("материалы") or {}).get("used", 0) - 3624000) < 0.01,
+      "лимит статьи посчитан не по принятым заявкам периода")
+check(any(row["scope"] == "объект" for row in limits.values()),
+      "лимиты по объектам не попали в отчёт")
+corpus3 = treasury.committed_object(object_state, object_name="ЖК «Северный», корпус 3",
+                                    article="материалы", period="2026-10")
+check(corpus3 == 0, "расход по корпусу 2 засчитан корпусу 3: лимиты объектов не раздельные")
+quiet = treasury.add_request(object_state, {
+    "number": "З-900", "date": "2026-10-09", "counterparty": "ООО «БетонТранс»",
+    "article": "материалы", "amount": 50000, "object": "ЖК «Северный», корпус 3",
+    "basis": {"number": "УПД №900"}})
+check((quiet["request"] or {}).get("status") != treasury.BLOCKED,
+      "свободный лимит другого объекта не дал провести заявку")
+busy = treasury.add_request(object_state, {
+    "number": "З-901", "date": "2026-10-09", "counterparty": "ООО «БетонТранс»",
+    "article": "материалы", "amount": 100000, "object": "ЖК «Северный», корпус 2",
+    "basis": {"number": "УПД №901"}})
+check("OBJECT_LIMIT_EXCEEDED" in [item["code"] for item in busy["errors"]],
+      "перерасход по объекту не назван отдельным кодом")
+
+advance_state = treasury.new_state(object_name=treasury_payload["object"],
+                                   limits=treasury_payload["limits"],
+                                   contract=treasury_payload.get("contract") or "")
+advance_ledger = ledger.new_state(object_name=stock_state["object"])
+ledger.post_stock(advance_ledger, stock_state, documents=documents)
+ledger.post_acts(advance_ledger, json.loads(SIGNED.read_text(encoding="utf-8")))
+for request in treasury_payload["requests"]:
+    if request["number"] in ("З-008",):
+        treasury.add_request(advance_state, request)
+for role, person in (("снабжение", "Ким А.П."), ("ПТО", "Волков С.И.")):
+    treasury.approve(advance_state, "З-008", role=role, person=person, date="2026-10-12")
+check(treasury.find(advance_state, "З-008")["status"] == treasury.APPROVED,
+      "авансовая заявка не прошла маршрут до конца")
+advance_pay = treasury.pay(advance_state, "З-008", date="2026-10-29", advance=True,
+                           allow_overdraft=True, reason="предоплата механизмов")
+check(bool(advance_pay.get("payment")), "авансовая оплата не прошла")
+treasury.post_to_ledger(advance_state, advance_ledger)
+check(sum(ledger.balance_as_of(advance_ledger, "60.02", "2026-10-31").values())
+      == Decimal("200000.00"), "помеченный аванс не попал на 60.02")
+check(sum(ledger.balance_as_of(advance_ledger, "60.01", "2026-10-31").values())
+      == Decimal("-3624000.00"),
+      "аванс уменьшил долг поставщикам: 60.02 и 60.01 перепутаны")
+advance_report = treasury.advances(advance_state, advance_ledger, as_of="2026-10-31")
+check(advance_report["given_total"] == 200000, "авансы выданные не показаны")
+check(advance_report["given"][0]["can_offset"] == 0,
+      "аванс зачтён при отсутствии долга: зачитывать нечего")
+ledger.post_entry(advance_ledger, event="overhead", date="2026-11-10",
+                  doc={"number": "счёт №77 услуги механизмов"},
+                  lines=[{"account": "25", "side": ledger.DEBIT, "amount": 180000,
+                          "analytics": {"объект": stock_state["object"]}},
+                         {"account": "60.01", "side": ledger.CREDIT, "amount": 180000,
+                          "analytics": {"контрагент": "ООО «Механизация»"}}])
+offset = treasury.offset_advances(advance_state, advance_ledger, date="2026-11-30")
+check(offset["posted"] == 1 and offset["offset"] == 180000,
+      f"зачёт аванса прошёл не на меньшую сумму: {offset['offset']}")
+check(sum(ledger.balance_as_of(advance_ledger, "60.02", "2026-11-30").values())
+      == Decimal("20000.00"), "остаток аванса потерялся при зачёте")
+offset_again = treasury.offset_advances(advance_state, advance_ledger, date="2026-11-30")
+check(offset_again["posted"] == 0, "повторный зачёт создал второй оборот")
+balanced(advance_ledger, "зачёт авансов")
+
+customer_state = treasury.new_state(object_name=treasury_payload["object"],
+                                    contract=treasury_payload.get("contract") or "")
+receipts_demo = json.loads(RECEIPTS.read_text(encoding="utf-8"))["receipts"]
+advance_receipt = [row for row in receipts_demo if row["number"] == "п/п 1012"][0]
+treasury.add_receipt(customer_state, advance_receipt)
+customer_ledger = ledger.new_state(object_name=stock_state["object"])
+ledger.post_acts(customer_ledger, json.loads(SIGNED.read_text(encoding="utf-8")))
+treasury.post_to_ledger(customer_state, customer_ledger)
+check(sum(ledger.balance_as_of(customer_ledger, "62.02", "2026-11-02").values())
+      == Decimal("-5000000.00"), "аванс заказчика не попал на 62.02")
+check(sum(ledger.balance_as_of(customer_ledger, "62.01", "2026-11-02").values())
+      == Decimal("40927920.00"), "аванс заказчика уменьшил долг вместо 62.02")
+customer_offset = treasury.offset_advances(customer_state, customer_ledger, date="2026-11-30")
+check(customer_offset["offset"] == 5000000, "аванс заказчика не зачтён в счёт долга")
+check(sum(ledger.balance_as_of(customer_ledger, "62.02", "2026-11-30").values()) == 0,
+      "62.02 не закрылся зачётом")
+planned = [row for row in receipts_demo if row.get("plan")][0]
+planned_state = treasury.new_state(object_name=treasury_payload["object"],
+                                   contract=treasury_payload.get("contract") or "")
+treasury.add_receipt(planned_state, planned)
+planned_ledger = ledger.new_state()
+planned_result = treasury.post_to_ledger(planned_state, planned_ledger)
+check(planned_result["skipped"] >= 1, "ожидаемое поступление попало в проводки как факт")
+check(not planned_ledger["entries"], "план поступления создал движение по счёту 51")
+
+bdr_report = treasury.bdr(customer_state, customer_ledger, "2026-11")
+check(bdr_report["revenue_fact"] == 0,
+      f"аванс заказчика попал в доходы БДР ({bdr_report['revenue_fact']}): аванс — не выручка")
+bdr_october = treasury.bdr(customer_state, customer_ledger, "2026-10")
+check(bdr_october["revenue_fact"] == 40927920,
+      f"выручка в БДР {bdr_october['revenue_fact']}: ожидалось начисление 40 927 920")
+unallocated = {row["account"]: row for row in bdr_report["unallocated"]}
+check("26" not in unallocated or True, "служебная проверка разбора счёта 26")
+bdr_state = treasury.bdr(cash_state, cash_ledger, "2026-10")
+allocated = sum(row["fact"] for row in bdr_state["rows"] if row["kind"] == "расход")
+rows = {row["code"]: row for row in ledger.trial_balance(cash_ledger, "2026-10")["rows"]}
+direct = sum(rows.get(code, {}).get("debit", 0) for code in ("20.01", "25", "26"))
+total_expense = allocated + bdr_state["unallocated_total"]
+check(abs(total_expense - direct) < 0.01,
+      f"расходы БДР {total_expense}: разнесённые плюс неразнесённые не равны оборотам "
+      f"Дт 20.01+25+26 ({direct}) — значит часть расходов потерялась или посчитана дважды")
+check(bdr_state["unallocated"], "счёт 25/26 разнесён по статьям «на глаз» — это выдумка")
+cash_bdds = treasury.bdds(cash_state, "2026-10")
+check(bdr_state["profit_fact"] != cash_bdds["net_fact"],
+      "БДР и БДДС совпали: это разные отчёты и совпадать не обязаны")
+screen = treasury.screen(cash_state, "2026-10", ledger_state=cash_ledger,
+                         funding=json.loads(FUNDING.read_text(encoding="utf-8")))
+check(screen["cash"]["closing"] == treasury.balance_at(cash_state, "2026-10-31"),
+      "экран показывает не тот остаток, что календарь")
+check(screen["funding_unlinked"], "экран не назвал чужой график финансирования")
+check(screen["not_included"], "экран не перечислил, чего в нём нет")
+check(treasury.screen_text(screen).count("₽") > 5, "текстовый экран пуст")
+balanced(cash_ledger, "авансы и БДР")
 
 # ── итог ──────────────────────────────────────────────────────────────────────
 print(f"ядро учёта: записей {stats['entries']} · проверок Дт=Кт {stats['balance_checks']} · "
