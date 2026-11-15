@@ -401,10 +401,13 @@ def sales_book(state: dict, ledger_state: dict, period: str, *, rates: dict | No
                      "ask": f"`invoices auto {period}` — собрать счета-фактуры из журнала"})
     late = [row for row in rows if row.get("late")]
     if late:
+        # перечисление собирается снаружи f-строки: вложенные кавычки — PEP 701,
+        # на Python 3.11 это SyntaxError (поймано CI, а не локальным прогоном)
+        listing = ", ".join("№ {0} (+{1} дн.)".format(row["number"], row["late_days"])
+                            for row in late)
         problems.append({
             "code": "INVOICE_LATE", "what": period,
-            "why": f"счета-фактуры с нарушением срока 5 календарных дней: "
-                   f"{', '.join(f'№ {row['number']} (+{row['late_days']} дн.)' for row in late)}"})
+            "why": (f"счета-фактуры с нарушением срока 5 календарных дней: {listing}")})
 
     return {"kind": "sales_book", "period": period, "rows": rows,
             "totals": {"invoices": len(rows), "shipped_vat": num(shipped_vat),
