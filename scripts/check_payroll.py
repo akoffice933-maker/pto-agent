@@ -214,6 +214,39 @@ check(bdr["unallocated_total"] == 0,
 check(abs(bdr["expense_fact"] - totals["cost"]) < 0.02,
       f"расход БДР {bdr['expense_fact']} ≠ стоимость зарплаты {totals['cost']}")
 
+# ── 11. приказы: больничные, отпускные, премии ──────────────────────────────
+from pto_agent import orders as orders_mod                                     # noqa: E402
+
+parsed = orders_mod.load_orders(ROOT / "data" / "demo" / "payroll" / "orders_2026_10.json")
+with_orders = payroll.new_state(object_name=staff["object"])
+extra = payroll.accrue(with_orders, json.loads((ROOT / "data/demo/payroll"
+                                                / "timesheet_2026_10.json")
+                                                .read_text(encoding="utf-8")),
+                       staff, rules, orders=parsed)
+by_tab = {row["tab"]: row for row in extra["rows"]}
+check(extra["totals"]["sick_employer"] == 8136.99,
+      f"больничные за счёт работодателя {extra['totals']['sick_employer']}, ожидали 8 136,99")
+check(extra["totals"]["sick_fund"] == 13643.81,
+      f"часть СФР {extra['totals']['sick_fund']}, ожидали 13 643,81")
+check(extra["totals"]["vacation"] == 56764.54,
+      f"отпускные {extra['totals']['vacation']}, ожидали 56 764,54")
+check(extra["totals"]["bonus"] == 45000.0, f"премия {extra['totals']['bonus']}, ожидали 45 000")
+check(by_tab["004"]["contrib_base"] == 88000.0,
+      "пособие попало в базу по взносам: с больничного взносы не начисляются")
+check(by_tab["004"]["accrued"] == 88000 + 8136.99,
+      f"начисление по 004 = {by_tab['004']['accrued']}, ожидали оклад + пособие")
+check(any("П-35/2026" in item["what"] for item in extra.get("order_errors") or []),
+      "приказ без заработка за два года не отмечен как недосчитанный")
+check(extra["totals"]["accrued"] == round(totals["accrued"] + 8136.99 + 56764.54 + 45000, 2),
+      f"итог с приказами {extra['totals']['accrued']} ≠ оклад + приказы")
+
+undefined = orders_mod.report(parsed, staff, rules, period="2026-11")
+check(undefined["lines"] == [], "приказы октября посчитаны в ноябре")
+check(all(gap["why"] == "относится к другому месяцу" for gap in undefined["gaps"]),
+      "перенос приказа в другой месяц не назван причиной")
+check(orders_mod.report([], staff, rules, period="2026-10")["gaps"][0]["what"] == "приказы за месяц",
+      "пустой файл приказов не отмечен как «нет данных»")
+
 fund = payroll.fund_report(state, rules=rules)
 print(f"зарплата: месяцев {stats['months']} · строк {stats['rows']} · проводок "
       f"{stats['entries']} · проверок {stats['checks']}")

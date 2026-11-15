@@ -228,21 +228,32 @@ def test_load_json_tolerates_missing_and_broken(tmp_path):
 
 
 # ─────────────────── на реальных артефактах и в CLI/MCP ─────────────────
-@pytest.mark.skipif(not SUMMARY.exists(), reason="нет out/summary.json")
-def test_real_summary_review_blocks_on_critical():
-    review = collect(summary_path=SUMMARY)
+def test_real_summary_review_blocks_on_critical(demo_summary):
+    """Сводка на реальном прогоне: артефакт собирается фикстурой, а не лежит в out/."""
+    review = collect(summary_path=demo_summary)
     assert review["verdict"]["status"] == VERDICT_BLOCKED
     assert review["verdict"]["blocking"] >= 1
     assert all("source" in d and "action" in d for d in review["decisions"])
 
 
-def test_cli_review_writes_report(tmp_path):
+def test_cli_review_writes_report(tmp_path, demo_summary):
     res = subprocess.run([sys.executable, "-m", "pto_agent", "review",
-                          "--summary", str(SUMMARY), "--out", str(tmp_path / "review")],
+                          "--summary", str(demo_summary), "--out", str(tmp_path / "review")],
                          capture_output=True, text=True, timeout=120, cwd=ROOT)
     assert res.returncode == 0, res.stdout + res.stderr
+    # раздел «Решения человека» печатается всегда: «вопросов нет» — тоже вывод
     assert "Вердикт:" in res.stdout and "Решения человека" in res.stdout
     assert (tmp_path / "review" / "review.json").exists()
+
+
+def test_cli_review_without_summary_still_prints_decisions_section(tmp_path):
+    """Нет сводки — отчёт всё равно называет, что решений не требуется, и не врёт про успех."""
+    res = subprocess.run([sys.executable, "-m", "pto_agent", "review",
+                          "--summary", str(tmp_path / "нет.json"),
+                          "--out", str(tmp_path / "review")],
+                         capture_output=True, text=True, timeout=120, cwd=ROOT)
+    assert "Решения человека" in res.stdout
+    assert "не выполнялось" in res.stdout or "нет данных" in res.stdout.lower()
 
 
 def test_mcp_tool_review_summary(tmp_path):

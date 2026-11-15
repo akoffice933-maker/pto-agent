@@ -140,8 +140,9 @@ login(payroll_buh, "buh")
 page = payroll_buh.get("/payroll")
 check(page.status_code == 200, f"экран зарплаты отдал {page.status_code}")
 check("Т-51" in page.text, "на экране зарплаты нет ведомости Т-51")
-check("Не считается" in page.text and "больничные" in page.text,
-      "на экране зарплаты не написано, чего в ней нет")
+check("Не считается" in page.text and "больничные" in page.text
+      and "приказ" in page.text,
+      "на экране зарплаты не написано, чего в ней нет (больничные/отпускные — по приказам)")
 check("2 979 000" in page.text or "30 %" in page.text,
       "на экране зарплаты нет предельной базы взносов")
 check(payroll_buh.get("/payroll?period=2026-09").status_code == 200,
@@ -238,6 +239,21 @@ check(ledger.verify(ledger_state)["ok"], "журнал не сходится п�
 revenue = sum(closing.balance_of(ledger_state, "90.01", date="2026-10-31").values(),
               Decimal("0"))
 check(revenue >= 0, f"выручка после закрытия отрицательная: {revenue}")
+
+# ── 5a. экран налогов ───────────────────────────────────────────────────────
+response = buh.get("/taxes")
+check(response.status_code == 200, f"/taxes не открылся: {response.status_code}")
+page = response.text
+for marker in ("НДС за", "Налог на прибыль", "6-НДФЛ", "РСВ и травматизм",
+               "НДС с авансов", "Не сделано"):
+    check(marker in page, f"на экране налогов нет блока «{marker}»")
+check("сдавать отчётность" in page or "сдача отчётности" in page,
+      "экран налогов не говорит, что сдавать отчётность из него нельзя")
+stranger = TestClient(app)
+login(stranger, "prokhorov")
+response = stranger.get("/taxes")
+check(response.status_code == 403, f"прораб увидел налоги: {response.status_code}")
+stats["refusals"] += 1
 
 # ── 6. аудит: роли, IP, цепочка ─────────────────────────────────────────────
 records = [json.loads(line) for line in (work / "audit.jsonl").read_text(

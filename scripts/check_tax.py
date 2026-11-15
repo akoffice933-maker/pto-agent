@@ -29,7 +29,7 @@ if str(ROOT) not in sys.path:
 
 import httpx                                                                   # noqa: E402
 
-from pto_agent import edo, ledger, payroll, sign, tax                          # noqa: E402
+from pto_agent import closing, edo, ledger, payroll, sign, stock, tax                          # noqa: E402
 
 violations: list[str] = []
 checks = {"done": 0}
@@ -195,6 +195,106 @@ with tempfile.TemporaryDirectory() as folder:
     check(sent_ok["status"] == edo.STATUS_SENT and sent_ok["message_id"] == "m-1",
           "успешная отправка не сохранила идентификатор сообщения")
 
+
+# ── 10. налог на прибыль ────────────────────────────────────────────────────
+closed = ledger.new_state(object_name=staff["object"])
+payload = json.loads(json.dumps(acts))
+payload["acts"][0]["vat"] = {"rate": 22.0, "included": False}
+ledger.post_acts(closed, payload, contract="Д-142/2026", customer="ООО «Заказчик-Инвест»")
+stock_state = stock.demo_state()
+ledger.post_stock(closed, stock_state,
+                  documents=json.loads((ROOT / "data/demo/stock/documents_2026_10.json")
+                                       .read_text(encoding="utf-8")))
+for account, amount, analytics in (
+        ("25", 150_000, {"объект": staff["object"], "статья затрат": "механизмы"}),
+        ("26", 50_000, {"статья затрат": "прочие"})):
+    ledger.post_entry(closed, event="overhead", date="2026-10-15",
+                      doc={"number": f"счёт {account}"},
+                      lines=[{"account": account, "side": ledger.DEBIT, "amount": amount,
+                              "analytics": analytics},
+                             {"account": "60.01", "side": ledger.CREDIT, "amount": amount,
+                              "analytics": {"контрагент": "ООО «Механизация»"}}])
+closing.close_month(closed, "2026-10", stock_state=stock_state)
+
+open_month = ledger.new_state(object_name=staff["object"])
+ledger.post_acts(open_month, payload, contract="Д-142/2026", customer="ООО «Заказчик-Инвест»")
+ledger.post_stock(open_month, stock_state,
+                  documents=json.loads((ROOT / "data/demo/stock/documents_2026_10.json")
+                                       .read_text(encoding="utf-8")))
+early = tax.profit_return(open_month, "2026-10", rates=rates)
+check(any(item["code"] == "PROFIT_NOT_CLOSED" for item in early["problems"]),
+      "незакрытый месяц не пойманы как PROFIT_NOT_CLOSED: прибыль посчитана до закрытия")
+
+profit = tax.profit_return(closed, "2026-10", rates=rates)
+check(not profit["problems"], f"закрытый месяц дал расхождения по прибыли: {profit['problems'][:1]}")
+check(abs(profit["totals"]["revenue"] - lawful["totals"]["sales"]) < 0.05,
+      "доходы по прибыли ≠ база НДС (90.01 − 90.03)")
+check(abs(profit["totals"]["profit"]
+          - (profit["totals"]["revenue"] - profit["totals"]["cost"])) < 0.05,
+      "прибыль ≠ доходы − расходы")
+check(abs(profit["totals"]["tax"]
+          - (profit["totals"]["federal_tax"] + profit["totals"]["regional_tax"])) < 0.05,
+      "налог ≠ федеральная + региональная части")
+check(profit["totals"]["profit"] == 31_280_100.00,
+      f"прибыль {profit['totals']['profit']} ≠ задокументированной 31 280 100 (docs/47): "
+      f"сценарий разошёлся с демо")
+check(abs(profit["totals"]["federal_tax"] - round(profit["totals"]["profit"] * 0.08, 2)) < 0.02,
+      "федеральная часть не 8 %")
+check(abs(profit["totals"]["regional_tax"] - round(profit["totals"]["profit"] * 0.17, 2)) < 0.02,
+      "региональная часть не 17 %")
+check(profit["not_included"], "прибыль заявлена полной без списка того, что не считается")
+check([item["code"] for item in tax.validate(profit, rates=rates)] == [],
+      "проверка реквизитов отвергла верную декларацию по прибыли")
+check("<НеСчитается>" in tax.to_xml(profit),
+      "XML прибыли не содержит раздела «не считается»")
+check("Налог на прибыль" in tax.to_markdown(profit), "markdown прибыли без заголовка")
+
+loss = ledger.new_state(object_name=staff["object"])
+ledger.post_entry(loss, event="overhead", date="2026-10-15", doc={"number": "счёт №77"},
+                  lines=[{"account": "90.02", "side": ledger.DEBIT, "amount": 100000,
+                          "analytics": {"объект": staff["object"]}},
+                         {"account": "60.01", "side": ledger.CREDIT, "amount": 100000,
+                          "analytics": {"контрагент": "ООО «Механизация»"}}])
+minus = tax.profit_return(loss, "2026-10", rates=rates)
+check(any(item["code"] == "PROFIT_LOSS" for item in minus["problems"]),
+      "убыток по реализации не назван убытком")
+check(minus["totals"]["tax"] == 0, "с убытка начислен налог")
+
+# ── 11. НДС с авансов ──────────────────────────────────────────────────────
+adv = ledger.new_state(object_name=staff["object"])
+ledger.post_acts(adv, payload, contract="Д-142/2026", customer="ООО «Заказчик-Инвест»")
+analytics = {"контрагент": "ООО «Заказчик-Инвест»", "договор": "Д-142/2026"}
+ledger.post_entry(adv, event="receipt_payment", date="2026-10-05",
+                  doc={"number": "п/п аванс 55"},
+                  lines=[{"account": "51", "side": ledger.DEBIT, "amount": 12_200_000,
+                          "analytics": {}},
+                         {"account": "62.02", "side": ledger.CREDIT, "amount": 12_200_000,
+                          "analytics": analytics}])
+ledger.post_entry(adv, event="advance_offset", date="2026-10-29",
+                  doc={"number": "зачёт аванса"},
+                  lines=[{"account": "62.02", "side": ledger.DEBIT, "amount": 6_100_000,
+                          "analytics": analytics},
+                         {"account": "62.01", "side": ledger.CREDIT, "amount": 6_100_000,
+                          "analytics": analytics}])
+with_adv = tax.vat_return(adv, "2026-10", rates=rates)
+advances = with_adv["advances"]
+check(abs(advances["vat_on_received"] - 2_200_000) < 0.05,
+      f"НДС с аванса 12,2 млн по 22 % = {advances['vat_on_received']}, ожидали 2 200 000")
+check(abs(advances["vat_on_offset"] - 1_100_000) < 0.05,
+      f"вычет с зачтённых 6,1 млн = {advances['vat_on_offset']}, ожидали 1 100 000")
+check(abs(with_adv["totals"]["payable"]
+          - (with_adv["totals"]["vat_charged"] - with_adv["totals"]["vat_deducted"]
+             + advances["to_pay"])) < 0.05, "к уплате не учёл НДС с авансов")
+check(any(item["code"] == "VAT_ADVANCE_NOT_POSTED" for item in with_adv["problems"]),
+      "НДС с авансов попал в декларацию, но расхождение с журналом не названо")
+check(len(with_adv["advances"]["lines"]) == 2 and all(row["verify"]
+                                                      for row in with_adv["advances"]["lines"]),
+      "строки авансового НДС не помечены «на проверку»")
+
+print(f"прибыль 2026-10: доходы {profit['totals']['revenue']:,.2f} ₽ · расходы "
+      f"{profit['totals']['cost']:,.2f} ₽ · налог {profit['totals']['tax']:,.2f} ₽ "
+      f"(8 % + 17 %); НДС с авансов: начислено "
+      f"{advances['vat_on_received']:,.2f} ₽, вычет {advances['vat_on_offset']:,.2f} ₽")
 print(f"налоги: НДС {lawful['totals']['vat_charged']:,.2f} ₽ · 6-НДФЛ "
       f"{ndfl['totals']['tax_withheld']:,.2f} ₽ · РСВ {rsv['totals']['contrib']:,.2f} ₽ · "
       f"травматизм {rsv['totals']['injury']:,.2f} ₽")
