@@ -32,7 +32,8 @@ NS = "urn:pto-agent:tax:2026"
 EPS = Decimal("0.01")
 KINDS = {"vat": "НДС (налоговая декларация)", "ndfl6": "6-НДФЛ",
          "rsv": "РСВ (расчёт по страховым взносам)", "psv": "Персонифицированные сведения",
-         "profit": "Налог на прибыль (декларация)"}
+         "profit": "Налог на прибыль (декларация)",
+         "property": "Налог на имущество организаций"}
 
 
 # ─────────────────────────── числа ───────────────────────────
@@ -188,6 +189,15 @@ def advances_vat(state: dict, period: str, *, rates: dict | None = None) -> dict
         "offset": num(offset), "vat_on_offset": num(vat_offset),
         "in_ledger": {"accrued": num(on_ledger), "deducted": num(off_ledger),
                       "account": "76.АВ"},
+        "issued": {
+            "advance": num(turnover(state, "60.02", period, side=ledger.DEBIT, prefix=False)),
+            "offset": num(turnover(state, "60.02", period, side=ledger.CREDIT, prefix=False)),
+            "in_ledger": num(turnover(state, "76.ВА", period, side=ledger.DEBIT, prefix=False)),
+            "restored": num(turnover(state, "76.ВА", period, side=ledger.CREDIT, prefix=False)),
+            "account": "76.ВА",
+            "note": ("выданные авансы: вычет идёт на 76.ВА только по документам со ставкой; "
+                     "если ставки в документе нет — вычет не ставим и запрашиваем счёт-фактуру"),
+        },
         "to_pay": num(vat_received - vat_offset),
         "documents": received_docs,
         "lines": [
@@ -225,6 +235,7 @@ def post_advance_vat(state: dict, period: str, *, rates: dict | None = None,
     rules = rules if rules is not None else accounting.load_rules()
     result = {"posted": 0, "duplicates": 0, "rejected": 0, "results": [],
               "accrued": Decimal("0"), "deducted": Decimal("0"),
+              "issued_deducted": Decimal("0"), "issued_restored": Decimal("0"),
               "errors": [], "gaps": [], "warnings": [],
               "no_invoice": []}
 
@@ -253,6 +264,7 @@ def post_advance_vat(state: dict, period: str, *, rates: dict | None = None,
             result["errors"].extend(outcome.get("errors") or [])
             result["gaps"].extend(outcome.get("gaps") or [])
         result["warnings"].extend(outcome.get("warnings") or [])
+        return outcome.get("status")
 
     for entry in _entries(state, period, "receipt_payment"):
         for line in entry.get("lines") or []:
@@ -319,8 +331,70 @@ def post_advance_vat(state: dict, period: str, *, rates: dict | None = None,
                   (f"вычет НДС {percent:g} % с зачтённой части аванса {number} ({rub(gross)})"),
                   key=f"vat_advance|deduction|{number}|{entry.get('date')}|{num(vat):.2f}")
             result["deducted"] += vat
+    # ── выданные авансы: НДС к вычету (76.ВА) ─────────────────────────────
+    # Сумма налога берётся только из документа: ставку «по умолчанию» не подставляем —
+    # ровно как в правиле stock.receipt для 19.03.
+    for entry in _entries(state, period):
+        doc = entry.get("doc") or {}
+        rate_hint = (doc.get("vat") or {}).get("rate") if isinstance(doc.get("vat"), dict) else \
+            doc.get("vat_rate")
+        if not rate_hint:
+            result["gaps"].append(
+                {"what": f"ставка НДС в документе аванса выданного {doc.get('number') or ''}",
+                 "why": "без ставки вычет с аванса выданного не считаем",
+                 "ask": "счёт-фактура на аванс или указание ставки в заявке"})
+            continue
+        percent = Decimal(str(rate_hint))
+        debit = [line for line in entry.get("lines") or []
+                 if str(line.get("account")) == "60.02" and line.get("side") == ledger.DEBIT]
+        credit = [line for line in entry.get("lines") or []
+                  if str(line.get("account")) == "60.02" and line.get("side") == ledger.CREDIT]
+        # аванс выдан (Дт 60.02): вычет — Дт 68.02 Кт 76.ВА;
+        # аванс зачтён (Кт 60.02): восстановление — Дт 76.ВА Кт 68.02
+        for line, event, rule, side_debit, side_credit in (
+                (debit[0] if debit else None, "vat_issued_advance", "vat.issued_advance",
+                 "68.02", "76.ВА"),
+                (credit[0] if credit else None, "vat_issued_advance_restore",
+                 "vat.issued_advance_restore", "76.ВА", "68.02")):
+            if not line:
+                continue
+            gross = kopeck(line.get("amount"))
+            vat = kopeck(gross * percent / (Decimal("100") + percent))
+            if vat <= 0:
+                continue
+            analytics = {key: str(value) for key, value in (line.get("analytics") or {}).items()
+                         if str(value).strip()}
+            if not analytics.get("контрагент") or not analytics.get("договор"):
+                missing = [field for field in ("контрагент", "договор")
+                           if not analytics.get(field)]
+                result["gaps"].append({"what": f"аналитика {', '.join(missing)} для аванса "
+                                               f"выданного {doc.get('number') or ''}",
+                                       "why": "76.ВА требует контрагента и договор: без них налог "
+                                              "не привязан к авансу",
+                                       "ask": f"указать в первичке: {', '.join(missing)}"})
+                continue
+            status = _post(event, rule, str(entry.get("date") or ""),
+                  {"number": f"{'вычет' if side_debit == '68.02' else 'восстановление'} "
+                             f"НДС с аванса выданного {doc.get('number') or ''}",
+                   "date": entry.get("date"), "kind": "расчёт НДС"},
+                  [{"account": side_debit, "side": ledger.DEBIT, "amount": num(vat),
+                    "analytics": analytics if side_debit == "76.ВА" else {}},
+                   {"account": side_credit, "side": ledger.CREDIT, "amount": num(vat),
+                    "analytics": analytics if side_credit == "76.ВА" else {}}],
+                  (f"НДС {percent:g} % с аванса выданного {doc.get('number') or ''} "
+                   f"({rub(gross)}): ставка взята из документа"),
+                  key=f"vat_issued|{event}|{doc.get('number') or ''}|"
+                      f"{entry.get('date')}|{num(vat):.2f}")
+            if status != accounting.STATUS_OK:
+                continue
+            if side_debit == "68.02":
+                result["issued_deducted"] = num(kopeck(result.get("issued_deducted") or 0) + vat)
+            else:
+                result["issued_restored"] = num(kopeck(result.get("issued_restored") or 0) + vat)
     result["accrued"] = num(result["accrued"])
     result["deducted"] = num(result["deducted"])
+    result["issued_deducted"] = num(result["issued_deducted"])
+    result["issued_restored"] = num(result["issued_restored"])
     return result
 
 def _last_day(period: str) -> str:
@@ -682,6 +756,226 @@ def profit_return(state: dict, period: str, *, rates: dict | None = None,
     report["ready"] = not report["problems"]
     return report
 
+
+# ─────────────────────────── налог на имущество ───────────────────────────
+PROPERTY_REPORTING = (("Q1", "I квартал", ("01", "02", "03"), "04", "2026-04-28"),
+                      ("H1", "полугодие", ("01", "02", "03", "04", "05", "06"), "07", "2026-07-28"),
+                      ("9M", "9 месяцев", ("01", "02", "03", "04", "05", "06", "07", "08", "09"),
+                       "10", "2026-10-28"))
+
+
+def _rub_round(value: Decimal) -> Decimal:
+    """Налог считается в полных рублях: 50 копеек и больше — вверх (п. 6 ст. 52 НК РФ)."""
+    return value.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+
+
+def property_tax(assets_payload: dict, year: str, *, rates: dict | None = None) -> dict:
+    """Налог на имущество организаций: авансы за I квартал, полугодие, 9 месяцев и налог за год.
+
+    База — регистр недвижимости (`data/demo/property/assets_2026.json`): в контуре нет учёта
+    основных средств (счетов 01/02), поэтому стоимости приходят файлом, а не «примерно из
+    20.01». Что считается:
+
+    * **среднегодовая стоимость** — средняя за отчётный период по п. 4 ст. 376 НК РФ:
+      (сумма остаточных стоимостей на 1-е число каждого месяца периода + на 1-е число
+      следующего месяца) / (число месяцев периода + 1); аванс = средняя × ставка / 4;
+    * **кадастровая стоимость** — кадастр на 01.01 × ставка / 4; по таким объектам ФНС
+      считает налог сама и присылает сообщение, поэтому расчёт контура — сверка, а не замена.
+
+    Ставки — из `tax_rates.json → property` (Ленинградская область: 2,2 % среднегодовая,
+    2,0 % кадастр). Движимое имущество не облагается с 2019 года и в базу не идёт.
+    Если стоимость на какую-то дату отсутствует — аванс **не считается**: код
+    `PROPERTY_NO_DATA`, потому что средняя «по имеющимся месяцам» — это другая цифра.
+    """
+    rates = rates or load_rates()
+    section = rates.get("property") or {}
+    rate_average = Decimal(str((section.get("rates") or {}).get("average") or 0))
+    rate_cadastral = Decimal(str((section.get("rates") or {}).get("cadastral") or 0))
+
+    report = {"kind": "property", "period": year, "organisation": rates.get("organisation") or {},
+              "rows": [], "problems": [], "gaps": [], "warnings": [],
+              "totals": {}, "advance_payments": [],
+              "deadlines": (rates.get("deadlines") or {}).get("property")
+              or {}, "rates": {"average": float(rate_average), "cadastral": float(rate_cadastral),
+                               "region": section.get("region"),
+                               "source": section.get("rates_source") or []},
+              "not_included": [
+                  {"what": "основные средства в журнале (счета 01 и 02)",
+                   "why": "в контуре их нет: амортизация не начисляется, остаточная стоимость "
+                          "приходит регистром из бухгалтерии"},
+                  {"what": "льготы и пониженные ставки субъекта",
+                   "why": "в справочнике только общие ставки Ленинградской области; льгота "
+                          "конкретной организации не проверяется — её подтверждают документы"},
+                  {"what": "налог по объектам, которых нет в регистре",
+                   "why": "регистр — единственный источник; полноту сверяют с выпиской ЕГРН"},
+                  {"what": "выгрузка декларации в формате ФНС 5.13",
+                   "why": "форма подтверждена (КНД 1152026), но XML со схемой не сверялся"},
+              ]}
+
+    assets = list((assets_payload or {}).get("assets") or [])
+    if not assets:
+        report["gaps"].append({"what": "регистр недвижимости",
+                               "why": "файл активов пуст: налог считать не из чего",
+                               "ask": "выгрузка из бухучёта: объект, остаточная стоимость на 1-е "
+                                      "число каждого месяца, кадастровая стоимость"})
+        report["totals"] = {"advances": 0.0, "year": 0.0}
+        report["ready"] = False
+        return report
+
+    def value_on(asset: dict, day: str) -> Decimal | None:
+        raw = (asset.get("residual") or {}).get(day)
+        if raw in (None, ""):
+            return None
+        return kopeck(raw)
+
+    taxable: list[dict] = []
+    for asset in assets:
+        kind = str(asset.get("kind") or "")
+        name = str(asset.get("name") or "без названия")
+        base = str(asset.get("base") or "average")
+        if kind != "недвижимость":
+            # движимое с 2019 года не облагается: оно не «теряется», а объяснено
+            report["rows"].append({"name": name, "inventory": asset.get("inventory") or "",
+                                   "base": base, "kind": kind, "taxable": False,
+                                   "why": "движимое имущество не облагается (п. 1 ст. 374 НК РФ)",
+                                   "average": None, "advances": {}, "year": 0.0})
+            continue
+        if base == "cadastral":
+            cadastral = kopeck(asset.get("cadastral_value"))
+            if cadastral <= 0:
+                report["problems"].append({
+                    "code": "PROPERTY_NO_DATA", "what": name,
+                    "why": "база кадастровая, а кадастровой стоимости нет: сумму не считаем — "
+                           "она берётся из ЕГРН, а не «примерно»"})
+                continue
+            advances = {code: _rub_round(cadastral * rate_cadastral
+                                         / Decimal("100") / Decimal("4"))
+                        for code, _, _, _, _ in PROPERTY_REPORTING}
+            bases = {code: cadastral for code, _, _, _, _ in PROPERTY_REPORTING}
+            taxable.append({"asset": asset, "name": name, "base": base, "cadastral": cadastral,
+                            "advances": advances, "bases": bases,
+                            "year": _rub_round(cadastral * rate_cadastral / Decimal("100"))})
+            continue
+
+        # среднегодовая база: проверяем, что есть стоимость на все нужные даты
+        months_needed = [f"{year}-{month}-01" for month in
+                         ("01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12")]
+        months_needed.append(f"{int(year) + 1}-01-01")
+        missing = [day for day in months_needed if value_on(asset, day) is None]
+        if missing:
+            report["problems"].append({
+                "code": "PROPERTY_NO_DATA", "what": name,
+                "why": f"нет остаточной стоимости на {', '.join(missing[:4])}"
+                       f"{' и ещё ' + str(len(missing) - 4) if len(missing) > 4 else ''}: "
+                       f"средняя за период не считается по неполному ряду — она была бы другой "
+                       f"цифрой, а не той же"})
+            continue
+        advances: dict[str, Decimal] = {}
+        bases: dict[str, Decimal] = {}
+        for code, _, months, next_month, _ in PROPERTY_REPORTING:
+            days = [f"{year}-{month}-01" for month in months] + [f"{year}-{next_month}-01"]
+            total = sum((value_on(asset, day) for day in days), Decimal("0"))
+            average = total / Decimal(len(days))
+            advances[code] = _rub_round(average * rate_average / Decimal("100") / Decimal("4"))
+            bases[code] = average
+        annual_days = months_needed
+        average_year = sum((value_on(asset, day) for day in annual_days), Decimal("0")) \
+            / Decimal(len(annual_days))
+        taxable.append({"asset": asset, "name": name, "base": base,
+                        "average": average_year, "advances": advances, "bases": bases,
+                        "year": _rub_round(average_year * rate_average / Decimal("100"))})
+
+    advance_totals: dict[str, Decimal] = {code: Decimal("0") for code, *_ in PROPERTY_REPORTING}
+    base_totals: dict[str, Decimal] = {code: Decimal("0") for code, *_ in PROPERTY_REPORTING}
+    year_total = Decimal("0")
+    for row in taxable:
+        for code, amount in row["advances"].items():
+            advance_totals[code] += amount
+        for code, value in (row.get("bases") or {}).items():
+            base_totals[code] += value
+        year_total += row["year"]
+        report["rows"].append({
+            "name": row["name"], "inventory": row["asset"].get("inventory") or "",
+            "base": row["base"], "kind": "недвижимость", "taxable": True,
+            "average": num(row.get("average")) if row.get("average") is not None else None,
+            "cadastral": num(row.get("cadastral")) if row.get("cadastral") is not None else None,
+            "advances": {code: num(amount) for code, amount in row["advances"].items()},
+            "year": num(row["year"])})
+
+    for code, title, _, _, deadline in PROPERTY_REPORTING:
+        report["advance_payments"].append({
+            "code": code, "title": title, "amount": num(advance_totals[code]),
+            "deadline": deadline,
+            "operation": f"аванс за {title}",
+            "basis": num(base_totals[code])})
+    report["totals"] = {
+        "advances_q1": num(advance_totals["Q1"]), "advances_h1": num(advance_totals["H1"]),
+        "advances_9m": num(advance_totals["9M"]),
+        "advances_total": num(sum(advance_totals.values(), Decimal("0"))),
+        "year": num(year_total),
+        "to_pay_year": num(year_total - sum(advance_totals.values(), Decimal("0"))),
+        "objects": len(taxable),
+    }
+    if not taxable:
+        report["gaps"].append({"what": "объекты, облагаемые налогом",
+                               "why": "в регистре нет ни одного объекта с полными данными",
+                               "ask": "остаточная стоимость по месяцам и кадастровая стоимость"})
+    report["ready"] = not report["problems"]
+    return report
+
+
+def post_property_tax(state: dict, report: dict, *, code: str = "Q1", date: str | None = None,
+                      mode: str | None = None, chart: dict | None = None,
+                      rules: dict | None = None) -> dict:
+    """Провести аванс (или налог за год) по имуществу: Дт 91.02 Кт 68.08.
+
+    Сумма **берётся из готового расчёта** `property_tax` и не пересчитывается: проводка —
+    это решение человека, а не место, где появляются цифры. Дата — по сроку платежа, если
+    не передана явно. Повторный вызов даёт дубль, а не второе начисление.
+    """
+    from . import ledger as accounting
+
+    chart = chart or accounting.load_chart()
+    rules = rules if rules is not None else accounting.load_rules()
+    year = str(report.get("period") or "")
+    if code == "YEAR":
+        amount = kopeck((report.get("totals") or {}).get("to_pay_year"))
+        deadline = str(((report.get("deadlines") or {}).get("tax") or ""))
+        title = f"налог за {year} (доплата за год)"
+        default_date = f"{int(year) + 1}-02-28"
+    else:
+        row = next((item for item in report.get("advance_payments") or []
+                    if item.get("code") == code), None)
+        if not row:
+            return {"status": accounting.STATUS_REJECTED, "posted": 0,
+                    "errors": [{"code": "PROPERTY_NO_PERIOD", "what": code,
+                                "why": f"в расчёте нет аванса {code}: есть "
+                                       f"{', '.join(item.get('code') for item in report.get('advance_payments') or []) or '—'}"}],
+                    "gaps": [], "warnings": []}
+        amount = kopeck(row.get("amount"))
+        deadline = str(row.get("deadline") or "")
+        title = f"{row.get('operation')} за {year}"
+        default_date = deadline or f"{year}-12-31"
+    if amount <= 0:
+        return {"status": accounting.STATUS_REJECTED, "posted": 0,
+                "errors": [{"code": "PROPERTY_ZERO", "what": code,
+                            "why": "сумма к начислению нулевая: проводить нечего"}],
+                "gaps": [], "warnings": []}
+    outcome = accounting.post_entry(
+        state, event="property_tax", date=str(date or default_date),
+        doc={"number": f"налог на имущество: {title}", "date": str(date or default_date),
+             "kind": "расчёт налога"},
+        lines=[{"account": "91.02", "side": accounting.DEBIT, "amount": num(amount),
+                "analytics": {}},
+               {"account": "68.08", "side": accounting.CREDIT, "amount": num(amount),
+                "analytics": {}}],
+        memo=(f"{title}: {rub(amount)} отнесено на прочие расходы; "
+              f"срок уплаты — {deadline or 'по расчёту'}"),
+        rule="tax.property", key=f"property|{year}|{code}|{num(amount):.2f}",
+        chart=chart, rules=rules, mode=mode or accounting.MODE_POST)
+    return {**outcome, "posted": 1 if outcome.get("status") == accounting.STATUS_OK else 0,
+            "amount": num(amount), "date": str(date or default_date)}
+
 # ─────────────────────────── XML ───────────────────────────
 def _tag(parent: ET.Element, name: str, value=None, **attributes) -> ET.Element:
     node = ET.SubElement(parent, name, {key: str(item) for key, item in attributes.items()})
@@ -727,6 +1021,11 @@ def to_xml(report: dict) -> str:
         for row in report["advances"].get("lines") or []:
             _tag(block, "Строка", row.get("amount"), Номер=row.get("line") or "",
                  Что=row.get("what") or "", НаПроверку="1" if row.get("verify") else "0")
+    if report.get("advance_payments"):
+        block = _tag(root, "АвансыПоИмуществу")
+        for row in report["advance_payments"]:
+            _tag(block, "Аванс", row.get("amount"), Период=row.get("title") or "",
+                 Срок=row.get("deadline") or "", База=row.get("basis"))
     if report.get("not_included"):
         block = _tag(root, "НеСчитается")
         for item in report["not_included"]:
@@ -755,8 +1054,14 @@ def validate(report: dict, *, rates: dict | None = None) -> list[dict]:
     if not kpp_ok(organisation.get("kpp")):
         problems.append({"code": "BAD_KPP", "what": organisation.get("kpp"),
                          "why": "КПП не той структуры: 4 цифры + буква + 5 цифр"})
-    if not str(report.get("period") or "").count("-") == 1:
-        problems.append({"code": "BAD_PERIOD", "what": report.get("period"),
+    period_text = str(report.get("period") or "")
+    if report.get("kind") == "property":
+        # имущество считается за год: формат периода — ГГГГ, а не ГГГГ-ММ
+        if not (len(period_text) == 4 and period_text.isdigit()):
+            problems.append({"code": "BAD_PERIOD", "what": period_text,
+                             "why": "налог на имущество считается за год: период задаётся как ГГГГ"})
+    elif not period_text.count("-") == 1:
+        problems.append({"code": "BAD_PERIOD", "what": period_text,
                          "why": "период задаётся как ГГГГ-ММ"})
     totals = report.get("totals") or {}
     if report.get("kind") == "vat":
@@ -781,6 +1086,19 @@ def validate(report: dict, *, rates: dict | None = None) -> list[dict]:
             problems.append({"code": "PROFIT_RATE_SUM", "what": f"{split} %",
                              "why": "ставки прибыли в сумме не 25 % (8 % + 17 %): проверить, "
                                     "нет ли региональной льготы"})
+    if report.get("kind") == "property":
+        totals = report.get("totals") or {}
+        advances = kopeck(totals.get("advances_q1")) + kopeck(totals.get("advances_h1")) \
+            + kopeck(totals.get("advances_9m"))
+        if abs(advances - kopeck(totals.get("advances_total"))) > EPS:
+            problems.append({"code": "PROPERTY_TOTALS", "what": report.get("period"),
+                             "why": "сумма авансов не равна сумме трёх платежей"})
+        if kopeck(totals.get("to_pay_year")) + advances != kopeck(totals.get("year")):
+            problems.append({"code": "PROPERTY_YEAR", "what": report.get("period"),
+                             "why": "налог за год ≠ авансы + доплата за год"})
+        if kopeck(totals.get("year")) < 0:
+            problems.append({"code": "PROPERTY_NEGATIVE", "what": report.get("period"),
+                             "why": "налог отрицательный: проверить базу"})
     if report.get("kind") == "ndfl6":
         if kopeck(totals.get("tax_withheld")) < 0:
             problems.append({"code": "NDFL_NEGATIVE", "what": report.get("period"),
@@ -827,6 +1145,34 @@ def to_markdown(report: dict) -> str:
             lines.append("## Не считается")
             for item in report["not_included"]:
                 lines.append(f"- **{item.get('what')}**: {item.get('why')}")
+    elif kind == "property":
+        totals = report.get("totals") or {}
+        lines.append(f"Регион ставок: {(report.get('rates') or {}).get('region')} · "
+                     f"среднегодовая {(report.get('rates') or {}).get('average')} % · "
+                     f"кадастровая {(report.get('rates') or {}).get('cadastral')} %")
+        lines.append("")
+        lines.append("| объект | база | средняя/кадастр | I кв. | полугодие | 9 мес. | за год |")
+        lines.append("|---|---|---:|---:|---:|---:|---:|")
+        for row in report.get("rows") or []:
+            if not row.get("taxable"):
+                lines.append(f"| {row['name']} | {row['base']} | — | — | — | — | "
+                             f"не облагается: {row.get('why')} |")
+                continue
+            base_value = row.get("cadastral") if row["base"] == "cadastral" else row.get("average")
+            adv = row.get("advances") or {}
+            lines.append(f"| {row['name']} | {row['base']} | {rub(base_value)} | "
+                         f"{rub(adv.get('Q1'))} | {rub(adv.get('H1'))} | {rub(adv.get('9M'))} | "
+                         f"{rub(row.get('year'))} |")
+        lines.append("")
+        lines.append(f"Авансы: I кв. {rub(totals.get('advances_q1'))}, полугодие "
+                     f"{rub(totals.get('advances_h1'))}, 9 мес. {rub(totals.get('advances_9m'))} · "
+                     f"за год {rub(totals.get('year'))} · к доплате за год "
+                     f"{rub(totals.get('to_pay_year'))}")
+        deadlines = report.get("deadlines") or {}
+        if deadlines.get("advances"):
+            lines.append(f"Сроки: {', '.join(deadlines['advances'])} (авансы), "
+                         f"{deadlines.get('declaration')} (декларация). "
+                         f"{deadlines.get('notice')}")
     elif kind == "ndfl6":
         lines.append("| таб. | сотрудник | доход | вычет | НДФЛ | ставки |")
         lines.append("|---|---|---:|---:|---:|---|")

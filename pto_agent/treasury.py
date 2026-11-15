@@ -349,7 +349,10 @@ def add_request(state: dict, request: dict, *, rules: dict | None = None) -> dic
                                                       or state.get("object") or ""),
         "counterparty": counter, "article": article,
         "purpose": str(request.get("purpose") or ""), "amount": num(amount),
-        "vat": request.get("vat"), "basis": {"kind": str(basis.get("kind") or ""),
+        "vat": request.get("vat"),
+        # договор нужен налоговым проводкам: 76.ВА/76.АВ без него не привязаны к сделке
+        "contract": str(request.get("contract") or basis.get("contract") or ""),
+        "basis": {"kind": str(basis.get("kind") or ""),
                                              "number": str(basis.get("number") or ""),
                                              "date": str(basis.get("date") or "")},
         "due_date": str(request.get("due_date") or ""),
@@ -465,6 +468,30 @@ def balance_at(state: dict, date: str) -> Decimal:
         if str(row.get("date") or "") <= str(date):
             total -= kopeck(row.get("amount"))
     return total
+
+
+
+def _advance_analytics(state: dict, payment: dict) -> dict:
+    """Аналитика аванса: контрагент всегда, договор — если он есть в заявке."""
+    analytics = {"контрагент": payment["counterparty"]}
+    request = find(state, str(payment.get("request") or "")) or {}
+    contract = str(payment.get("contract") or request.get("contract") or "").strip()
+    if contract:
+        analytics["договор"] = contract
+    return analytics
+
+
+def _vat_doc(state: dict, payment: dict) -> dict:
+    """НДС из заявки в документ проводки: `{}` — если ставки нет."""
+    source = payment.get("vat")
+    if not source:
+        request = find(state, str(payment.get("request") or ""))
+        source = (request or {}).get("vat")
+    if not source:
+        return {}
+    if isinstance(source, dict) and source.get("rate") in (None, ""):
+        return {}
+    return {"vat": source}
 
 
 def pay(state: dict, number: str, *, date: str, amount=None, allow_overdraft: bool = False,
@@ -899,9 +926,12 @@ def post_to_ledger(state: dict, ledger_state: dict, *, chart: dict | None = None
             advance_result = ledger.post_entry(
                 ledger_state, event="payment", date=str(payment["date"]),
                 doc={"number": f"п/п аванс по заявке {payment['request']}",
-                     "date": str(payment["date"]), "kind": "payment"},
+                     "date": str(payment["date"]), "kind": "payment",
+                     # ставка НДС едет в проводку из заявки: без неё 76.ВА не считается,
+                     # а подставлять «22 % по умолчанию» нельзя
+                     **_vat_doc(state, payment)},
                 lines=[{"account": "60.02", "side": ledger.DEBIT, "amount": num(to_advance),
-                        "analytics": {"контрагент": payment["counterparty"]}},
+                        "analytics": _advance_analytics(state, payment)},
                        {"account": "51", "side": ledger.CREDIT, "amount": num(to_advance),
                         "analytics": {}}],
                 memo=(f"аванс {payment['counterparty']} по заявке {payment['request']}: "

@@ -155,6 +155,56 @@
 </section>
 {% endif %}
 
+{% if property %}
+<section class="card">
+  <h2>Налог на имущество за {{ year }}</h2>
+  <p class="muted small">Считается по регистру недвижимости (<code>data/demo/property/assets_2026.json</code>):
+    база — среднегодовая стоимость по объектам и кадастровая стоимость по тем, что в перечне региона.
+    Ставки Ленинградской области: {{ property.rates.region }} — {{ property.rates.average }} % /
+    {{ property.rates.cadastral }} %.</p>
+  {% if property.ready %}
+  <table class="table compact">
+    <thead><tr><th>объект</th><th>база</th><th class="num">средняя / кадастр</th>
+      <th class="num">I кв.</th><th class="num">полугодие</th><th class="num">9 мес.</th><th class="num">за год</th></tr></thead>
+    <tbody>
+    {% for row in property.rows %}
+      <tr>
+        <td>{{ row.name }}</td><td class="small">{{ row.base }}</td>
+        {% if row.taxable %}
+          <td class="num">{{ (row.cadastral if row.base == 'cadastral' else row.average)|rub }}</td>
+          <td class="num">{{ row.advances.Q1|rub }}</td><td class="num">{{ row.advances.H1|rub }}</td>
+          <td class="num">{{ row.advances['9M']|rub }}</td><td class="num">{{ row.year|rub }}</td>
+        {% else %}
+          <td class="num">—</td><td class="small" colspan="4">не облагается: {{ row.why }}</td>
+        {% endif %}
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">
+    Авансы: {{ property.totals.advances_q1|rub }} · {{ property.totals.advances_h1|rub }} ·
+    {{ property.totals.advances_9m|rub }} (итого {{ property.totals.advances_total|rub }}) ·
+    налог за год <b>{{ property.totals.year|rub }}</b> · к доплате за год
+    {{ property.totals.to_pay_year|rub }}.
+  </p>
+  <p class="muted small">Сроки: {{ property.deadlines.advances|join(', ') }} — авансы,
+    {{ property.deadlines.declaration }} — декларация. {{ property.deadlines.notice }}.</p>
+  {% else %}
+  <div class="flash flash-err">Расчёт не готов: данных регистра не хватает. Нули не подставляем.</div>
+  <ul class="muted small">
+    {% for gap in property.gaps %}<li><b>{{ gap.what }}</b>: {{ gap.why }}{% if gap.ask %} →
+      {{ gap.ask }}{% endif %}</li>{% endfor %}
+    {% for item in property.problems %}<li><b>{{ item.code }}</b> · {{ item.what }}: {{ item.why }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+  <h3>Что не сделано по имуществу</h3>
+  <ul class="muted small">
+    {% for item in property.not_included %}<li><b>{{ item.what }}</b>: {{ item.why }}</li>{% endfor %}
+    <li>проводки начисляются только по решению человека (<code>tax post-property</code>): Дт 91.02 Кт 68.08</li>
+  </ul>
+</section>
+{% endif %}
+
 <section class="card">
   <h2>Формы и сроки</h2>
   <table class="table compact">

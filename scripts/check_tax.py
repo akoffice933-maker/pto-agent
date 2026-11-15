@@ -324,6 +324,83 @@ check("номер и дата счёта-фактуры" in asked,
 check("книга продаж" in asked, "бланк не сказал, что книги продаж нет")
 check("ЧЕРНОВИК" in invoice["draft_notice"], "бланк без пометки «черновик»")
 
+
+# ── 14. налог на имущество и 76.ВА (круг 32) ──────────────────────────────
+from pto_agent import treasury                                                      # noqa: E402
+
+assets = json.loads((Path(__file__).resolve().parents[1] / "data/demo/property"
+                     / "assets_2026.json").read_text(encoding="utf-8"))
+prop = tax.property_tax(assets, "2026", rates=rates)
+check(prop["ready"] is True, "имущество: расчёт не готов на полном регистре")
+check([row["basis"] for row in prop["advance_payments"]] == [120_217_500, 119_835_000,
+                                                             119_452_500],
+      f"базы авансов {[row['basis'] for row in prop['advance_payments']]}")
+check([row["amount"] for row in prop["advance_payments"]] == [613_196, 611_093, 608_989],
+      f"авансы {[row['amount'] for row in prop['advance_payments']]}")
+check(prop["totals"]["year"] == 2_427_540, f"налог за год {prop['totals']['year']}")
+check(prop["totals"]["to_pay_year"] == 594_262,
+      f"к доплате за год {prop['totals']['to_pay_year']}")
+movable = [row for row in prop["rows"] if not row["taxable"]]
+check(len(movable) == 1 and "374" in movable[0]["why"],
+      "движимое имущество должно отсекаться с причиной")
+broken = tax.property_tax({"assets": [{"name": "Склад", "kind": "недвижимость",
+                                      "base": "average",
+                                      "residual": {"2026-01-01": 1000}}]}, "2026", rates=rates)
+check(broken["ready"] is False and "PROPERTY_NO_DATA" in
+      [item["code"] for item in broken["problems"]],
+      "неполный ряд остаточных стоимостей должен давать PROPERTY_NO_DATA, а не ноль")
+check(not tax.validate(prop, rates=rates), "имущество: validate нашёл расхождения")
+prop_xml = tax.to_xml(prop)
+check("НеФорматФНС" in prop_xml and "<АвансыПоИмуществу>" in prop_xml,
+      "XML имущества должен нести пометку «не формат ФНС»")
+
+prop_state = ledger.new_state()
+posted_q1 = tax.post_property_tax(prop_state, prop, code="Q1")
+check(posted_q1["status"] == ledger.STATUS_OK, f"проводка аванса: {posted_q1['status']}")
+check(abs(float(sum(ledger.balance_as_of(prop_state, "68.08", "2026-04-30").values())) +
+          613_196) < 0.05, "68.08 не сошёлся с авансом I квартала")
+check(tax.post_property_tax(prop_state, prop, code="Q1")["status"] == ledger.STATUS_DUPLICATE,
+      "повторная проводка аванса по имуществу не распознана как дубль")
+check(ledger.verify(prop_state)["ok"], "журнал не сходится после проводки по имуществу")
+
+# выданный аванс: вычет НДС на 76.ВА только при ставке и договоре в документе
+def issued(contract: str | None):
+    st = ledger.new_state()
+    tr_state = treasury.new_state(opening=50_000_000)
+    basis = {"number": "СЧ-908", "date": "2026-09-30", "kind": "счёт"}
+    if contract:
+        basis["contract"] = contract
+    treasury.add_request(tr_state, {
+        "number": "З-501", "date": "2026-10-01", "article": "материалы",
+        "amount": 12_200_000, "counterparty": "ООО «Бетон-Сервис»", "requested_by": "snab",
+        "vat": {"rate": 22}, "basis": basis}, rules=treasury.load_rules())
+    for role, person in (("снабжение", "Прохоров"), ("ПТО", "Кузнецов"),
+                         ("финдиректор", "Смирнов")):
+        treasury.approve(tr_state, "З-501", role=role, person=person, date="2026-10-02")
+    treasury.pay(tr_state, "З-501", date="2026-10-05", advance=True)
+    treasury.post_to_ledger(tr_state, st)
+    return st
+
+
+with_contract = issued("Д-11/2025")
+issued_vat = tax.post_advance_vat(with_contract, "2026-10", rates=rates)
+check(issued_vat["issued_deducted"] == 2_200_000,
+      f"вычет с выданного аванса {issued_vat['issued_deducted']}, ожидали 2 200 000")
+check(abs(float(sum(ledger.balance_as_of(with_contract, "76.ВА", "2026-10-31").values())) +
+          2_200_000) < 0.05, "76.ВА не сошёлся с вычетом по выданному авансу")
+no_contract = issued(None)
+asked_contract = tax.post_advance_vat(no_contract, "2026-10", rates=rates)
+check(asked_contract["issued_deducted"] == 0,
+      "без договора вычет ставиться не должен — это выдуманная проводка")
+check(any("договор" in gap["what"] for gap in asked_contract["gaps"]),
+      "без договора должно быть требование указать договор")
+
+print(f"имущество 2026: авансы {prop['totals']['advances_total']:,.2f} ₽ · налог за год "
+      f"{prop['totals']['year']:,.2f} ₽ · к доплате {prop['totals']['to_pay_year']:,.2f} ₽ "
+      f"({prop['totals']['objects']} объекта, движимое отсечено)")
+print(f"76.ВА: вычет с выданного аванса {issued_vat['issued_deducted']:,.2f} ₽; "
+      f"без договора — требование, а не проводка")
+
 print(f"прибыль 2026-10: доходы {profit['totals']['revenue']:,.2f} ₽ · расходы "
       f"{profit['totals']['cost']:,.2f} ₽ · налог {profit['totals']['tax']:,.2f} ₽ "
       f"(8 % + 17 %); НДС с авансов: начислено "

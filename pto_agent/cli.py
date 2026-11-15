@@ -2631,7 +2631,8 @@ def cmd_tax(args) -> int:
             "profit": "profit"}.get(action) or getattr(args, "kind", "")
     if action == "xml":
         kind = getattr(args, "kind", "")
-        action = {"vat": "vat", "ndfl6": "ndfl", "ndfl": "ndfl", "rsv": "rsv"}.get(kind, "")
+        action = {"vat": "vat", "ndfl6": "ndfl", "ndfl": "ndfl", "rsv": "rsv",
+                  "profit": "profit", "property": "property"}.get(kind, "")
 
     if action == "vat" or kind == "vat":
         ledger_state = accounting.load(args.ledger)
@@ -2650,6 +2651,43 @@ def cmd_tax(args) -> int:
             print("для прибыли нужен журнал: --ledger <файл>", file=sys.stderr)
             return 2
         report = taxes.profit_return(accounting.load(args.ledger), args.period, rates=rates)
+    elif action == "property":
+        assets_path = getattr(args, "assets", None) or "data/demo/property/assets_2026.json"
+        payload = json.loads(Path(assets_path).read_text(encoding="utf-8"))
+        report = taxes.property_tax(payload, args.period, rates=rates)
+        if getattr(args, "tax_action", "") == "xml":
+            print(taxes.to_xml(report))
+            return 0
+        print(taxes.to_markdown(report))
+        for item in taxes.validate(report, rates=rates):
+            print(f"  ✗ [{item['code']}] {item.get('what')}: {item['why']}", file=sys.stderr)
+        if args.out:
+            path = Path(args.out)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.with_suffix(".md").write_text(taxes.to_markdown(report), encoding="utf-8")
+            path.with_suffix(".xml").write_text(taxes.to_xml(report), encoding="utf-8")
+            path.with_suffix(".json").write_text(json.dumps(report, ensure_ascii=False, indent=2),
+                                                 encoding="utf-8")
+            print(f"  файлы: {path.with_suffix('.md')}, {path.with_suffix('.xml')}, "
+                  f"{path.with_suffix('.json')}")
+        return 0 if report.get("ready") else 1
+    elif action == "post-property":
+        if not args.ledger:
+            print("для проводки нужен журнал: --ledger <файл>", file=sys.stderr)
+            return 2
+        assets_path = getattr(args, "assets", None) or "data/demo/property/assets_2026.json"
+        payload = json.loads(Path(assets_path).read_text(encoding="utf-8"))
+        report = taxes.property_tax(payload, args.period, rates=rates)
+        ledger_state = accounting.load(args.ledger)
+        result = taxes.post_property_tax(ledger_state, report, code=args.code,
+                                         date=args.date or None)
+        if result.get("posted"):
+            accounting.save(ledger_state, args.ledger)
+        print(f"{result.get('status')}: {args.code} за {args.period} — "
+              f"{wage.rub(result.get('amount') or 0)} на 91.02 / 68.08")
+        for item in result.get("errors") or []:
+            print(f"  ✗ [{item['code']}] {item['what']}: {item['why']}", file=sys.stderr)
+        return 0 if result.get("status") == accounting.STATUS_OK else 1
     elif action == "post-advances":
         if not args.ledger:
             print("нужен журнал: --ledger <файл>", file=sys.stderr)
@@ -2685,8 +2723,8 @@ def cmd_tax(args) -> int:
             print(f"  ✗ [{item['code']}] {item['why']}", file=sys.stderr)
         return 0 if not report.get("problems") else 1
     else:
-        print("что делать: rates · vat · ndfl · rsv · profit · advances · post-advances · "
-              "xml · check",
+        print("что делать: rates · vat · ndfl · rsv · profit · property · advances · "
+              "post-advances · post-property · xml · check",
               file=sys.stderr)
         return 2
 
@@ -3610,6 +3648,8 @@ def main(argv=None):
     taxes.add_argument("--ledger", default="out/ledger/state.json")
     taxes.add_argument("--payroll", default="out/payroll/state.json")
     taxes.add_argument("--out", default=None)
+    taxes.add_argument("--assets", default=None,
+                       help="регистр недвижимости для налога на имущество")
     tax_sub = taxes.add_subparsers(dest="tax_action")
     tax_rates = tax_sub.add_parser("rates", help="ставки на дату и реквизиты")
     tax_rates.set_defaults(func=cmd_tax)
@@ -3618,12 +3658,19 @@ def main(argv=None):
                             ("rsv", "РСВ и травматизм"),
                             ("profit", "налог на прибыль из журнала"),
                             ("advances", "НДС с авансов отдельными строками"),
-                            ("post-advances", "провести НДС с авансов на 76.АВ")):
+                            ("post-advances", "провести НДС с авансов на 76.АВ"),
+                            ("property", "налог на имущество из регистра недвижимости")):
         node = tax_sub.add_parser(name, help=help_text)
         node.add_argument("period")
         node.set_defaults(func=cmd_tax)
+    tax_post_prop = tax_sub.add_parser("post-property",
+                                       help="провести аванс по имуществу: Дт 91.02 Кт 68.08")
+    tax_post_prop.add_argument("period", help="год: 2026")
+    tax_post_prop.add_argument("--code", default="Q1", choices=["Q1", "H1", "9M", "YEAR"])
+    tax_post_prop.add_argument("--date", default=None)
+    tax_post_prop.set_defaults(func=cmd_tax)
     tax_xml = tax_sub.add_parser("xml", help="XML отчёта")
-    tax_xml.add_argument("kind", choices=["vat", "ndfl6", "rsv", "profit"])
+    tax_xml.add_argument("kind", choices=["vat", "ndfl6", "rsv", "profit", "property"])
     tax_xml.add_argument("period")
     tax_xml.set_defaults(func=cmd_tax)
     taxes.set_defaults(func=cmd_tax)
