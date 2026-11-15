@@ -1,562 +1,590 @@
 {
-  "schema": "pto-agent/chart@1",
-  "title": "Рабочий план счетов организации (на основе 94н)",
-  "source": {
-    "document": "Приказ Минфина РФ от 31.10.2000 № 94н «Об утверждении Плана счетов бухгалтерского учёта финансово-хозяйственной деятельности организаций и Инструкции по его применению»",
-    "editions": [
-      "приказ Минфина РФ от 07.05.2003 № 38н",
-      "приказ Минфина РФ от 18.09.2006 № 115н",
-      "приказ Минфина РФ от 08.11.2010 № 142н"
-    ],
-    "checked": "2026-11-12",
-    "note": "В файле — не весь 94н, а рабочий план стройки: только счета, которые реально двигаются на объекте. Субсчета, которых в 94н нет (например 20.01), помечены subaccount_source = «организация»: это наше решение, а не норма, и менять его можно только через учётную политику.",
-    "fields": {
-      "type": "А — активный, П — пассивный, АП — активно-пассивный",
-      "analytics": "обязательная аналитика проводки; пусто — аналитика не требуется",
-      "manual_allowed": "false — счёт закрывается только документом, ручная проводка отклоняется",
-      "service": "true — служебный счёт, в 94н его нет (нужен, чтобы двойная запись сходилась)"
-    }
+ "schema": "pto-agent/chart@1",
+ "title": "Рабочий план счетов организации (на основе 94н)",
+ "source": {
+  "document": "Приказ Минфина РФ от 31.10.2000 № 94н «Об утверждении Плана счетов бухгалтерского учёта финансово-хозяйственной деятельности организаций и Инструкции по его применению»",
+  "editions": [
+   "приказ Минфина РФ от 07.05.2003 № 38н",
+   "приказ Минфина РФ от 18.09.2006 № 115н",
+   "приказ Минфина РФ от 08.11.2010 № 142н"
+  ],
+  "checked": "2026-11-12",
+  "note": "В файле — не весь 94н, а рабочий план стройки: только счета, которые реально двигаются на объекте. Субсчета, которых в 94н нет (например 20.01), помечены subaccount_source = «организация»: это наше решение, а не норма, и менять его можно только через учётную политику.",
+  "fields": {
+   "type": "А — активный, П — пассивный, АП — активно-пассивный",
+   "analytics": "обязательная аналитика проводки; пусто — аналитика не требуется",
+   "manual_allowed": "false — счёт закрывается только документом, ручная проводка отклоняется",
+   "service": "true — служебный счёт, в 94н его нет (нужен, чтобы двойная запись сходилась)"
+  }
+ },
+ "accounts": [
+  {
+   "code": "000",
+   "title": "Входящее сальдо (служебный счёт переноса)",
+   "type": "АП",
+   "parent": null,
+   "off_balance": false,
+   "service": true,
+   "analytics": [],
+   "manual_allowed": false,
+   "subaccount_source": "организация",
+   "note": "Счёт есть только потому, что двойная запись должна сойтись на старте. В 94н его нет: остатки на начало в настоящем учёте приходят из баланса прошлого периода (84, 80, 83). Пока баланса нет, сальдо склада приходит сюда, и это видно в ОСВ отдельной строкой — а не растворяется в материалах."
   },
-  "accounts": [
-    {
-      "code": "000",
-      "title": "Входящее сальдо (служебный счёт переноса)",
-      "type": "АП",
-      "parent": null,
-      "off_balance": false,
-      "service": true,
-      "analytics": [],
-      "manual_allowed": false,
-      "subaccount_source": "организация",
-      "note": "Счёт есть только потому, что двойная запись должна сойтись на старте. В 94н его нет: остатки на начало в настоящем учёте приходят из баланса прошлого периода (84, 80, 83). Пока баланса нет, сальдо склада приходит сюда, и это видно в ОСВ отдельной строкой — а не растворяется в материалах."
-    },
-    {
-      "code": "003",
-      "title": "Материалы, принятые в переработку",
-      "type": "А",
-      "parent": null,
-      "off_balance": true,
-      "service": false,
-      "analytics": [
-        "контрагент",
-        "номенклатура"
-      ],
-      "manual_allowed": false,
-      "subaccount_source": "94н",
-      "note": "Забалансовый. Давальческие материалы заказчика: они не наши, в затраты не списываются, из 10 не выходят. Учёт количественный и стоимостной по данным передающей стороны."
-    },
-    {
-      "code": "10",
-      "title": "Материалы",
-      "type": "А",
-      "parent": null,
-      "off_balance": false,
-      "service": false,
-      "analytics": [],
-      "manual_allowed": true,
-      "subaccount_source": "94н",
-      "note": "Сводный счёт; проводки идут по субсчетам."
-    },
-    {
-      "code": "10.01",
-      "title": "Сырьё и материалы",
-      "type": "А",
-      "parent": "10",
-      "off_balance": false,
-      "service": false,
-      "analytics": [
-        "склад",
-        "номенклатура"
-      ],
-      "manual_allowed": false,
-      "subaccount_source": "94н",
-      "note": "Основной счёт складского контура: приход, списание в производство, перемещение."
-    },
-    {
-      "code": "10.08",
-      "title": "Строительные материалы",
-      "type": "А",
-      "parent": "10",
-      "off_balance": false,
-      "service": false,
-      "analytics": [
-        "склад",
-        "номенклатура"
-      ],
-      "manual_allowed": false,
-      "subaccount_source": "94н",
-      "note": "В рабочем плане оставлен, но складской контур пока пишет всё на 10.01: разделять по группам номенклатуры имеет смысл, когда появится учётная политика по группам, а не «на глазок»."
-    },
-    {
-      "code": "10.09",
-      "title": "Инвентарь и хозяйственные принадлежности",
-      "type": "А",
-      "parent": "10",
-      "off_balance": false,
-      "service": false,
-      "analytics": [
-        "склад",
-        "номенклатура"
-      ],
-      "manual_allowed": false,
-      "subaccount_source": "94н",
-      "note": "То же: счёт есть, автоматических проводок на него пока нет — номенклатура в справочнике не размечена по группам 10.08/10.09."
-    },
-    {
-      "code": "19",
-      "title": "НДС по приобретённым ценностям",
-      "type": "А",
-      "parent": null,
-      "off_balance": false,
-      "service": false,
-      "analytics": [],
-      "manual_allowed": false,
-      "subaccount_source": "94н",
-      "note": "Сводный счёт."
-    },
-    {
-      "code": "19.03",
-      "title": "НДС по приобретённым производственным запасам",
-      "type": "А",
-      "parent": "19",
-      "off_balance": false,
-      "service": false,
-      "analytics": [
-        "контрагент"
-      ],
-      "manual_allowed": false,
-      "subaccount_source": "94н",
-      "note": "НДС из накладной поставщика. Возникает только если в документе явно указана ставка: ставку «по умолчанию» учёт не подставляет."
-    },
-    {
-      "code": "20",
-      "title": "Основное производство",
-      "type": "А",
-      "parent": null,
-      "off_balance": false,
-      "service": false,
-      "analytics": [],
-      "manual_allowed": false,
-      "subaccount_source": "94н",
-      "note": "Сводный счёт; субсчета задаёт организация."
-    },
-    {
-      "code": "20.01",
-      "title": "Основное производство по объектам",
-      "type": "А",
-      "parent": "20",
-      "off_balance": false,
-      "service": false,
-      "analytics": [
-        "объект"
-      ],
-      "manual_allowed": false,
-      "subaccount_source": "организация",
-      "note": "94н субсчета по счёту 20 не устанавливает — это наше решение. Сюда попадает материал, списанный требованием М-11 с указанием объекта."
-    },
-    {
-      "code": "25",
-      "title": "Общепроизводственные расходы",
-      "type": "А",
-      "parent": null,
-      "off_balance": false,
-      "service": false,
-      "analytics": [
-        "объект",
-        "статья затрат"
-      ],
-      "manual_allowed": true,
-      "subaccount_source": "94н",
-      "note": "Общепроизводственные расходы. Аналитика обязательна по двум осям: объект (куда отнести) и статья затрат (что это было: механизмы, аренда и т. д.). Без статьи затрат расход нельзя разложить по БДР, и он уходит в «не разнесено»."
-    },
-    {
-      "code": "26",
-      "title": "Общехозяйственные расходы",
-      "type": "А",
-      "parent": null,
-      "off_balance": false,
-      "service": false,
-      "analytics": [
-        "статья затрат"
-      ],
-      "manual_allowed": true,
-      "subaccount_source": "94н",
-      "note": "Общехозяйственные расходы. Аналитика по статье затрат обязательна: 26 — счёт-«сборка», и без статьи он не разносится ни по БДР, ни по объектам."
-    },
-    {
-      "code": "50",
-      "title": "Касса",
-      "type": "А",
-      "parent": null,
-      "off_balance": false,
-      "service": false,
-      "analytics": [],
-      "manual_allowed": true,
-      "subaccount_source": "94н",
-      "note": "Задел под казначейство (этап 4)."
-    },
-    {
-      "code": "51",
-      "title": "Расчётные счета",
-      "type": "А",
-      "parent": null,
-      "off_balance": false,
-      "service": false,
-      "analytics": [],
-      "manual_allowed": true,
-      "subaccount_source": "94н",
-      "note": "Задел под казначейство."
-    },
-    {
-      "code": "55",
-      "title": "Специальные счета в банках",
-      "type": "А",
-      "parent": null,
-      "off_balance": false,
-      "service": false,
-      "analytics": [
-        "договор"
-      ],
-      "manual_allowed": true,
-      "subaccount_source": "94н",
-      "note": "Обеспечительный платёж по контракту; задел."
-    },
-    {
-      "code": "60",
-      "title": "Расчёты с поставщиками и подрядчиками",
-      "type": "АП",
-      "parent": null,
-      "off_balance": false,
-      "service": false,
-      "analytics": [],
-      "manual_allowed": false,
-      "subaccount_source": "94н",
-      "note": "Сводный счёт."
-    },
-    {
-      "code": "60.01",
-      "title": "Расчёты с поставщиками и подрядчиками",
-      "type": "АП",
-      "parent": "60",
-      "off_balance": false,
-      "service": false,
-      "analytics": [
-        "контрагент"
-      ],
-      "manual_allowed": false,
-      "subaccount_source": "94н",
-      "note": "Кредит — долг за пришедший материал. Контрагент обязателен: «приход без поставщика» — это не проводка, а дыра в первичке."
-    },
-    {
-      "code": "60.02",
-      "title": "Расчёты по авансам выданным",
-      "type": "А",
-      "parent": "60",
-      "off_balance": false,
-      "service": false,
-      "analytics": [
-        "контрагент"
-      ],
-      "manual_allowed": false,
-      "subaccount_source": "94н",
-      "note": "Задел под казначейство: аванс поставщику."
-    },
-    {
-      "code": "62",
-      "title": "Расчёты с покупателями и заказчиками",
-      "type": "АП",
-      "parent": null,
-      "off_balance": false,
-      "service": false,
-      "analytics": [],
-      "manual_allowed": false,
-      "subaccount_source": "94н",
-      "note": "Сводный счёт."
-    },
-    {
-      "code": "62.01",
-      "title": "Расчёты с покупателями и заказчиками",
-      "type": "А",
-      "parent": "62",
-      "off_balance": false,
-      "service": false,
-      "analytics": [
-        "контрагент",
-        "договор"
-      ],
-      "manual_allowed": false,
-      "subaccount_source": "94н",
-      "note": "Выручка по подписанной КС-2. Договор обязателен: без него непонятно, по какому объекту долг."
-    },
-    {
-      "code": "62.02",
-      "title": "Расчёты по авансам полученным",
-      "type": "П",
-      "parent": "62",
-      "off_balance": false,
-      "service": false,
-      "analytics": [
-        "контрагент",
-        "договор"
-      ],
-      "manual_allowed": false,
-      "subaccount_source": "94н",
-      "note": "Аванс заказчика: деньги пришли раньше, чем признана выручка. Закрывается зачётом Дт 62.02 Кт 62.01 в момент подписания акта, а не «сам собой»."
-    },
-    {
-      "code": "68",
-      "title": "Расчёты по налогам и сборам",
-      "type": "АП",
-      "parent": null,
-      "off_balance": false,
-      "service": false,
-      "analytics": [],
-      "manual_allowed": false,
-      "subaccount_source": "94н",
-      "note": "Сводный счёт."
-    },
-    {
-      "code": "68.01",
-      "title": "НДФЛ",
-      "type": "АП",
-      "parent": "68",
-      "off_balance": false,
-      "service": false,
-      "analytics": [],
-      "manual_allowed": false,
-      "subaccount_source": "94н",
-      "note": "НДФЛ с зарплаты: удерживается из начисленного, перечисляется по сроку 28-го числа."
-    },
-    {
-      "code": "68.02",
-      "title": "НДС по реализации",
-      "type": "АП",
-      "parent": "68",
-      "off_balance": false,
-      "service": false,
-      "analytics": [],
-      "manual_allowed": false,
-      "subaccount_source": "94н",
-      "note": "Начисление НДС с подписанной КС-2. Зачёт с 19 в этом контуре не автоматизирован: зачёт — отдельная операция налогового периода."
-    },
-    {
-      "code": "69",
-      "title": "Расчёты по социальному страхованию и обеспечению",
-      "type": "АП",
-      "parent": null,
-      "off_balance": false,
-      "service": false,
-      "analytics": [],
-      "manual_allowed": true,
-      "subaccount_source": "94н",
-      "note": "Единый тариф с 2023 года: ПФР, ОМС и ВНиМ платятся одной суммой. Субсчета 69.01/69.11 — наше решение для разделения единого тарифа и травматизма."
-    },
-    {
-      "code": "70",
-      "title": "Расчёты с персоналом по оплате труда",
-      "type": "АП",
-      "parent": null,
-      "off_balance": false,
-      "service": false,
-      "analytics": [
-        "сотрудник"
-      ],
-      "manual_allowed": true,
-      "subaccount_source": "94н",
-      "note": "Задолженность перед работником: начислено минус удержанный НДФЛ минус выплачено. Аналитика по сотруднику обязательна — иначе свод «к выплате» не с кем сверить."
-    },
-    {
-      "code": "71",
-      "title": "Расчёты с подотчётными лицами",
-      "type": "АП",
-      "parent": null,
-      "off_balance": false,
-      "service": false,
-      "analytics": [
-        "контрагент"
-      ],
-      "manual_allowed": true,
-      "subaccount_source": "94н",
-      "note": "Прораб с деньгами на руки — частый источник «где чеки». Задел."
-    },
-    {
-      "code": "76",
-      "title": "Расчёты с разными дебиторами и кредиторами",
-      "type": "АП",
-      "parent": null,
-      "off_balance": false,
-      "service": false,
-      "analytics": [
-        "контрагент"
-      ],
-      "manual_allowed": true,
-      "subaccount_source": "94н",
-      "note": "Претензии, в т.ч. по недостачам."
-    },
-    {
-      "code": "90",
-      "title": "Продажи",
-      "type": "АП",
-      "parent": null,
-      "off_balance": false,
-      "service": false,
-      "analytics": [],
-      "manual_allowed": false,
-      "subaccount_source": "94н",
-      "note": "Сводный счёт."
-    },
-    {
-      "code": "90.01",
-      "title": "Выручка",
-      "type": "П",
-      "parent": "90",
-      "off_balance": false,
-      "service": false,
-      "analytics": [
-        "объект",
-        "договор"
-      ],
-      "manual_allowed": false,
-      "subaccount_source": "94н",
-      "note": "Выручка признаётся по подписанной заказчиком КС-2, без НДС."
-    },
-    {
-      "code": "90.02",
-      "title": "Себестоимость продаж",
-      "type": "А",
-      "parent": "90",
-      "off_balance": false,
-      "service": false,
-      "analytics": [
-        "объект"
-      ],
-      "manual_allowed": false,
-      "subaccount_source": "94н",
-      "note": "Закрытие 20.01 в 90.02 — операция закрытия месяца; в этом круге не автоматизирована."
-    },
-    {
-      "code": "90.03",
-      "title": "Налог на добавленную стоимость",
-      "type": "А",
-      "parent": "90",
-      "off_balance": false,
-      "service": false,
-      "analytics": [],
-      "manual_allowed": false,
-      "subaccount_source": "94н",
-      "note": "НДС с реализации."
-    },
-    {
-      "code": "91",
-      "title": "Прочие доходы и расходы",
-      "type": "АП",
-      "parent": null,
-      "off_balance": false,
-      "service": false,
-      "analytics": [],
-      "manual_allowed": false,
-      "subaccount_source": "94н",
-      "note": "Сводный счёт."
-    },
-    {
-      "code": "91.01",
-      "title": "Прочие доходы",
-      "type": "П",
-      "parent": "91",
-      "off_balance": false,
-      "service": false,
-      "analytics": [],
-      "manual_allowed": false,
-      "subaccount_source": "94н",
-      "note": "Излишек по инвентаризации (ИНВ-3) — доход по рыночной цене, если цена описи указана."
-    },
-    {
-      "code": "94",
-      "title": "Недостачи и потери от порчи ценностей",
-      "type": "А",
-      "parent": null,
-      "off_balance": false,
-      "service": false,
-      "analytics": [
-        "склад"
-      ],
-      "manual_allowed": false,
-      "subaccount_source": "94н",
-      "note": "Списание по акту и недостача по ИНВ-3 идут сюда, а не сразу в затраты: решение, кто возмещает, принимает человек, а не программа."
-    },
-    {
-      "code": "99",
-      "title": "Прибыли и убытки",
-      "type": "АП",
-      "parent": null,
-      "off_balance": false,
-      "service": false,
-      "analytics": [],
-      "manual_allowed": true,
-      "subaccount_source": "94н",
-      "note": "Задел под закрытие года."
-    },
-    {
-      "code": "90.09",
-      "title": "Прибыль/убыток от продаж",
-      "type": "АП",
-      "parent": "90",
-      "off_balance": false,
-      "service": false,
-      "analytics": [],
-      "manual_allowed": false,
-      "subaccount_source": "94н",
-      "note": "Закрывается только операцией закрытия месяца: сюда собираются 90.01, 90.02, 90.03, отсюда — на 99. Ручная проводка запрещена: иначе прибыль можно «поправить»."
-    },
-    {
-      "code": "91.09",
-      "title": "Сальдо прочих доходов и расходов",
-      "type": "АП",
-      "parent": "91",
-      "off_balance": false,
-      "service": false,
-      "analytics": [],
-      "manual_allowed": false,
-      "subaccount_source": "94н",
-      "note": "То же для прочих доходов и расходов: излишки по ИНВ-3 попадают в 91.01, закрываются здесь."
-    },
-    {
-      "code": "84",
-      "title": "Нераспределённая прибыль (непокрытый убыток)",
-      "type": "АП",
-      "parent": null,
-      "off_balance": false,
-      "service": false,
-      "analytics": [],
-      "manual_allowed": true,
-      "subaccount_source": "94н",
-      "note": "В рабочем плане есть, но реформация баланса (99 → 84) — операция года, а не месяца: в этом круге не автоматизирована."
-    },
-    {
-      "code": "91.02",
-      "title": "Прочие расходы",
-      "type": "А",
-      "parent": "91",
-      "off_balance": false,
-      "service": false,
-      "analytics": [],
-      "manual_allowed": false,
-      "subaccount_source": "94н",
-      "note": "Недостачи по ИНВ-3 после решения человека (когда виновный не найден) идут сюда: 94 → 91.02. Автоматически не закрывается — это решение, а не арифметика."
-    },
-    {
-      "code": "69.01",
-      "title": "Единый тариф (30 % / 15,1 %)",
-      "type": "АП",
-      "analytics": [],
-      "note": "Взносы по единому тарифу с выплат работникам: 30 % до предельной базы, 15,1 % сверх. Одним субсчётом, потому что тариф с 2023 года единый."
-    },
-    {
-      "code": "69.11",
-      "title": "Взносы на травматизм (НС и ПЗ)",
-      "type": "АП",
-      "analytics": [],
-      "note": "Отдельная платёжка в СФР, предельной базы нет. Тариф по классу профессионального риска — файл data/reference/payroll_rules.json."
-    }
-  ]
+  {
+   "code": "003",
+   "title": "Материалы, принятые в переработку",
+   "type": "А",
+   "parent": null,
+   "off_balance": true,
+   "service": false,
+   "analytics": [
+    "контрагент",
+    "номенклатура"
+   ],
+   "manual_allowed": false,
+   "subaccount_source": "94н",
+   "note": "Забалансовый. Давальческие материалы заказчика: они не наши, в затраты не списываются, из 10 не выходят. Учёт количественный и стоимостной по данным передающей стороны."
+  },
+  {
+   "code": "10",
+   "title": "Материалы",
+   "type": "А",
+   "parent": null,
+   "off_balance": false,
+   "service": false,
+   "analytics": [],
+   "manual_allowed": true,
+   "subaccount_source": "94н",
+   "note": "Сводный счёт; проводки идут по субсчетам."
+  },
+  {
+   "code": "10.01",
+   "title": "Сырьё и материалы",
+   "type": "А",
+   "parent": "10",
+   "off_balance": false,
+   "service": false,
+   "analytics": [
+    "склад",
+    "номенклатура"
+   ],
+   "manual_allowed": false,
+   "subaccount_source": "94н",
+   "note": "Основной счёт складского контура: приход, списание в производство, перемещение."
+  },
+  {
+   "code": "10.08",
+   "title": "Строительные материалы",
+   "type": "А",
+   "parent": "10",
+   "off_balance": false,
+   "service": false,
+   "analytics": [
+    "склад",
+    "номенклатура"
+   ],
+   "manual_allowed": false,
+   "subaccount_source": "94н",
+   "note": "В рабочем плане оставлен, но складской контур пока пишет всё на 10.01: разделять по группам номенклатуры имеет смысл, когда появится учётная политика по группам, а не «на глазок»."
+  },
+  {
+   "code": "10.09",
+   "title": "Инвентарь и хозяйственные принадлежности",
+   "type": "А",
+   "parent": "10",
+   "off_balance": false,
+   "service": false,
+   "analytics": [
+    "склад",
+    "номенклатура"
+   ],
+   "manual_allowed": false,
+   "subaccount_source": "94н",
+   "note": "То же: счёт есть, автоматических проводок на него пока нет — номенклатура в справочнике не размечена по группам 10.08/10.09."
+  },
+  {
+   "code": "19",
+   "title": "НДС по приобретённым ценностям",
+   "type": "А",
+   "parent": null,
+   "off_balance": false,
+   "service": false,
+   "analytics": [],
+   "manual_allowed": false,
+   "subaccount_source": "94н",
+   "note": "Сводный счёт."
+  },
+  {
+   "code": "19.03",
+   "title": "НДС по приобретённым производственным запасам",
+   "type": "А",
+   "parent": "19",
+   "off_balance": false,
+   "service": false,
+   "analytics": [
+    "контрагент"
+   ],
+   "manual_allowed": false,
+   "subaccount_source": "94н",
+   "note": "НДС из накладной поставщика. Возникает только если в документе явно указана ставка: ставку «по умолчанию» учёт не подставляет."
+  },
+  {
+   "code": "20",
+   "title": "Основное производство",
+   "type": "А",
+   "parent": null,
+   "off_balance": false,
+   "service": false,
+   "analytics": [],
+   "manual_allowed": false,
+   "subaccount_source": "94н",
+   "note": "Сводный счёт; субсчета задаёт организация."
+  },
+  {
+   "code": "20.01",
+   "title": "Основное производство по объектам",
+   "type": "А",
+   "parent": "20",
+   "off_balance": false,
+   "service": false,
+   "analytics": [
+    "объект"
+   ],
+   "manual_allowed": false,
+   "subaccount_source": "организация",
+   "note": "94н субсчета по счёту 20 не устанавливает — это наше решение. Сюда попадает материал, списанный требованием М-11 с указанием объекта."
+  },
+  {
+   "code": "25",
+   "title": "Общепроизводственные расходы",
+   "type": "А",
+   "parent": null,
+   "off_balance": false,
+   "service": false,
+   "analytics": [
+    "объект",
+    "статья затрат"
+   ],
+   "manual_allowed": true,
+   "subaccount_source": "94н",
+   "note": "Общепроизводственные расходы. Аналитика обязательна по двум осям: объект (куда отнести) и статья затрат (что это было: механизмы, аренда и т. д.). Без статьи затрат расход нельзя разложить по БДР, и он уходит в «не разнесено»."
+  },
+  {
+   "code": "26",
+   "title": "Общехозяйственные расходы",
+   "type": "А",
+   "parent": null,
+   "off_balance": false,
+   "service": false,
+   "analytics": [
+    "статья затрат"
+   ],
+   "manual_allowed": true,
+   "subaccount_source": "94н",
+   "note": "Общехозяйственные расходы. Аналитика по статье затрат обязательна: 26 — счёт-«сборка», и без статьи он не разносится ни по БДР, ни по объектам."
+  },
+  {
+   "code": "50",
+   "title": "Касса",
+   "type": "А",
+   "parent": null,
+   "off_balance": false,
+   "service": false,
+   "analytics": [],
+   "manual_allowed": true,
+   "subaccount_source": "94н",
+   "note": "Задел под казначейство (этап 4)."
+  },
+  {
+   "code": "51",
+   "title": "Расчётные счета",
+   "type": "А",
+   "parent": null,
+   "off_balance": false,
+   "service": false,
+   "analytics": [],
+   "manual_allowed": true,
+   "subaccount_source": "94н",
+   "note": "Задел под казначейство."
+  },
+  {
+   "code": "55",
+   "title": "Специальные счета в банках",
+   "type": "А",
+   "parent": null,
+   "off_balance": false,
+   "service": false,
+   "analytics": [
+    "договор"
+   ],
+   "manual_allowed": true,
+   "subaccount_source": "94н",
+   "note": "Обеспечительный платёж по контракту; задел."
+  },
+  {
+   "code": "60",
+   "title": "Расчёты с поставщиками и подрядчиками",
+   "type": "АП",
+   "parent": null,
+   "off_balance": false,
+   "service": false,
+   "analytics": [],
+   "manual_allowed": false,
+   "subaccount_source": "94н",
+   "note": "Сводный счёт."
+  },
+  {
+   "code": "60.01",
+   "title": "Расчёты с поставщиками и подрядчиками",
+   "type": "АП",
+   "parent": "60",
+   "off_balance": false,
+   "service": false,
+   "analytics": [
+    "контрагент"
+   ],
+   "manual_allowed": false,
+   "subaccount_source": "94н",
+   "note": "Кредит — долг за пришедший материал. Контрагент обязателен: «приход без поставщика» — это не проводка, а дыра в первичке."
+  },
+  {
+   "code": "60.02",
+   "title": "Расчёты по авансам выданным",
+   "type": "А",
+   "parent": "60",
+   "off_balance": false,
+   "service": false,
+   "analytics": [
+    "контрагент"
+   ],
+   "manual_allowed": false,
+   "subaccount_source": "94н",
+   "note": "Задел под казначейство: аванс поставщику."
+  },
+  {
+   "code": "62",
+   "title": "Расчёты с покупателями и заказчиками",
+   "type": "АП",
+   "parent": null,
+   "off_balance": false,
+   "service": false,
+   "analytics": [],
+   "manual_allowed": false,
+   "subaccount_source": "94н",
+   "note": "Сводный счёт."
+  },
+  {
+   "code": "62.01",
+   "title": "Расчёты с покупателями и заказчиками",
+   "type": "А",
+   "parent": "62",
+   "off_balance": false,
+   "service": false,
+   "analytics": [
+    "контрагент",
+    "договор"
+   ],
+   "manual_allowed": false,
+   "subaccount_source": "94н",
+   "note": "Выручка по подписанной КС-2. Договор обязателен: без него непонятно, по какому объекту долг."
+  },
+  {
+   "code": "62.02",
+   "title": "Расчёты по авансам полученным",
+   "type": "П",
+   "parent": "62",
+   "off_balance": false,
+   "service": false,
+   "analytics": [
+    "контрагент",
+    "договор"
+   ],
+   "manual_allowed": false,
+   "subaccount_source": "94н",
+   "note": "Аванс заказчика: деньги пришли раньше, чем признана выручка. Закрывается зачётом Дт 62.02 Кт 62.01 в момент подписания акта, а не «сам собой»."
+  },
+  {
+   "code": "68",
+   "title": "Расчёты по налогам и сборам",
+   "type": "АП",
+   "parent": null,
+   "off_balance": false,
+   "service": false,
+   "analytics": [],
+   "manual_allowed": false,
+   "subaccount_source": "94н",
+   "note": "Сводный счёт."
+  },
+  {
+   "code": "68.01",
+   "title": "НДФЛ",
+   "type": "АП",
+   "parent": "68",
+   "off_balance": false,
+   "service": false,
+   "analytics": [],
+   "manual_allowed": false,
+   "subaccount_source": "94н",
+   "note": "НДФЛ с зарплаты: удерживается из начисленного, перечисляется по сроку 28-го числа."
+  },
+  {
+   "code": "68.02",
+   "title": "НДС по реализации",
+   "type": "АП",
+   "parent": "68",
+   "off_balance": false,
+   "service": false,
+   "analytics": [],
+   "manual_allowed": false,
+   "subaccount_source": "94н",
+   "note": "Начисление НДС с подписанной КС-2. Зачёт с 19 в этом контуре не автоматизирован: зачёт — отдельная операция налогового периода."
+  },
+  {
+   "code": "69",
+   "title": "Расчёты по социальному страхованию и обеспечению",
+   "type": "АП",
+   "parent": null,
+   "off_balance": false,
+   "service": false,
+   "analytics": [],
+   "manual_allowed": true,
+   "subaccount_source": "94н",
+   "note": "Единый тариф с 2023 года: ПФР, ОМС и ВНиМ платятся одной суммой. Субсчета 69.01/69.11 — наше решение для разделения единого тарифа и травматизма."
+  },
+  {
+   "code": "70",
+   "title": "Расчёты с персоналом по оплате труда",
+   "type": "АП",
+   "parent": null,
+   "off_balance": false,
+   "service": false,
+   "analytics": [
+    "сотрудник"
+   ],
+   "manual_allowed": true,
+   "subaccount_source": "94н",
+   "note": "Задолженность перед работником: начислено минус удержанный НДФЛ минус выплачено. Аналитика по сотруднику обязательна — иначе свод «к выплате» не с кем сверить."
+  },
+  {
+   "code": "71",
+   "title": "Расчёты с подотчётными лицами",
+   "type": "АП",
+   "parent": null,
+   "off_balance": false,
+   "service": false,
+   "analytics": [
+    "контрагент"
+   ],
+   "manual_allowed": true,
+   "subaccount_source": "94н",
+   "note": "Прораб с деньгами на руки — частый источник «где чеки». Задел."
+  },
+  {
+   "code": "76",
+   "title": "Расчёты с разными дебиторами и кредиторами",
+   "type": "АП",
+   "parent": null,
+   "off_balance": false,
+   "service": false,
+   "analytics": [
+    "контрагент"
+   ],
+   "manual_allowed": true,
+   "subaccount_source": "94н",
+   "note": "Претензии, в т.ч. по недостачам."
+  },
+  {
+   "code": "90",
+   "title": "Продажи",
+   "type": "АП",
+   "parent": null,
+   "off_balance": false,
+   "service": false,
+   "analytics": [],
+   "manual_allowed": false,
+   "subaccount_source": "94н",
+   "note": "Сводный счёт."
+  },
+  {
+   "code": "90.01",
+   "title": "Выручка",
+   "type": "П",
+   "parent": "90",
+   "off_balance": false,
+   "service": false,
+   "analytics": [
+    "объект",
+    "договор"
+   ],
+   "manual_allowed": false,
+   "subaccount_source": "94н",
+   "note": "Выручка признаётся по подписанной заказчиком КС-2, без НДС."
+  },
+  {
+   "code": "90.02",
+   "title": "Себестоимость продаж",
+   "type": "А",
+   "parent": "90",
+   "off_balance": false,
+   "service": false,
+   "analytics": [
+    "объект"
+   ],
+   "manual_allowed": false,
+   "subaccount_source": "94н",
+   "note": "Закрытие 20.01 в 90.02 — операция закрытия месяца; в этом круге не автоматизирована."
+  },
+  {
+   "code": "90.03",
+   "title": "Налог на добавленную стоимость",
+   "type": "А",
+   "parent": "90",
+   "off_balance": false,
+   "service": false,
+   "analytics": [],
+   "manual_allowed": false,
+   "subaccount_source": "94н",
+   "note": "НДС с реализации."
+  },
+  {
+   "code": "91",
+   "title": "Прочие доходы и расходы",
+   "type": "АП",
+   "parent": null,
+   "off_balance": false,
+   "service": false,
+   "analytics": [],
+   "manual_allowed": false,
+   "subaccount_source": "94н",
+   "note": "Сводный счёт."
+  },
+  {
+   "code": "91.01",
+   "title": "Прочие доходы",
+   "type": "П",
+   "parent": "91",
+   "off_balance": false,
+   "service": false,
+   "analytics": [],
+   "manual_allowed": false,
+   "subaccount_source": "94н",
+   "note": "Излишек по инвентаризации (ИНВ-3) — доход по рыночной цене, если цена описи указана."
+  },
+  {
+   "code": "94",
+   "title": "Недостачи и потери от порчи ценностей",
+   "type": "А",
+   "parent": null,
+   "off_balance": false,
+   "service": false,
+   "analytics": [
+    "склад"
+   ],
+   "manual_allowed": false,
+   "subaccount_source": "94н",
+   "note": "Списание по акту и недостача по ИНВ-3 идут сюда, а не сразу в затраты: решение, кто возмещает, принимает человек, а не программа."
+  },
+  {
+   "code": "99",
+   "title": "Прибыли и убытки",
+   "type": "АП",
+   "parent": null,
+   "off_balance": false,
+   "service": false,
+   "analytics": [],
+   "manual_allowed": true,
+   "subaccount_source": "94н",
+   "note": "Задел под закрытие года."
+  },
+  {
+   "code": "90.09",
+   "title": "Прибыль/убыток от продаж",
+   "type": "АП",
+   "parent": "90",
+   "off_balance": false,
+   "service": false,
+   "analytics": [],
+   "manual_allowed": false,
+   "subaccount_source": "94н",
+   "note": "Закрывается только операцией закрытия месяца: сюда собираются 90.01, 90.02, 90.03, отсюда — на 99. Ручная проводка запрещена: иначе прибыль можно «поправить»."
+  },
+  {
+   "code": "91.09",
+   "title": "Сальдо прочих доходов и расходов",
+   "type": "АП",
+   "parent": "91",
+   "off_balance": false,
+   "service": false,
+   "analytics": [],
+   "manual_allowed": false,
+   "subaccount_source": "94н",
+   "note": "То же для прочих доходов и расходов: излишки по ИНВ-3 попадают в 91.01, закрываются здесь."
+  },
+  {
+   "code": "84",
+   "title": "Нераспределённая прибыль (непокрытый убыток)",
+   "type": "АП",
+   "parent": null,
+   "off_balance": false,
+   "service": false,
+   "analytics": [],
+   "manual_allowed": true,
+   "subaccount_source": "94н",
+   "note": "В рабочем плане есть, но реформация баланса (99 → 84) — операция года, а не месяца: в этом круге не автоматизирована."
+  },
+  {
+   "code": "91.02",
+   "title": "Прочие расходы",
+   "type": "А",
+   "parent": "91",
+   "off_balance": false,
+   "service": false,
+   "analytics": [],
+   "manual_allowed": false,
+   "subaccount_source": "94н",
+   "note": "Недостачи по ИНВ-3 после решения человека (когда виновный не найден) идут сюда: 94 → 91.02. Автоматически не закрывается — это решение, а не арифметика."
+  },
+  {
+   "code": "69.01",
+   "title": "Единый тариф (30 % / 15,1 %)",
+   "type": "АП",
+   "analytics": [],
+   "note": "Взносы по единому тарифу с выплат работникам: 30 % до предельной базы, 15,1 % сверх. Одним субсчётом, потому что тариф с 2023 года единый."
+  },
+  {
+   "code": "69.11",
+   "title": "Взносы на травматизм (НС и ПЗ)",
+   "type": "АП",
+   "analytics": [],
+   "note": "Отдельная платёжка в СФР, предельной базы нет. Тариф по классу профессионального риска — файл data/reference/payroll_rules.json."
+  },
+  {
+   "code": "76.АВ",
+   "title": "НДС по авансам полученным",
+   "type": "А",
+   "parent": "76",
+   "off_balance": false,
+   "analytics": [
+    "контрагент",
+    "договор"
+   ],
+   "manual_allowed": false,
+   "subaccount_source": "рабочий план (94н: счёт 76, субсчёт «НДС по авансам полученным»)",
+   "note": "Начисляется в момент получения аванса: Дт 76.АВ Кт 68.02. Гасится вычетом при отгрузке: Дт 68.02 Кт 76.АВ. Без этого счёта НДС с авансов попадал в декларацию, но не в журнал — расхождение называлось VAT_ADVANCE_NOT_POSTED."
+  },
+  {
+   "code": "76.ВА",
+   "title": "НДС по авансам выданным",
+   "type": "А",
+   "parent": "76",
+   "off_balance": false,
+   "analytics": [
+    "контрагент",
+    "договор"
+   ],
+   "manual_allowed": false,
+   "subaccount_source": "рабочий план (94н: счёт 76, субсчёт «НДС по авансам выданным»)",
+   "note": "Заведён для симметрии: аванс поставщику даёт вычет Дт 76.ВА Кт 60.02, при получении материалов — восстановление. В этом круге автоматизировано только полученное направление: выданных авансов с НДС в демо нет, поэтому проводки не создаются и это записано в not_implemented."
+  }
+ ]
 }

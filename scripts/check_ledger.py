@@ -291,6 +291,10 @@ if ledger.verify(demo_state)["ok"]:
     acts_signed = json.loads(SIGNED.read_text(encoding="utf-8"))
     acts_result = ledger.post_acts(paid_state, acts_signed)
     check(acts_result["posted"] == 1, "сценарий с подписанным актом не дал выручку")
+    # краткий сценарий не проводит косвенные 25/26 — прибыль 34 106 600 − 2 626 500.
+    # полный сценарий (docs/47, check_tax.py, README) дополнительно списывает 200 000 ₽
+    # косвенных: 150 000 на 25 и 50 000 на 26, прибыль там 31 280 100 ₽. Две цифры — два
+    # набора исходных, и это прямо сказано в отчёте круга 30, а не спрятано
     paid_close = closing.close_month(paid_state, "2026-10", stock_state=stock_state,
                                      invoices=invoices, policy=acct_policy)
     check(paid_close["closed"], "месяц с подписанным актом не закрылся")
@@ -646,8 +650,9 @@ print(f"ядро учёта: записей {stats['entries']} · проверо
       f"строк сверки со складом {stats['stock_rows']} · забалансовых {stats['off_balance']} · "
       f"актов признано {stats['acts']}")
 print(f"10.01 = склад: {recon['ledger_total']:,.2f} ₽ = {recon['stock_total']:,.2f} ₽")
-print(f"закрытие месяца: шагов {stats['close_steps']} · прибыль по сценарию "
-      f"{stats['profit']:,.2f} ₽")
+print(f"закрытие месяца: шагов {stats['close_steps']} · прибыль по краткому сценарию "
+      f"{stats['profit']:,.2f} ₽ (без косвенных 200 000; полный сценарий docs/47 — "
+      f"31 280 100,00 ₽, проверяется в check_tax.py)")
 print(f"казначейство: заявок {stats['cash_requests']} · оплачено {stats['cash_paid']:,.2f} ₽ · "
       f"остаток {stats['cash_balance']:,.2f} ₽")
 if violations:

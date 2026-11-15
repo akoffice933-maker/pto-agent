@@ -178,6 +178,51 @@ def test_advance_vat_not_posted_is_named(journal_with_advance):
     assert "АвансыНДС" in tax.to_xml(report)
 
 
+def test_advance_vat_postings_close_the_gap(journal_with_advance):
+    """Проводки на 76.АВ снимают VAT_ADVANCE_NOT_POSTED: декларация и журнал сходятся."""
+    state = journal_with_advance
+    before = tax.vat_return(state, "2026-10")
+    assert "VAT_ADVANCE_NOT_POSTED" in [item["code"] for item in before["problems"]]
+    result = tax.post_advance_vat(state, "2026-10")
+    assert result["posted"] == 2 and not result["errors"]
+    assert result["accrued"] == pytest.approx(2_200_000.00)
+    assert result["deducted"] == pytest.approx(1_100_000.00)
+    after = tax.vat_return(state, "2026-10")
+    assert "VAT_ADVANCE_NOT_POSTED" not in [item["code"] for item in after["problems"]]
+    assert after["advances"]["in_ledger"] == {"accrued": 2_200_000.0, "deducted": 1_100_000.0,
+                                              "account": "76.АВ"}
+    # на 76.АВ остаётся незакрытый аванс: 2 200 000 − 1 100 000
+    balance = sum(ledger.balance_as_of(state, "76.АВ", "2026-10-31").values(), Decimal("0"))
+    assert balance == Decimal("1100000.00")
+    assert ledger.verify(state)["ok"]
+
+
+def test_advance_vat_postings_are_idempotent(journal_with_advance):
+    state = journal_with_advance
+    first = tax.post_advance_vat(state, "2026-10")
+    assert first["duplicates"] == 2 and first["posted"] == 0
+    assert ledger.verify(state)["ok"]
+
+
+def test_advance_vat_warns_about_missing_invoice(journal_with_advance):
+    report = tax.vat_return(journal_with_advance, "2026-10")
+    assert any("счёт-фактура" in text for text in report["warnings"])
+
+
+def test_advance_invoice_draft_has_no_number(journal_with_advance):
+    from pto_agent import forms
+
+    form = forms.build_advance_invoice("2026-10", ledger_state=journal_with_advance)
+    assert form["code"] == "СФ-аванс"
+    assert len(form["rows"]) == 1
+    assert form["rows"][0]["cells"][2] == "12 200 000,00"
+    assert form["rows"][0]["cells"][4] == "2 200 000,00"
+    assert form["totals"]["НДС"] == "2 200 000,00"
+    asked = " ".join(gap["what"] for gap in form["gaps"])
+    assert "номер и дата счёта-фактуры" in asked and "книга продаж" in asked
+    assert "ЧЕРНОВИК" in form["draft_notice"]
+
+
 # ─────────────────────────── больничный ───────────────────────────
 def _sick(**overrides) -> dict:
     order = {"number": "П-31/2026", "kind": "sick", "tab": "004", "cause": "своя болезнь",

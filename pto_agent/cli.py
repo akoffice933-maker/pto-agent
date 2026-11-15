@@ -1311,7 +1311,11 @@ def cmd_forms(args) -> int:
                                            ("Подрядчик", args.contractor),
                                            ("Номер акта", getattr(args, "number", ""))) if value}
     try:
-        if getattr(args, "stock", None):
+        if str(getattr(args, "form", "")).replace("-", "_") == "sf_advance":
+            ledger_state = (accounting.load(args.ledger) if getattr(args, "ledger", None)
+                            else accounting.new_state())
+            form = print_forms.build_advance_invoice(args.period, ledger_state=ledger_state)
+        elif getattr(args, "stock", None):
             state = stock_ledger.load(args.stock)
             rows = stock_ledger.m29_rows(state, period=args.period)
             form = print_forms.build_m29(
@@ -2646,6 +2650,25 @@ def cmd_tax(args) -> int:
             print("для прибыли нужен журнал: --ledger <файл>", file=sys.stderr)
             return 2
         report = taxes.profit_return(accounting.load(args.ledger), args.period, rates=rates)
+    elif action == "post-advances":
+        if not args.ledger:
+            print("нужен журнал: --ledger <файл>", file=sys.stderr)
+            return 2
+        ledger_state = accounting.load(args.ledger)
+        result = taxes.post_advance_vat(ledger_state, args.period, rates=rates)
+        if result["posted"] or result["duplicates"]:
+            accounting.save(ledger_state, args.ledger)
+        print(f"НДС с авансов за {args.period}: проведено {result['posted']}, "
+              f"дублей {result['duplicates']}, отказов {result['rejected']}")
+        print(f"  начислено на 76.АВ {wage.rub(result['accrued'])}, "
+              f"вычет {wage.rub(result['deducted'])}")
+        for item in result["no_invoice"]:
+            print(f"  счёт-фактура на аванс {item['document']}: не формируется — {item['why']}")
+        for item in result["errors"]:
+            print(f"  ✗ [{item['code']}] {item['what']}: {item['why']}", file=sys.stderr)
+        for item in result["gaps"]:
+            print(f"  нужно запросить: {item['what']} — {item['ask']}", file=sys.stderr)
+        return 0 if not result["errors"] else 1
     elif action == "advances":
         report = taxes.vat_return(accounting.load(args.ledger), args.period, rates=rates)
         adv = report.get("advances") or {}
@@ -2662,7 +2685,8 @@ def cmd_tax(args) -> int:
             print(f"  ✗ [{item['code']}] {item['why']}", file=sys.stderr)
         return 0 if not report.get("problems") else 1
     else:
-        print("что делать: rates · vat · ndfl · rsv · profit · advances · xml · check",
+        print("что делать: rates · vat · ndfl · rsv · profit · advances · post-advances · "
+              "xml · check",
               file=sys.stderr)
         return 2
 
@@ -3391,6 +3415,12 @@ def main(argv=None):
     for flag, options in common:
         fk3.add_argument(flag, **options)
     fk3.set_defaults(func=cmd_forms)
+    fsf = fms.add_parser("sf-advance",
+                         help="счёт-фактура на аванс полученный (черновик, номер не присвоен)")
+    fsf.add_argument("--ledger", default="out/ledger/state.json", help="журнал проводок")
+    for flag, options in common:
+        fsf.add_argument(flag, **options)
+    fsf.set_defaults(func=cmd_forms)
     fk6 = fms.add_parser("ks6a", help="журнал учёта выполненных работ (КС-6а)")
     fk6.add_argument("--acts", default="data/demo/acts/acts.json")
     fk6.add_argument("--works", default=None, help="справочник «код → наименование»")
@@ -3587,7 +3617,8 @@ def main(argv=None):
                             ("ndfl", "6-НДФЛ из ведомости"),
                             ("rsv", "РСВ и травматизм"),
                             ("profit", "налог на прибыль из журнала"),
-                            ("advances", "НДС с авансов отдельными строками")):
+                            ("advances", "НДС с авансов отдельными строками"),
+                            ("post-advances", "провести НДС с авансов на 76.АВ")):
         node = tax_sub.add_parser(name, help=help_text)
         node.add_argument("period")
         node.set_defaults(func=cmd_tax)

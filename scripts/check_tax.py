@@ -291,6 +291,39 @@ check(len(with_adv["advances"]["lines"]) == 2 and all(row["verify"]
                                                       for row in with_adv["advances"]["lines"]),
       "строки авансового НДС не помечены «на проверку»")
 
+# ── 12. проводки НДС с авансов на 76.АВ ────────────────────────────────────
+posted = tax.post_advance_vat(adv, "2026-10", rates=rates)
+check(posted["posted"] == 2 and not posted["errors"],
+      f"НДС с авансов не проведён: {posted['errors'][:1]}")
+check(abs(posted["accrued"] - 2_200_000) < 0.05 and abs(posted["deducted"] - 1_100_000) < 0.05,
+      f"проведено {posted['accrued']}/{posted['deducted']}, ожидали 2 200 000/1 100 000")
+after_post = tax.vat_return(adv, "2026-10", rates=rates)
+check(not any(item["code"] == "VAT_ADVANCE_NOT_POSTED" for item in after_post["problems"]),
+      "после проводок расхождение «декларация ≠ журнал» осталось")
+check(abs(after_post["totals"]["payable"] - with_adv["totals"]["payable"]) < 0.05,
+      "проводки изменили сумму к уплате: они должны только фиксировать её в журнале")
+balance_76 = sum(ledger.balance_as_of(adv, "76.АВ", "2026-10-31").values())
+check(abs(float(balance_76) - 1_100_000) < 0.05,
+      f"сальдо 76.АВ {balance_76}, ожидали 1 100 000 (незакрытый аванс)")
+check(ledger.verify(adv)["ok"], "журнал не сходится после проводок НДС с авансов")
+again_post = tax.post_advance_vat(adv, "2026-10", rates=rates)
+check(again_post["duplicates"] == 2 and again_post["posted"] == 0,
+      "повторные проводки НДС с авансов задвоились")
+
+# ── 13. счёт-фактура на аванс (черновик) ───────────────────────────────────
+from pto_agent import forms                                                      # noqa: E402
+
+invoice = forms.build_advance_invoice("2026-10", ledger_state=adv, rates=rates)
+check(invoice["code"] == "СФ-аванс", f"бланк {invoice['code']}")
+check(len(invoice["rows"]) == 1, f"строк в счёте-фактуре {len(invoice['rows'])}, ожидали 1")
+check(invoice["totals"]["НДС"] == "2 200 000,00",
+      f"НДС в бланке {invoice['totals']['НДС']}, ожидали 2 200 000,00")
+asked = " ".join(gap["what"] for gap in invoice["gaps"])
+check("номер и дата счёта-фактуры" in asked,
+      "бланк не просит номер счёта-фактуры — значит делает вид, что документ есть")
+check("книга продаж" in asked, "бланк не сказал, что книги продаж нет")
+check("ЧЕРНОВИК" in invoice["draft_notice"], "бланк без пометки «черновик»")
+
 print(f"прибыль 2026-10: доходы {profit['totals']['revenue']:,.2f} ₽ · расходы "
       f"{profit['totals']['cost']:,.2f} ₽ · налог {profit['totals']['tax']:,.2f} ₽ "
       f"(8 % + 17 %); НДС с авансов: начислено "
