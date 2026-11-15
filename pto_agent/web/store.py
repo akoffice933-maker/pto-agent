@@ -13,7 +13,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from ..audit import AuditLog
-from .. import closing, ledger, payroll, stock, treasury
+from .. import closing, invoices, ledger, payroll, stock, treasury
 
 
 class Store:
@@ -41,6 +41,10 @@ class Store:
     @property
     def payroll_path(self) -> Path:
         return self.root / "payroll" / "state.json"
+
+    @property
+    def invoices_path(self) -> Path:
+        return self.root / "invoices" / "registry.json"
 
     @property
     def audit_path(self) -> Path:
@@ -72,6 +76,13 @@ class Store:
 
     def ledger_state(self) -> dict:
         return self._read(self.ledger_path, ledger.load, ledger.new_state)
+
+    def invoices_state(self) -> dict:
+        return self._read(self.invoices_path, invoices.load, invoices.new_state)
+
+    def save_invoices(self, state: dict) -> None:
+        with self.lock:
+            invoices.save(state, self.invoices_path)
 
     def save_stock(self, state: dict) -> None:
         with self.lock:

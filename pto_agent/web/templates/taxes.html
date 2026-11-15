@@ -205,6 +205,56 @@
 </section>
 {% endif %}
 
+{% if sales_book %}
+<section class="card">
+  <h2>Книга продаж за {{ period }}</h2>
+  <p class="muted small">Строится из реестра счетов-фактур, а не из оборотов: счёт-фактура —
+    документ, по которому заявлен вычет у покупателя, поэтому книга идёт от документов.
+    Затем НДС по книге сверяется с начислением в журнале.</p>
+  {% if sales_book.rows %}
+  <table class="table compact">
+    <thead><tr><th>№ СФ</th><th>дата</th><th>вид</th><th>основание</th><th>покупатель</th>
+      <th class="num">без НДС</th><th class="num">ставка</th><th class="num">НДС</th><th class="num">с НДС</th></tr></thead>
+    <tbody>
+    {% for row in sales_book.rows %}
+      <tr>
+        <td>{{ row.number }}{% if row.late %} <span class="badge">просрочен +{{ row.late_days }} дн.</span>{% endif %}</td>
+        <td>{{ row.date }}</td><td class="small">{{ row.kind_title }}</td>
+        <td class="small">{{ row.base_number }}</td><td>{{ row.counterparty }}</td>
+        <td class="num">{{ row.net|rub }}</td><td class="num">{{ row.rate }} %</td>
+        <td class="num">{{ row.vat|rub }}</td><td class="num">{{ row.gross|rub }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">Счетов-фактур {{ sales_book.totals.invoices }} · НДС по книге
+    <b>{{ sales_book.totals.vat|rub }}</b> (отгрузка {{ sales_book.totals.shipped_vat|rub }},
+    авансы {{ sales_book.totals.advance_vat|rub }}) · начислено в журнале
+    {{ sales_book.totals.journal_vat|rub }} · разница {{ sales_book.totals.difference|rub }}</p>
+  {% else %}
+  <div class="flash flash-err">В реестре нет ни одного счёта-фактуры за {{ period }}: книга
+    продаж пустая, сдавать её нельзя.</div>
+  {% endif %}
+  {% if sales_book.problems %}
+  <div class="flash flash-err">
+    {% for item in sales_book.problems %}<div><b>{{ item.code }}</b> · {{ item.what }}: {{ item.why }}</div>{% endfor %}
+  </div>
+  {% endif %}
+  <form method="post" action="/taxes/invoices" class="row">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="period" value="{{ period }}">
+    <button type="submit">Выставить счета-фактуры за {{ period }}</button>
+    <span class="muted small">нумерует и записывает документы по актам и авансам; проводки
+      не меняет — они уже в журнале</span>
+  </form>
+  <h3>Не сделано по счетам-фактурам</h3>
+  <ul class="muted small">
+    {% for text in sales_book.not_implemented %}<li>{{ text }}</li>{% endfor %}
+    <li>книга продаж помечена «на проверку»: {{ sales_book.rules.sales_book.verify_why }}</li>
+  </ul>
+</section>
+{% endif %}
+
 <section class="card">
   <h2>Формы и сроки</h2>
   <table class="table compact">

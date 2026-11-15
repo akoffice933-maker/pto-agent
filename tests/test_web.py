@@ -521,3 +521,54 @@ def test_taxes_screen_property_reports_missing_registry_honestly(client, root):
         assert "регистр недвижимости" in page
     finally:
         path.write_text(saved, encoding="utf-8")
+
+
+def test_taxes_screen_shows_sales_book_and_its_gap(client):
+    """Книга продаж на экране: реестр пуст — это сказано, а не скрыто."""
+    login(client, "buh")
+    page = client.get("/taxes?period=2026-10").text
+    assert "Книга продаж за 2026-10" in page
+    assert "В реестре нет ни одного счёта-фактуры" in page
+    assert "Не сделано по счетам-фактурам" in page
+    assert "книга покупок" in page, "предел книги должен быть на экране"
+
+
+def test_invoices_can_be_issued_from_screen(client, root):
+    """Кнопка на экране нумерует документы и пишет реестр; повтор не задваивает."""
+    import json as _json
+
+    from pto_agent import ledger
+    state = ledger.load(root / "ledger" / "state.json")
+    ledger.post_entry(state, event="act_signed", date="2026-10-29",
+                      doc={"number": "КС-2 №77", "date": "2026-10-29", "kind": "ks2"},
+                      lines=[{"account": "62.01", "side": ledger.DEBIT, "amount": 12_200_000,
+                              "analytics": {"контрагент": "ООО «Заказчик-Инвест»",
+                                            "договор": "Д-142/2026"}},
+                             {"account": "90.03", "side": ledger.DEBIT, "amount": 2_200_000,
+                              "analytics": {"контрагент": "ООО «Заказчик-Инвест»",
+                                            "договор": "Д-142/2026"}},
+                             {"account": "68.02", "side": ledger.CREDIT, "amount": 2_200_000,
+                              "analytics": {}},
+                             {"account": "90.01", "side": ledger.CREDIT, "amount": 12_200_000,
+                              "analytics": {"объект": OBJECT, "договор": "Д-142/2026"}}],
+                      memo="акт для книги продаж", rule="act.signed",
+                      chart=ledger.load_chart(), rules=ledger.load_rules())
+    ledger.save(state, root / "ledger" / "state.json")
+
+    login(client, "buh")
+    token = csrf(client)
+    response = client.post("/taxes/invoices", data={"period": "2026-10", "csrf": token},
+                           follow_redirects=False)
+    assert response.status_code == 303
+    registry = _json.loads((root / "invoices" / "registry.json").read_text(encoding="utf-8"))
+    assert len(registry["issued"]) == 1
+    assert registry["issued"][0]["number"] == "1"
+    assert registry["issued"][0]["base_number"] == "КС-2 №77"
+
+    again = client.post("/taxes/invoices", data={"period": "2026-10", "csrf": csrf(client)},
+                        follow_redirects=False)
+    assert again.status_code == 303
+    registry = _json.loads((root / "invoices" / "registry.json").read_text(encoding="utf-8"))
+    assert len(registry["issued"]) == 1, "повторное нажатие не должно выдавать второй номер"
+    page = client.get("/taxes?period=2026-10").text
+    assert "КС-2 №77" in page

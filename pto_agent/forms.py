@@ -388,17 +388,19 @@ def envelope(kind: str, *, period: str, req: dict, rows: list[dict], totals: dic
 # ─────────────────────────── счёт-фактура на аванс ───────────────────────────
 def build_advance_invoice(period: str, *, ledger_state: dict | None = None,
                           rates: dict | None = None, object_name: str = "",
-                          organisation: dict | None = None) -> dict:
+                          organisation: dict | None = None,
+                          invoices_state: dict | None = None) -> dict:
     """Счёт-фактура на аванс полученный: черновик по авансам 62.02 за период.
 
     Что печатается: каждая платёжка-аванс отдельной строкой, НДС = сумма × ставка / (100 + ставка).
 
-    Чего нет, и это написано в самом бланке:
+    С круга 33 в контуре есть реестр счетов-фактур (`invoices.py`). Если реестр передан и
+    счёт-фактура на аванс зарегистрирована (`invoices auto <период>`), номер и дата берутся
+    **из реестра**, а не остаются пустыми. Если реестра нет — бланк честно остаётся черновиком
+    без номера, и это написано в «что запросить».
 
-    * **номера и даты счёта-фактуры не присваиваются** — реестра счетов-фактур в контуре нет,
-      поэтому номер в бланке пустой и попадает в «что запросить»;
-    * книга продаж не ведётся: этот бланк — документ для человека, а не проводка;
-    * заказчик берётся из аналитики аванса; если её нет — строка остаётся с запросом.
+    Чего по-прежнему нет: книги покупок, корректировочных счетов-фактур и выгрузки в формате
+    ФНС. Заказчик берётся из аналитики аванса; если её нет — строка остаётся с запросом.
 
     Бланк собирается только из проводок: суммы не пересчитываются «по памяти».
     """
@@ -410,14 +412,20 @@ def build_advance_invoice(period: str, *, ledger_state: dict | None = None,
     state = ledger_state or {}
     start, end = _period_bounds(period) if period else ("", "")
     rows: list[dict] = []
-    gaps: list[dict] = [
-        {"what": "номер и дата счёта-фактуры",
-         "why": "реестра счетов-фактур в контуре нет: нумерация — решение организации",
-         "ask": "присвоить номер и дату по журналу регистрации СФ"},
-        {"what": "книга продаж",
-         "why": "не ведётся: суммы для декларации считаются из 62.02 и 90.01, а не из книги",
-         "ask": "вести книгу продаж либо подтвердить, что сверка идёт по оборотам"},
-    ]
+    registry = invoices_state or {}
+    registered = [row for row in registry.get("issued") or []
+                  if str(row.get("period") or "") == period
+                  and row.get("kind") == "advance"]
+    gaps: list[dict] = []
+    if not registered:
+        gaps.append({"what": "номер и дата счёта-фактуры",
+                     "why": ("реестр счетов-фактур за период пуст: номера не присвоены"
+                             if registry else
+                             "реестр не передан: нумерация — решение организации"),
+                     "ask": f"`invoices auto {period}` — выставить и пронумеровать СФ"})
+        gaps.append({"what": "книга продаж",
+                     "why": "книги продаж за период без счетов-фактур не будет",
+                     "ask": f"`invoices sales-book {period}` — книга и сверка с журналом"})
     warnings: list[str] = []
     total = Decimal("0")
     vat_total = Decimal("0")
@@ -448,6 +456,10 @@ def build_advance_invoice(period: str, *, ledger_state: dict | None = None,
                              "ask": "указать заказчика в платёжке/договоре"})
             total += amount
             vat_total += vat
+            # номер СФ на этот аванс: ищем по документу-основанию в реестре
+            doc_number = str((entry.get("doc") or {}).get("number") or "")
+            match = next((row for row in registered
+                          if str(row.get("base_number") or "") == doc_number), None)
             rows.append(_base_row(
                 c1=str(len(rows) + 1),
                 c2=f"Аванс по договору {(line.get('analytics') or {}).get('договор') or '—'} "
@@ -457,7 +469,8 @@ def build_advance_invoice(period: str, *, ledger_state: dict | None = None,
                 c7=f"{(entry.get('doc') or {}).get('number') or '—'} "
                    f"от {entry.get('date') or '—'}",
                 state="ok", source=f"проводка {entry.get('id') or ''}",
-                note="номер СФ не присвоен: реестра СФ нет"))
+                note=(f"СФ № {match['number']} от {match['date']}" if match
+                      else "номер СФ не присвоен: счёт-фактура не зарегистрирована")))
     if not rows:
         gaps.append({"what": "авансы за период",
                      "why": "в журнале нет поступлений на 62.02",
@@ -471,8 +484,11 @@ def build_advance_invoice(period: str, *, ledger_state: dict | None = None,
                                 f"{organisation.get('inn') or ''}, КПП "
                                 f"{organisation.get('kpp') or ''}".strip(", "),
                         "missing": not bool(organisation.get("inn"))}
-    req["Счёт-фактура №"] = {"value": "", "missing": True}
-    req["Дата счёта-фактуры"] = {"value": "", "missing": True}
+    first = registered[0] if registered else None
+    req["Счёт-фактура №"] = {"value": str(first["number"]) if first else "",
+                             "missing": first is None}
+    req["Дата счёта-фактуры"] = {"value": str(first["date"]) if first else "",
+                                 "missing": first is None}
     req = {name: {"value": item["value"],
                   "missing": item.get("missing", not bool(str(item["value"]).strip()))}
            for name, item in req.items()}

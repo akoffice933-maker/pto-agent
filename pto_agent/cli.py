@@ -2812,6 +2812,76 @@ def cmd_edo(args) -> int:
     return 2
 
 
+
+def cmd_invoices(args) -> int:
+    """Счета-фактуры и книга продаж: нумерация, реестр и сверка с журналом."""
+    from . import invoices as sf
+    from . import ledger as accounting
+    from . import tax as taxes
+
+    action = getattr(args, "invoices_action", "") or "sales-book"
+    rules = sf.load_rules()
+    path = Path(args.registry) if getattr(args, "registry", None) else None
+
+    if action == "rules":
+        numbering = rules.get("numbering") or {}
+        print(f"нумерация: с {numbering.get('start')} · сброс {numbering.get('reset')} · "
+              f"префиксы {numbering.get('prefixes')}")
+        print(f"  {numbering.get('rule')} — {numbering.get('source')}")
+        issue = rules.get("issue") or {}
+        print(f"срок: {issue.get('deadline_days')} календарных дней · {issue.get('source')}")
+        print("не сделано:")
+        for text in rules.get("not_implemented") or []:
+            print(f"  · {text}")
+        return 0
+
+    if action == "next":
+        state = sf.load(path) if path and path.exists() else sf.new_state()
+        print(sf.next_number(state, args.period if len(args.period) > 7 else f"{args.period}-01",
+                             kind=args.kind, rules=rules))
+        return 0
+
+    if action == "auto":
+        if not path:
+            print("нужен реестр: --registry <файл>", file=sys.stderr)
+            return 2
+        ledger_state = accounting.load(args.ledger)
+        state = sf.load(path) if path.exists() else sf.new_state()
+        mode = "propose" if args.dry_run else "post"
+        result = sf.auto_issue(state, ledger_state, args.period, rules=rules, mode=mode)
+        if not args.dry_run:
+            sf.save(state, path)
+        print(f"{result['mode']}: выставлено {result['posted']} · уже было "
+              f"{result['duplicates']} · отклонено {result['rejected']}"
+              + (f" · предложено {result['planned']}" if result.get("planned") else ""))
+        for row in result["results"]:
+            invoice = row.get("invoice") or {}
+            if invoice:
+                print(f"  № {invoice.get('number')} от {invoice.get('date')} · "
+                      f"{invoice.get('kind')} · {invoice.get('base_number')} · "
+                      f"НДС {invoice.get('vat')}")
+            else:
+                gap = (row.get("gaps") or [{}])[0]
+                print(f"  ✗ {row.get('status')}: {gap.get('what')} — {gap.get('why')}")
+        for warning in result["warnings"]:
+            print(f"  ⚠ {warning}", file=sys.stderr)
+        return 0 if not result["rejected"] else 1
+
+    if action == "sales-book":
+        ledger_state = accounting.load(args.ledger)
+        state = sf.load(path) if path and path.exists() else sf.new_state()
+        report = sf.sales_book(state, ledger_state, args.period, rules=rules)
+        print(sf.to_markdown(report))
+        if args.out:
+            out = Path(args.out)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(sf.to_markdown(report), encoding="utf-8")
+            print(f"  файл: {out}")
+        return 0 if report["ready"] else 1
+
+    print("что делать: rules · next · auto · sales-book", file=sys.stderr)
+    return 2
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     # подкоманды CAD и MCP живут в своих пакетах: делегируем до разбора argparse,
@@ -3674,6 +3744,28 @@ def main(argv=None):
     tax_xml.add_argument("period")
     tax_xml.set_defaults(func=cmd_tax)
     taxes.set_defaults(func=cmd_tax)
+
+
+    inv = sub.add_parser("invoices", help="счета-фактуры и книга продаж")
+    inv.add_argument("--registry", default="out/invoices/registry.json")
+    inv.add_argument("--ledger", default="out/ledger/state.json")
+    inv.add_argument("--out", default=None)
+    inv_sub = inv.add_subparsers(dest="invoices_action")
+    inv_rules = inv_sub.add_parser("rules", help="правила нумерации и сроки")
+    inv_rules.set_defaults(func=cmd_invoices)
+    inv_next = inv_sub.add_parser("next", help="следующий номер на дату")
+    inv_next.add_argument("period", help="2026-10 или 2026-10-29")
+    inv_next.add_argument("--kind", default="shipped",
+                          choices=["shipped", "advance", "correction"])
+    inv_next.set_defaults(func=cmd_invoices)
+    inv_auto = inv_sub.add_parser("auto", help="выставить счета-фактуры из журнала")
+    inv_auto.add_argument("period")
+    inv_auto.add_argument("--dry-run", action="store_true", help="показать без нумерации")
+    inv_auto.set_defaults(func=cmd_invoices)
+    inv_book = inv_sub.add_parser("sales-book", help="книга продаж и сверка с журналом")
+    inv_book.add_argument("period")
+    inv_book.set_defaults(func=cmd_invoices)
+    inv.set_defaults(func=cmd_invoices)
 
     signing = sub.add_parser("sign", help="подпись документа (УКЭП через КриптоПро)")
     signing.add_argument("--provider", default=None, choices=["pycades", "stub"])
