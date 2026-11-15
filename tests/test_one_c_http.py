@@ -136,10 +136,9 @@ def client(service, **kw):
 
 
 @pytest.fixture()
-def summary():
-    if not SUMMARY.exists():
-        pytest.skip("нет out/summary.json: run --data data/demo --out out")
-    return json.loads(SUMMARY.read_text(encoding="utf-8"))
+def summary(demo_summary_json):
+    """Сводка из прогона фикстуры: без зависимости от содержимого out/."""
+    return demo_summary_json
 
 
 # ───────────────────────────── транспорт ────────────────────────────────
@@ -300,15 +299,22 @@ def test_env_placeholders_are_expanded(tmp_path, monkeypatch):
     assert cfg["password"] is None          # нет переменной — нет и пароля в файле
 
 
-def test_cli_sync_1c_end_to_end(service, tmp_path):
-    """CLI: акты из 1С → файлы, проверенная КС-2 → обратно в сервис."""
+def test_cli_sync_1c_end_to_end(service, tmp_path, summary):
+    """CLI: акты из 1С → файлы, проверенная КС-2 → обратно в сервис.
+
+    Сводка передаётся явно: раньше тест полагался на `out/summary.json` из репозитория —
+    локально его нет, и тест падал «только у нас». Артефакт теперь собирается фикстурой.
+    """
     import subprocess
     cfg = tmp_path / "one_c.json"
     cfg.write_text(json.dumps({"one_c": {"url": service, "timeout_s": 5, "retries": 1}}),
                    encoding="utf-8")
+    summary_path = tmp_path / "summary.json"
+    summary_path.write_text(json.dumps(summary, ensure_ascii=False), encoding="utf-8")
     out = tmp_path / "out"
     res = subprocess.run([sys.executable, "-m", "pto_agent", "sync-1c",
                           "--config", str(cfg), "--period", "2026-09",
+                          "--summary", str(summary_path),
                           "--push", "--out", str(out)],
                          capture_output=True, text=True, timeout=120, cwd=ROOT)
     assert res.returncode == 0, res.stdout + res.stderr

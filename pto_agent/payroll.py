@@ -293,7 +293,7 @@ def check_timesheet(timesheet: dict, staff: dict, rules: dict) -> tuple[dict, li
 
 # ─────────────────────────── начисление ───────────────────────────
 def accrue(state: dict, timesheet: dict, staff: dict, rules: dict,
-           *, period: str | None = None) -> dict:
+           *, period: str | None = None, orders: list[dict] | None = None) -> dict:
     """Начислить зарплату за месяц: оклад по дням → НДФЛ → взносы. Возвращает строки."""
     period = period or str(timesheet.get("period") or "")
     result = {"period": period, "rows": [], "totals": {}, "errors": [], "gaps": [],
@@ -315,6 +315,19 @@ def accrue(state: dict, timesheet: dict, staff: dict, rules: dict,
 
     employees = {str(row["tab"]): row for row in staff.get("employees") or []}
     before = prior_totals(state, period=period)
+    extras = None
+    if orders is not None:
+        from . import orders as orders_mod
+
+        extras = orders_mod.report(orders, staff, rules, period=period)
+        # приказ без базы расчёта — не ошибка месяца, а недосчитанная сумма: она попадает
+        # в «не посчитано», но оклад по табелю считать не мешает
+        # приказ без базы расчёта не отменяет оклад: недосчитанное уходит в отдельный
+        # список «order_errors», чтобы ошибка в одном приказе не блокировала весь месяц
+        result["order_errors"] = list(extras.get("errors") or [])
+        result["gaps"].extend(extras.get("gaps") or [])
+        result["warnings"].extend(extras.get("warnings") or [])
+        result["orders"] = extras
     rows: list[dict] = []
     for row in timesheet.get("rows") or []:
         employee = employees[str(row["tab"])]
@@ -327,7 +340,16 @@ def accrue(state: dict, timesheet: dict, staff: dict, rules: dict,
         salary = money_dec(employee.get("salary"))
         coefficient = money_dec(employee.get("coefficient") or 1)
         base_pay = (salary / Decimal(norm["days"]) * worked).quantize(EPS, rounding=ROUND_HALF_UP)
-        pay = kopeck(base_pay * coefficient)
+        salary_part = kopeck(base_pay * coefficient)
+        extra = (extras or {}).get("by_tab", {}).get(str(row["tab"]), {})
+        if extras and (extra.get("sick_employer") or 0) and worked >= Decimal(norm["days"]):
+            result["warnings"].append(
+                f"{employee.get('name')}: в табеле отработана вся норма ({worked} из "
+                f"{norm['days']} дн.), а по приказу есть больничный — дни болезни в табеле "
+                f"не отмечены, оклад и пособие могут задвоиться")
+        extra_taxable = money_dec(extra.get("taxable"))
+        extra_contrib = money_dec(extra.get("contrib_base"))
+        pay = kopeck(salary_part + extra_taxable)
         slot = before.get(str(row["tab"]), {})
         income_before = money_dec(slot.get("income"))
         withheld_before = money_dec(slot.get("withheld"))
@@ -337,7 +359,9 @@ def accrue(state: dict, timesheet: dict, staff: dict, rules: dict,
                               income_ytd_before=income_before,
                               withheld_ytd_before=withheld_before,
                               deductions_ytd_before=deductions_before)
-        contrib = contributions_for_month(rules, income_month=pay,
+        # пособие идёт в доход для НДФЛ, но не в базу по взносам (п. 1 ст. 422 НК РФ)
+        contrib_month = kopeck(salary_part + extra_contrib) if extras is not None else pay
+        contrib = contributions_for_month(rules, income_month=contrib_month,
                                           base_ytd_before=contrib_before)
         net = kopeck(pay - ndfl["tax"])
         rows.append({
@@ -345,12 +369,15 @@ def accrue(state: dict, timesheet: dict, staff: dict, rules: dict,
             "position": employee.get("position"), "object": employee.get("object"),
             "salary": num(salary), "coefficient": num(coefficient),
             "worked_days": num(worked), "norm_days": norm["days"],
-            "accrued": num(pay),
+            "accrued": num(pay), "salary_part": num(salary_part),
+            "extra": num(extra_taxable), "sick_employer": num(extra.get("sick_employer") or 0),
+            "sick_fund": num(extra.get("sick_fund") or 0),
+            "vacation": num(extra.get("vacation") or 0), "bonus": num(extra.get("bonus") or 0),
             "deduction": ndfl["deduction"], "deduction_why": ndfl.get("deduction_why") or "",
             "ndfl_base": ndfl["base_ytd"], "ndfl": num(ndfl["tax"]),
             "ndfl_ytd": num(ndfl["tax_ytd"]), "ndfl_steps": ndfl["steps"],
             "ndfl_note": ndfl.get("why") or "",
-            "contrib_base": num(pay), "contrib": num(contrib["total"]),
+            "contrib_base": num(contrib_month), "contrib": num(contrib["total"]),
             "contrib_ytd": num(contrib["total_ytd"]),
             "injury": num(contrib["injury"]), "contrib_note": contrib["note"],
             "net": num(net), "children": employee.get("children") or 0,
@@ -368,13 +395,21 @@ def accrue(state: dict, timesheet: dict, staff: dict, rules: dict,
     }
     totals["cost"] = num(money_dec(totals["accrued"]) + money_dec(totals["contrib"])
                          + money_dec(totals["injury"]))
+    for key in ("sick_employer", "sick_fund", "vacation", "bonus"):
+        totals[key] = num(sum((money_dec(row.get(key)) for row in rows), Decimal("0")))
     result["rows"] = rows
     result["totals"] = totals
     result["not_included"].extend([
-        {"what": "больничные и отпускные", "why": "нужна база за два предшествующих года; "
-         "в контуре её нет — сумма не считается, а не «примерно»"},
-        {"what": "премии и надбавки", "why": "нет приказов: считаем оклад и отработанные дни"},
+        {"what": "надбавки за вредность, ночные и сверхурочные",
+         "why": "нужен приказ и тариф: в контуре только оклад, больничный, отпуск и премия"},
+        {"what": "пособия, которые платит СФР напрямую",
+         "why": "с 4-го дня болезни и весь уход за членом семьи фонд платит работнику сам: "
+                "это не наш расход и не наша база по взносам"},
     ])
+    if extras is None:
+        result["not_included"].insert(0, {
+            "what": "больничные, отпускные и премии",
+            "why": "приказы не переданы: без документа суммы не считаются — нужен файл приказов"})
     result["mode"] = "расчёт"
     return result
 

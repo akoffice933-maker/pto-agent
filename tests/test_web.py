@@ -470,3 +470,27 @@ def test_agent_cannot_create_payroll_requests(client):
     response = client.post("/payroll/requests", data={"period": "2026-10", "csrf": csrf(client)})
     assert response.status_code == 403
     assert "AGENT_FORBIDDEN" in response.text
+
+
+def test_taxes_screen_shows_all_reports_and_its_limits(client):
+    login(client, "buh")
+    response = client.get("/taxes")
+    assert response.status_code == 200
+    for marker in ("НДС за", "НДС с авансов", "Налог на прибыль", "6-НДФЛ",
+                   "РСВ и травматизм", "Не сделано"):
+        assert marker in response.text, f"на экране налогов нет блока «{marker}»"
+    assert "сдача отчётности" in response.text or "сдавать отчётность" in response.text
+
+
+def test_taxes_screen_is_closed_for_prorab(client):
+    login(client, "prokhorov")
+    response = client.get("/taxes")
+    assert response.status_code == 403
+
+
+def test_taxes_are_not_sent_from_screen(client):
+    """Сдавать отчётность с экрана нечем: подписи и формата ФНС нет — и это написано."""
+    login(client, "buh")
+    page = client.get("/taxes").text
+    assert "УКЭП не подключена" in page
+    assert "XSD" in page

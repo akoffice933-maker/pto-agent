@@ -54,6 +54,7 @@ STATUS_CHECKED = {"проверен", "подписан", "signed", "verified"}
 #: тип колонки в XLSX: деньги и количества должны быть числами, иначе бухгалтерия
 #: не сможет их суммировать (строка «4 168 000,00» в Excel — это текст)
 COL_TYPES = {
+    "sf_advance": ["int", "text", "money", "text", "money", "money", "text"],
     "ks2": ["int", "text", "text", "text", "qty", "qty", "money", "money", "text"],
     "ks3": ["text", "text", "text", "money", "money", "money", "text"],
     "ks6a": ["text", "text", "text", "money", "qty", "qty", "money"],
@@ -128,6 +129,14 @@ def totals_ru(form: dict) -> list[tuple[str, str]]:
 
 
 FORMS = {
+    "sf_advance": {
+        "code": "СФ-аванс",
+        "title": "Счёт-фактура на аванс полученный",
+        "source": "п. 3 ст. 168 НК РФ; Правила заполнения СФ (постановление Правительства "
+                  "от 26.12.2011 № 1137)",
+        "columns": ["№ п/п", "Наименование", "Сумма аванса, ₽", "Ставка НДС, %",
+                    "НДС, ₽", "Всего с НДС, ₽", "Основание (платёжка)"],
+    },
     "ks3": {
         "code": "КС-3",
         "title": "Справка о стоимости выполненных работ и затрат",
@@ -374,6 +383,110 @@ def envelope(kind: str, *, period: str, req: dict, rows: list[dict], totals: dic
     }
 
 
+
+
+# ─────────────────────────── счёт-фактура на аванс ───────────────────────────
+def build_advance_invoice(period: str, *, ledger_state: dict | None = None,
+                          rates: dict | None = None, object_name: str = "",
+                          organisation: dict | None = None) -> dict:
+    """Счёт-фактура на аванс полученный: черновик по авансам 62.02 за период.
+
+    Что печатается: каждая платёжка-аванс отдельной строкой, НДС = сумма × ставка / (100 + ставка).
+
+    Чего нет, и это написано в самом бланке:
+
+    * **номера и даты счёта-фактуры не присваиваются** — реестра счетов-фактур в контуре нет,
+      поэтому номер в бланке пустой и попадает в «что запросить»;
+    * книга продаж не ведётся: этот бланк — документ для человека, а не проводка;
+    * заказчик берётся из аналитики аванса; если её нет — строка остаётся с запросом.
+
+    Бланк собирается только из проводок: суммы не пересчитываются «по памяти».
+    """
+    from . import ledger as _ledger
+    from . import tax
+
+    rates = rates or tax.load_rates()
+    organisation = organisation or rates.get("organisation") or {}
+    state = ledger_state or {}
+    start, end = _period_bounds(period) if period else ("", "")
+    rows: list[dict] = []
+    gaps: list[dict] = [
+        {"what": "номер и дата счёта-фактуры",
+         "why": "реестра счетов-фактур в контуре нет: нумерация — решение организации",
+         "ask": "присвоить номер и дату по журналу регистрации СФ"},
+        {"what": "книга продаж",
+         "why": "не ведётся: суммы для декларации считаются из 62.02 и 90.01, а не из книги",
+         "ask": "вести книгу продаж либо подтвердить, что сверка идёт по оборотам"},
+    ]
+    warnings: list[str] = []
+    total = Decimal("0")
+    vat_total = Decimal("0")
+    for entry in state.get("entries") or []:
+        if str(entry.get("period") or "") != period:
+            continue
+        for line in entry.get("lines") or []:
+            if str(line.get("account")) != "62.02" or line.get("side") != _ledger.CREDIT:
+                continue
+            amount = (_dec(line.get("amount")) or Decimal("0")).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP)
+            if amount <= 0:
+                continue
+            rate = tax.vat_rate_on(str(entry.get("date") or ""), rates)
+            percent = rate.get("rate")
+            if not percent:
+                gaps.append({"what": f"ставка НДС для аванса "
+                                     f"{(entry.get('doc') or {}).get('number')}",
+                             "why": "на дату аванса ставка не задана в справочнике",
+                             "ask": "ставка НДС по договору на дату аванса"})
+                continue
+            vat = (amount * Decimal(str(percent)) / (Decimal("100") + Decimal(str(percent)))) \
+                .quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            party = str((line.get("analytics") or {}).get("контрагент") or "")
+            if not party:
+                gaps.append({"what": f"заказчик по авансу {(entry.get('doc') or {}).get('number')}",
+                             "why": "в проводке на 62.02 нет контрагента",
+                             "ask": "указать заказчика в платёжке/договоре"})
+            total += amount
+            vat_total += vat
+            rows.append(_base_row(
+                c1=str(len(rows) + 1),
+                c2=f"Аванс по договору {(line.get('analytics') or {}).get('договор') or '—'} "
+                   f"({party or 'заказчик не указан'})",
+                c3=_rub(amount), c4=f"{float(percent):g}",
+                c5=_rub(vat), c6=_rub(amount / Decimal("1")),
+                c7=f"{(entry.get('doc') or {}).get('number') or '—'} "
+                   f"от {entry.get('date') or '—'}",
+                state="ok", source=f"проводка {entry.get('id') or ''}",
+                note="номер СФ не присвоен: реестра СФ нет"))
+    if not rows:
+        gaps.append({"what": "авансы за период",
+                     "why": "в журнале нет поступлений на 62.02",
+                     "ask": "платёжки с пометкой «аванс» за период"})
+    if total:
+        warnings.append(f"Сумма авансов {_rub(total)}; если счёт-фактура не выставлен в течение "
+                        f"5 календарных дней с даты аванса — это нарушение п. 3 ст. 168 НК РФ")
+    req = requisites(object_name=object_name or str(state.get("object") or ""),
+                     contract="", customer="", period=_month_label(period))
+    req["Продавец"] = {"value": f"{organisation.get('name') or ''}, ИНН "
+                                f"{organisation.get('inn') or ''}, КПП "
+                                f"{organisation.get('kpp') or ''}".strip(", "),
+                        "missing": not bool(organisation.get("inn"))}
+    req["Счёт-фактура №"] = {"value": "", "missing": True}
+    req["Дата счёта-фактуры"] = {"value": "", "missing": True}
+    req = {name: {"value": item["value"],
+                  "missing": item.get("missing", not bool(str(item["value"]).strip()))}
+           for name, item in req.items()}
+    form = envelope("sf_advance", period=period, req=req, rows=rows,
+                    totals={"Авансов": _rub(total), "НДС": _rub(vat_total),
+                            "Строк": str(len(rows))},
+                    gaps=gaps + _gaps_from_requisites(req, FORMS["sf_advance"]["code"]),
+                    warnings=warnings,
+                    sources=["проводки 62.02 (авансы полученные)"])
+    form["built_from"] = ("журнал проводок: суммы берутся из 62.02, ставка — на дату аванса; "
+                          "форма ничего не пересчитывает")
+    if start and end:
+        form["period_bounds"] = {"from": start, "to": end}
+    return form
 
 # ─────────────────────────── КС-2 ───────────────────────────
 def build_ks2(positions: list[dict], *, period_from: str, period_to: str,

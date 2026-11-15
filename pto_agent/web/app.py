@@ -25,7 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from .. import closing, forms, ledger, payroll, stock, treasury
+from .. import closing, forms, ledger, payroll, stock, tax, treasury
 from . import auth, rbac
 from .store import Store
 
@@ -241,6 +241,7 @@ def create_app(*, root: str | Path | None = None, data_dir: str | Path | None = 
             ("postings.view", "/postings", "Проводки и ОСВ"),
             ("payroll.view", "/payroll", "Зарплата"),
             ("closing.view", "/closing", "Закрытие месяца"),
+            ("taxes.view", "/taxes", "Налоги"),
             ("audit.view", "/audit", "Аудит"),
             ("admin.rbac", "/roles", "Роли"),
         ]
@@ -805,6 +806,46 @@ def create_app(*, root: str | Path | None = None, data_dir: str | Path | None = 
         return RedirectResponse("/postings", status_code=303)
 
     # ─────────────────────────── закрытие месяца ───────────────────────────
+    # ─────────────────────────── налоги ───────────────────────────
+    @app.get("/taxes", response_class=HTMLResponse)
+    def taxes_page(request: Request):
+        """Экран налогов: НДС, авансы, 6-НДФЛ, РСВ, прибыль — те же функции, что в CLI.
+
+        Экран ничего не считает сам: он вызывает `tax.py` и показывает результат вместе
+        с расхождениями и списком того, что не сделано. Сдавать отчётность отсюда нельзя:
+        выгрузки в формате ФНС нет, подписи нет.
+        """
+        user = _require(request, "taxes.view")
+        rates = tax.load_rates()
+        ledger_state = store.ledger_state()
+        payroll_state = store.payroll_state()
+        entries = [entry for entry in ledger_state.get("entries") or [] if entry.get("period")]
+        periods = sorted({str(entry.get("period")) for entry in entries})
+        payroll_periods = sorted({str(row.get("period")) for row in
+                                 payroll_state.get("periods") or [] if row.get("period")})
+        period = request.query_params.get("period") or (periods[-1] if periods else
+                                                        _default_period(store))
+        vat = tax.vat_return(ledger_state, period, rates=rates) if periods else None
+        ndfl = (tax.ndfl_return(payroll_state, period, ledger_state=ledger_state, rates=rates)
+                if period in payroll_periods else None)
+        rsv_report = (tax.rsv(payroll_state, period, ledger_state=ledger_state, rates=rates)
+                      if period in payroll_periods else None)
+        profit = tax.profit_return(ledger_state, period, rates=rates) if periods else None
+        problems = []
+        for report in (vat, ndfl, rsv_report, profit):
+            if report:
+                problems.extend(report.get("problems") or [])
+                problems.extend(tax.validate(report, rates=rates))
+        return render(request, "taxes.html", user, period=period,
+                      periods=sorted(set(periods) | set(payroll_periods)),
+                      vat=vat, ndfl=ndfl, rsv=rsv_report, profit=profit,
+                      problems=problems, rates=rates,
+                      forms=rates.get("forms") or {},
+                      deadlines=rates.get("deadlines") or {},
+                      not_implemented=rates.get("not_implemented") or [],
+                      payroll_not_included=(payroll.load_rules().get("not_implemented") or []),
+                      can_file=False)
+
     @app.get("/closing", response_class=HTMLResponse)
     def closing_page(request: Request):
         user = _require(request, "closing.view")

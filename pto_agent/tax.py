@@ -31,7 +31,8 @@ RATES_PATH = Path(__file__).resolve().parents[1] / "data" / "reference" / "tax_r
 NS = "urn:pto-agent:tax:2026"
 EPS = Decimal("0.01")
 KINDS = {"vat": "НДС (налоговая декларация)", "ndfl6": "6-НДФЛ",
-         "rsv": "РСВ (расчёт по страховым взносам)", "psv": "Персонифицированные сведения"}
+         "rsv": "РСВ (расчёт по страховым взносам)", "psv": "Персонифицированные сведения",
+         "profit": "Налог на прибыль (декларация)"}
 
 
 # ─────────────────────────── числа ───────────────────────────
@@ -129,6 +130,209 @@ def _entries(state: dict, period: str, event: str | None = None) -> list[dict]:
 
 
 # ─────────────────────────── НДС ───────────────────────────
+
+# ─────────────────────────── НДС с авансов ───────────────────────────
+def advances_vat(state: dict, period: str, *, rates: dict | None = None) -> dict:
+    """НДС с авансов отдельными строками: начислено с полученных, принято к вычету.
+
+    Логика: аванс в контуре приходит на 62.02 целиком (с НДС), значит налог с аванса —
+    `сумма × ставка / (100 + ставка)`. Вычет появляется, когда аванс зачтён отгрузкой:
+    проводка `advance_offset` (Дт 62.02 Кт 62.01) — налог с зачтённой части.
+
+    **Проводки.** Счёт 76.АВ в плане есть, налог ставится проводками
+    `tax post-advances <период>` (Дт 76.АВ Кт 68.02 при авансе, Дт 68.02 Кт 76.АВ при зачёте).
+    Если проводок нет — расхождение называется кодом `VAT_ADVANCE_NOT_POSTED` с числами.
+    **Счёт-фактура на аванс не нумеруется:** реестра счетов-фактур в контуре нет, поэтому
+    вычет без документа — отдельное предупреждение `VAT_ADVANCE_NO_INVOICE`, а не тишина.
+    """
+    rates = rates or load_rates()
+    rate = vat_rate_on(_last_day(period), rates)
+    percent = Decimal(str(rate["rate"] or 0))
+
+    received = Decimal("0")
+    received_docs: list[dict] = []
+    for entry in _entries(state, period):
+        credit = [line for line in entry.get("lines") or []
+                  if str(line.get("account")) == "62.02" and line.get("side") == ledger.CREDIT]
+        if not credit:
+            continue
+        amount = sum((kopeck(line.get("amount")) for line in credit), Decimal("0"))
+        received += amount
+        received_docs.append({"document": (entry.get("doc") or {}).get("number") or "",
+                              "date": entry.get("date"), "amount": num(amount),
+                              "counterparty": (credit[0].get("analytics") or {}).get("контрагент")
+                              or ""})
+
+    offset = Decimal("0")
+    for entry in _entries(state, period):
+        debit = [line for line in entry.get("lines") or []
+                 if str(line.get("account")) == "62.02" and line.get("side") == ledger.DEBIT
+                 and entry.get("event") == "advance_offset"]
+        if debit:
+            offset += sum((kopeck(line.get("amount")) for line in debit), Decimal("0"))
+
+    def tax_of(amount: Decimal) -> Decimal:
+        if percent <= 0:
+            return Decimal("0")
+        return kopeck(amount * percent / (Decimal("100") + percent))
+
+    vat_received = tax_of(received)
+    vat_offset = tax_of(min(offset, received))
+    # что из этого уже стоит в журнале на 76.АВ (проводки делает post_advance_vat)
+    # 76.АВ — активный счёт: начисление налога идёт в дебет, вычет — в кредит
+    on_ledger = turnover(state, "76.АВ", period, side=ledger.DEBIT, prefix=False)
+    off_ledger = turnover(state, "76.АВ", period, side=ledger.CREDIT, prefix=False)
+    return {
+        "rate": rate["rate"], "basis": rate["basis"],
+        "received": num(received), "vat_on_received": num(vat_received),
+        "offset": num(offset), "vat_on_offset": num(vat_offset),
+        "in_ledger": {"accrued": num(on_ledger), "deducted": num(off_ledger),
+                      "account": "76.АВ"},
+        "to_pay": num(vat_received - vat_offset),
+        "documents": received_docs,
+        "lines": [
+            {"line": "3-070", "what": "НДС с полученных авансов (начислено)",
+             "amount": num(vat_received), "verify": True,
+             "source": "обороты Кт 62.02 × ставка / (100 + ставка)"},
+            {"line": "3-130", "what": "НДС с авансов, принятый к вычету при отгрузке",
+             "amount": num(vat_offset), "verify": True,
+             "source": "проводки зачёта аванса Дт 62.02 Кт 62.01"},
+        ],
+        "note": ("номера строк помечены «на проверку»: форма НДС менялась приказом ФНС "
+                 "от 18.12.2025 № ЕД-7-3/1227@ — перед сдачей сверять с действующей редакцией"),
+    }
+
+
+
+# ─────────────────────────── проводки по НДС с авансов ───────────────────────────
+def post_advance_vat(state: dict, period: str, *, rates: dict | None = None,
+                     mode: str | None = None, chart: dict | None = None,
+                     rules: dict | None = None) -> dict:
+    """Провести НДС с авансов: Дт 76.АВ Кт 68.02 при получении и вычет при зачёте.
+
+    Зачем: без этих проводок НДС с авансов жил только в декларации, а журнал о нём не знал —
+    расхождение называлось `VAT_ADVANCE_NOT_POSTED`. Теперь сумма оседает на 76.АВ, и
+    сверка «декларация ↔ журнал» возможна по каждому авансу.
+
+    Границы: счёт-фактура на аванс **не нумеруется** — реестра счетов-фактур в контуре нет,
+    поэтому в memo проводки так и написано. Ключ идемпотентности включает документ и сумму:
+    повторный вызов не задвоит налог.
+    """
+    from . import ledger as accounting
+
+    rates = rates or load_rates()
+    chart = chart or accounting.load_chart()
+    rules = rules if rules is not None else accounting.load_rules()
+    result = {"posted": 0, "duplicates": 0, "rejected": 0, "results": [],
+              "accrued": Decimal("0"), "deducted": Decimal("0"),
+              "errors": [], "gaps": [], "warnings": [],
+              "no_invoice": []}
+
+    def _vat(gross: Decimal, day: str) -> tuple[Decimal, float]:
+        rate = vat_rate_on(day, rates)
+        percent = rate.get("rate")
+        if not percent:
+            return Decimal("0"), 0.0
+        return kopeck(gross * Decimal(str(percent)) / (Decimal("100") + Decimal(str(percent)))), \
+            float(percent)
+
+    def _post(event: str, rule: str, date: str, doc: dict, lines: list[dict], memo: str,
+              key: str) -> None:
+        outcome = accounting.post_entry(state, event=event, date=date, doc=doc, lines=lines,
+                                       memo=memo, rule=rule, key=key, chart=chart, rules=rules,
+                                       mode=mode or accounting.MODE_POST)
+        result["results"].append({"event": event, "number": doc.get("number"),
+                                  "status": outcome.get("status"),
+                                  "errors": outcome.get("errors") or []})
+        if outcome.get("status") == accounting.STATUS_OK:
+            result["posted"] += 1
+        elif outcome.get("status") == accounting.STATUS_DUPLICATE:
+            result["duplicates"] += 1
+        else:
+            result["rejected"] += 1
+            result["errors"].extend(outcome.get("errors") or [])
+            result["gaps"].extend(outcome.get("gaps") or [])
+        result["warnings"].extend(outcome.get("warnings") or [])
+
+    for entry in _entries(state, period, "receipt_payment"):
+        for line in entry.get("lines") or []:
+            if str(line.get("account")) != "62.02" or line.get("side") != ledger.CREDIT:
+                continue
+            gross = kopeck(line.get("amount"))
+            vat, percent = _vat(gross, str(entry.get("date") or ""))
+            number = (entry.get("doc") or {}).get("number") or ""
+            if vat <= 0:
+                result["gaps"].append({"what": f"ставка НДС для аванса {number}",
+                                       "why": "на дату аванса ставка не задана в справочнике",
+                                       "ask": "ставка НДС по договору на дату получения аванса"})
+                continue
+            analytics = {key: str(value) for key, value in (line.get("analytics") or {}).items()
+                         if str(value).strip()}
+            missing = [field for field in ("контрагент", "договор") if field not in analytics]
+            if missing:
+                result["gaps"].append({"what": f"аналитика {', '.join(missing)} для аванса {number}",
+                                       "why": "76.АВ требует контрагента и договор: без них налог "
+                                              "не привязан к авансу",
+                                       "ask": f"указать в первичке: {', '.join(missing)}"})
+                continue
+            _post("vat_advance", "vat.advance_accrual", str(entry.get("date") or ""),
+                  {"number": f"НДС с аванса {number}", "date": entry.get("date"),
+                   "kind": "расчёт НДС"},
+                  [{"account": "76.АВ", "side": ledger.DEBIT, "amount": num(vat),
+                    "analytics": analytics},
+                   {"account": "68.02", "side": ledger.CREDIT, "amount": num(vat),
+                    "analytics": {}}],
+                  (f"НДС {percent:g} % с аванса {number} ({rub(gross)}): ставка "
+                   f"{percent:g}/{(100 + percent):g}; счёт-фактура на аванс не нумеровалась — "
+                   f"реестра СФ в контуре нет"),
+                  key=f"vat_advance|accrual|{number}|{entry.get('date')}|{num(vat):.2f}")
+            result["accrued"] += vat
+            result["no_invoice"].append({"document": number, "date": entry.get("date"),
+                                         "vat": num(vat),
+                                         "why": "счёт-фактура на аванс не формируется: реестра "
+                                                "счетов-фактур в контуре нет"})
+
+    for entry in _entries(state, period, "advance_offset"):
+        for line in entry.get("lines") or []:
+            if str(line.get("account")) != "62.02" or line.get("side") != ledger.DEBIT:
+                continue
+            gross = kopeck(line.get("amount"))
+            vat, percent = _vat(gross, str(entry.get("date") or ""))
+            number = (entry.get("doc") or {}).get("number") or ""
+            if vat <= 0:
+                continue
+            analytics = {key: str(value) for key, value in (line.get("analytics") or {}).items()
+                         if str(value).strip()}
+            if any(field not in analytics for field in ("контрагент", "договор")):
+                result["gaps"].append({"what": f"аналитика зачёта аванса {number}",
+                                       "why": "76.АВ требует контрагента и договор",
+                                       "ask": "указать контрагента и договор в зачёте"})
+                continue
+            _post("vat_advance_offset", "vat.advance_deduction",
+                  str(entry.get("date") or ""),
+                  {"number": f"вычет НДС с аванса {number}", "date": entry.get("date"),
+                   "kind": "расчёт НДС"},
+                  [{"account": "68.02", "side": ledger.DEBIT, "amount": num(vat),
+                    "analytics": {}},
+                   {"account": "76.АВ", "side": ledger.CREDIT, "amount": num(vat),
+                    "analytics": analytics}],
+                  (f"вычет НДС {percent:g} % с зачтённой части аванса {number} ({rub(gross)})"),
+                  key=f"vat_advance|deduction|{number}|{entry.get('date')}|{num(vat):.2f}")
+            result["deducted"] += vat
+    result["accrued"] = num(result["accrued"])
+    result["deducted"] = num(result["deducted"])
+    return result
+
+def _last_day(period: str) -> str:
+    """Последний день месяца: ставка НДС берётся на дату операции, а не на «сейчас»."""
+    import calendar as _calendar
+    try:
+        year, month = int(period[:4]), int(period[5:7])
+    except (TypeError, ValueError):
+        return ""
+    return f"{period[:7]}-{_calendar.monthrange(year, month)[1]:02d}"
+
+
 def vat_return(state: dict, period: str, *, rates: dict | None = None,
                organisation: dict | None = None) -> dict:
     """Декларация по НДС из журнала: начислено, вычеты, к уплате и проверка ставок."""
@@ -138,10 +342,19 @@ def vat_return(state: dict, period: str, *, rates: dict | None = None,
               "rows": [], "rate_audit": [], "problems": [], "gaps": [], "warnings": []}
 
     gross = turnover(state, "90.01", period, side=ledger.CREDIT)
-    charged = turnover(state, "68.02", period, side=ledger.CREDIT)
-    deducted = turnover(state, "68.02", period, side=ledger.DEBIT)
+    # обороты счёта 68.02 — это то, что уже стоит в журнале (включая НДС с авансов, если
+    # проводки сделаны); декларация считается из первички, журнал — из проводок, и ниже
+    # они сверяются, а не подменяют друг друга
+    vat_account_credit = turnover(state, "68.02", period, side=ledger.CREDIT)
+    vat_account_debit = turnover(state, "68.02", period, side=ledger.DEBIT)
     output_vat = turnover(state, "90.03", period, side=ledger.DEBIT)
     net_sales = gross - output_vat
+    advances = advances_vat(state, period, rates=rates)
+    # вычеты, не связанные с авансами: зачёт 19.03 и прочие проводки по 68.02
+    non_advance_deducted = vat_account_debit - kopeck(advances["in_ledger"]["deducted"])
+    if non_advance_deducted < 0:
+        non_advance_deducted = Decimal("0")
+    charged, deducted = output_vat, non_advance_deducted
 
     # по объектам: 90.01 проводится с НДС, поэтому база = 90.01 − 90.03 того же акта,
     # а НДС берётся строкой 90.03 (у неё нет аналитики объекта — берём объект из акта)
@@ -190,18 +403,59 @@ def vat_return(state: dict, period: str, *, rates: dict | None = None,
                                "gross": num(slot["gross"]), "vat": num(slot["vat"]),
                                "acts": slot["acts"]})
 
-    payable = charged - deducted
+    report["advances"] = advances
+    advance_vat = kopeck(advances["vat_on_received"]) - kopeck(advances["vat_on_offset"])
+    payable = charged - deducted + advance_vat
     report["totals"] = {"sales": num(net_sales), "sales_gross": num(gross),
                         "vat_charged": num(charged), "vat_deducted": num(deducted),
-                        "vat_from_sales": num(output_vat), "payable": num(payable),
+                        "vat_from_sales": num(output_vat),
+                        "vat_on_advances": num(kopeck(advances["vat_on_received"])),
+                        "vat_on_advances_offset": num(kopeck(advances["vat_on_offset"])),
+                        "payable": num(payable),
                         "refund": num(-payable) if payable < 0 else 0.0}
 
-    if output_vat != charged:
+    posted = advances["in_ledger"]
+    if kopeck(advances["vat_on_received"]) > 0 and \
+            (kopeck(posted["accrued"]) != kopeck(advances["vat_on_received"])
+             or kopeck(posted["deducted"]) != kopeck(advances["vat_on_offset"])):
+        # авансовый НДС посчитан, но на 76.АВ его нет (или он другой): сумма попадёт в строки
+        # декларации, а в журнале будет другая — это надо назвать числом, а не спрятать
+        report["problems"].append({
+            "code": "VAT_ADVANCE_NOT_POSTED", "what": period,
+            "why": f"НДС с авансов по декларации: начислено "
+                   f"{rub(advances['vat_on_received'])}, вычет "
+                   f"{rub(advances['vat_on_offset'])}; в журнале на 76.АВ: "
+                   f"{rub(posted['accrued'])} и {rub(posted['deducted'])}. Разница — "
+                   f"{rub(kopeck(advances['vat_on_received']) - kopeck(posted['accrued']))} "
+                   f"начисления: провести `tax post-advances {period}` или объяснить, почему "
+                   f"налог с авансов не выделяется"})
+    elif kopeck(advances["vat_on_received"]) > 0:
+        report["warnings"].append(
+            f"НДС с авансов {rub(advances['vat_on_received'])} стоит на 76.АВ, но счёт-фактура "
+            f"на аванс не нумеровалась: реестра счетов-фактур в контуре нет, а без документа "
+            f"вычет (п. 8 ст. 171 НК РФ) не подтверждён")
+    if kopeck(advances["offset"]) > kopeck(advances["received"]):
+        report["problems"].append({
+            "code": "VAT_ADVANCE_OVER_OFFSET", "what": period,
+            "why": f"зачтено авансов {rub(advances['offset'])} больше, чем получено "
+                   f"{rub(advances['received'])}: вычет больше начисленного"})
+
+    advance_vat = kopeck(advances["vat_on_received"])
+    advance_off = kopeck(advances["vat_on_offset"])
+    if output_vat + kopeck(advances["in_ledger"]["accrued"]) != vat_account_credit:
         report["problems"].append({
             "code": "VAT_MISMATCH", "what": period,
-            "why": f"НДС с реализации по 90.03 {rub(output_vat)} ≠ начислено по 68.02 "
-                   f"{rub(charged)}: расхождение {rub(output_vat - charged)} — либо не все "
-                   f"счета-фактуры зарегистрированы, либо налог начислен не тем счётом"})
+            "why": f"НДС начисленный: по 90.03 {rub(output_vat)} + с авансов "
+                   f"{rub(advance_vat)} ≠ оборот Кт 68.02 {rub(vat_account_credit)}: расхождение "
+                   f"{rub(output_vat + advance_vat - vat_account_credit)} — либо не все счета-фактуры "
+                   f"зарегистрированы, либо налог начислен не тем счётом"})
+    if advance_off != (kopeck(advances["vat_on_offset"])) and \
+            kopeck(advances["in_ledger"]["deducted"]) > kopeck(advances["vat_on_offset"]):
+        report["problems"].append({
+            "code": "VAT_ADVANCE_OVER_DEDUCTION", "what": period,
+            "why": f"вычет НДС с авансов в журнале "
+                   f"{rub(advances['in_ledger']['deducted'])} больше налога с зачтённой части "
+                   f"{rub(advances['vat_on_offset'])}: вычитается незакрытый аванс"})
     if payable < 0:
         report["warnings"].append(
             f"к возмещению {rub(-payable)}: в декларации это отдельная строка, и ФНС "
@@ -278,12 +532,17 @@ def rsv(payroll_state: dict, period: str, *, ledger_state: dict | None = None,
         return report
     total_base = total_contrib = total_injury = 0.0
     for employee in row.get("rows") or []:
+        base = employee.get("contrib_base")
+        if base is None:
+            base = employee.get("accrued")
         report["rows"].append({"tab": employee.get("tab"), "name": employee.get("name"),
-                               "base": employee.get("accrued"),
+                               "base": base,
                                "contrib": employee.get("contrib"),
                                "injury": employee.get("injury"),
                                "note": employee.get("contrib_note") or ""})
-        total_base += float(employee.get("accrued") or 0)
+        total_base += float(employee.get("contrib_base")
+                            if employee.get("contrib_base") is not None
+                            else employee.get("accrued") or 0)
         total_contrib += float(employee.get("contrib") or 0)
         total_injury += float(employee.get("injury") or 0)
     report["totals"] = {"base": round(total_base, 2), "contrib": round(total_contrib, 2),
@@ -316,6 +575,112 @@ def rsv(payroll_state: dict, period: str, *, ledger_state: dict | None = None,
     report["ready"] = not report["problems"]
     return report
 
+
+
+# ─────────────────────────── налог на прибыль ───────────────────────────
+def profit_return(state: dict, period: str, *, rates: dict | None = None,
+                  closed: bool | None = None) -> dict:
+    """Налог на прибыль **от реализации** по журналу: 8 % в федеральный, 17 % в региональный.
+
+    Что считается: доходы от реализации (90.01 − 90.03, то есть без НДС) минус расходы,
+    списанные на 90.02. Всё остальное — внереализационные доходы и расходы, убытки прошлых
+    лет, ПБУ 18/02, — **не считается** и названо в `not_included`: цифры из воздуха хуже,
+    чем честная дырка.
+
+    Если 90.02 пуст, а затраты на 20.01 есть — значит месяц не закрыт: сумма не берётся
+    «на глазок», а показывается расхождением `PROFIT_NOT_CLOSED`.
+    """
+    rates = rates or load_rates()
+    forms = rates.get("forms") or {}
+    form = forms.get("profit") or {}
+    tax_rates = form.get("rates") or {}
+    federal = Decimal(str(tax_rates.get("federal") or 8))
+    regional = Decimal(str(tax_rates.get("regional") or 17))
+
+    organisation = rates.get("organisation") or {}
+    report = {"kind": "profit", "period": period, "organisation": organisation,
+              "rows": [], "problems": [], "gaps": [], "warnings": [],
+              "not_included": [
+                  {"what": "внереализационные доходы и расходы",
+                   "why": "в контуре нет счетов 91.01/91.02 в разрезе видов: сумма не считается"},
+                  {"what": "убыток прошлых лет (приложение 4 к листу 02)",
+                   "why": "нет данных о переносимых убытках — без них налог занижается или "
+                          "завышается, поэтому строка не заполняется"},
+                  {"what": "ПБУ 18/02 (отложенные налоги)",
+                   "why": "разницы не ведутся: бухгалтерская и налоговая прибыль в контуре "
+                          "совпадают по построению"},
+                  {"what": "авансовые платежи и строка 210",
+                   "why": "нет истории платежей по 68.04: считается налог за период, а не "
+                          "доплата с учётом авансов"},
+              ]}
+
+    gross = turnover(state, "90.01", period, side=ledger.CREDIT)
+    output_vat = turnover(state, "90.03", period, side=ledger.DEBIT)
+    revenue = gross - output_vat
+    cost = turnover(state, "90.02", period, side=ledger.DEBIT)
+    costs_open = turnover(state, "20.01", period, side=ledger.DEBIT)
+
+    by_object: dict[str, dict] = {}
+    for entry in _entries(state, period, "act_signed"):
+        credit = [line for line in entry.get("lines") or []
+                  if str(line.get("account")) == "90.01" and line.get("side") == ledger.CREDIT]
+        if not credit:
+            continue
+        object_name = str((credit[0].get("analytics") or {}).get("объект") or "без объекта")
+        slot = by_object.setdefault(object_name, {"object": object_name, "revenue": Decimal("0"),
+                                                  "cost": Decimal("0"), "acts": []})
+        slot["revenue"] += sum((kopeck(line.get("amount")) for line in credit), Decimal("0")) - \
+            sum((kopeck(line.get("amount")) for line in entry.get("lines") or []
+                 if str(line.get("account")) == "90.03"), Decimal("0"))
+        slot["acts"].append((entry.get("doc") or {}).get("number") or "")
+
+    # расходы по объектам: 90.02 несёт аналитику объекта, пустая — распределяется общей строкой
+    for entry in _entries(state, period):
+        for line in entry.get("lines") or []:
+            if str(line.get("account")) != "90.02" or line.get("side") != ledger.DEBIT:
+                continue
+            object_name = str((line.get("analytics") or {}).get("объект") or "без объекта")
+            slot = by_object.setdefault(object_name, {"object": object_name,
+                                                      "revenue": Decimal("0"),
+                                                      "cost": Decimal("0"), "acts": []})
+            slot["cost"] += kopeck(line.get("amount"))
+
+    for slot in by_object.values():
+        profit = slot["revenue"] - slot["cost"]
+        report["rows"].append({"object": slot["object"], "revenue": num(slot["revenue"]),
+                               "cost": num(slot["cost"]), "profit": num(profit),
+                               "acts": slot["acts"],
+                               "partial": bool(slot["acts"]) and slot["cost"] == 0})
+
+    profit_total = revenue - cost
+    if profit_total < 0:
+        report["problems"].append({
+            "code": "PROFIT_LOSS", "what": period,
+            "why": f"по реализации убыток {rub(-profit_total)}: декларация по прибыли с "
+                   f"убытком — отдельное решение, а не «поставим ноль»"})
+    if cost == 0 and costs_open > 0:
+        report["problems"].append({
+            "code": "PROFIT_NOT_CLOSED", "what": period,
+            "why": f"на 20.01 затрат {rub(costs_open)}, а на 90.02 списано {rub(cost)}: месяц "
+                   f"не закрыт — прибыль будет завышена. Сначала закрытие, потом декларация"})
+
+    federal_tax = kopeck(profit_total * federal / Decimal("100")) if profit_total > 0 else Decimal("0")
+    regional_tax = kopeck(profit_total * regional / Decimal("100")) if profit_total > 0 \
+        else Decimal("0")
+    report["totals"] = {"revenue": num(revenue), "cost": num(cost), "profit": num(profit_total),
+                        "federal_rate": float(federal), "regional_rate": float(regional),
+                        "federal_tax": num(federal_tax), "regional_tax": num(regional_tax),
+                        "tax": num(federal_tax + regional_tax)}
+    report["form"] = {"knd": form.get("knd"), "order": form.get("order"),
+                      "note": "форма КНД 1151006; заполнен только расчёт от реализации"}
+    report["deadline"] = (rates.get("deadlines") or {}).get("profit_day")
+
+    if not report["rows"]:
+        report["gaps"].append({"what": "выручка за период",
+                               "why": "в журнале нет подписанных актов",
+                               "ask": "КС-2, подписанные заказчиком за период"})
+    report["ready"] = not report["problems"]
+    return report
 
 # ─────────────────────────── XML ───────────────────────────
 def _tag(parent: ET.Element, name: str, value=None, **attributes) -> ET.Element:
@@ -350,6 +715,22 @@ def to_xml(report: dict) -> str:
             if isinstance(value, (list, tuple)):
                 value = "; ".join(str(item) for item in value)
             _tag(node, "Показатель", value, Код=key)
+    if report.get("advances"):
+        block = _tag(root, "АвансыНДС", Ставка=report["advances"].get("rate"))
+        _tag(block, "Получено", report["advances"].get("received"))
+        _tag(block, "НДСНачислено", report["advances"].get("vat_on_received"))
+        _tag(block, "Зачтено", report["advances"].get("offset"))
+        _tag(block, "НДСКВычету", report["advances"].get("vat_on_offset"))
+        for row in report["advances"].get("documents") or []:
+            _tag(block, "Документ", row.get("amount"), Номер=row.get("document") or "",
+                 Дата=row.get("date") or "", Контрагент=row.get("counterparty") or "")
+        for row in report["advances"].get("lines") or []:
+            _tag(block, "Строка", row.get("amount"), Номер=row.get("line") or "",
+                 Что=row.get("what") or "", НаПроверку="1" if row.get("verify") else "0")
+    if report.get("not_included"):
+        block = _tag(root, "НеСчитается")
+        for item in report["not_included"]:
+            _tag(block, "Пункт", item.get("why"), Что=item.get("what") or "")
     if report.get("rate_audit"):
         audit = _tag(root, "ПроверкаСтавок")
         for row in report["rate_audit"]:
@@ -380,9 +761,26 @@ def validate(report: dict, *, rates: dict | None = None) -> list[dict]:
     totals = report.get("totals") or {}
     if report.get("kind") == "vat":
         expected = kopeck(totals.get("vat_charged")) - kopeck(totals.get("vat_deducted"))
+        # НДС с авансов — отдельные строки декларации: без них «к уплате» не сойдётся
+        expected += kopeck(totals.get("vat_on_advances")) \
+            - kopeck(totals.get("vat_on_advances_offset"))
         if abs(expected - kopeck(totals.get("payable"))) > EPS:
             problems.append({"code": "VAT_TOTALS", "what": report.get("period"),
                              "why": "к уплате не равно начислено минус вычеты"})
+    if report.get("kind") == "profit":
+        profit = kopeck(totals.get("profit"))
+        if abs(profit - (kopeck(totals.get("revenue")) - kopeck(totals.get("cost")))) > EPS:
+            problems.append({"code": "PROFIT_TOTALS", "what": report.get("period"),
+                             "why": "прибыль не равна доходам минус расходы"})
+        expected_tax = kopeck(kopeck(totals.get("federal_tax")) + kopeck(totals.get("regional_tax")))
+        if abs(expected_tax - kopeck(totals.get("tax"))) > EPS:
+            problems.append({"code": "PROFIT_TAX_SPLIT", "what": report.get("period"),
+                             "why": "налог не равен сумме федеральной и региональной частей"})
+        split = kopeck(totals.get("federal_rate")) + kopeck(totals.get("regional_rate"))
+        if split != Decimal("25"):
+            problems.append({"code": "PROFIT_RATE_SUM", "what": f"{split} %",
+                             "why": "ставки прибыли в сумме не 25 % (8 % + 17 %): проверить, "
+                                    "нет ли региональной льготы"})
     if report.get("kind") == "ndfl6":
         if kopeck(totals.get("tax_withheld")) < 0:
             problems.append({"code": "NDFL_NEGATIVE", "what": report.get("period"),
@@ -409,6 +807,42 @@ def to_markdown(report: dict) -> str:
         lines.append("")
         lines.append(f"Начислено {rub(totals.get('vat_charged'))}, к вычету "
                      f"{rub(totals.get('vat_deducted'))}, к уплате {rub(totals.get('payable'))}")
+    elif kind == "profit":
+        lines.append("| объект | доходы без НДС | расходы | прибыль | акты |")
+        lines.append("|---|---:|---:|---:|---|")
+        for row in report.get("rows") or []:
+            mark = " (месяц не закрыт)" if row.get("partial") else ""
+            lines.append(f"| {row['object']}{mark} | {rub(row['revenue'])} | "
+                         f"{rub(row['cost'])} | {rub(row['profit'])} | "
+                         f"{', '.join(row.get('acts') or [])} |")
+        totals = report.get("totals") or {}
+        lines.append("")
+        lines.append(f"Прибыль от реализации {rub(totals.get('profit'))} · налог "
+                     f"{rub(totals.get('federal_tax'))} в федеральный "
+                     f"({totals.get('federal_rate')} %) + "
+                     f"{rub(totals.get('regional_tax'))} в региональный "
+                     f"({totals.get('regional_rate')} %) = {rub(totals.get('tax'))}")
+        if report.get("not_included"):
+            lines.append("")
+            lines.append("## Не считается")
+            for item in report["not_included"]:
+                lines.append(f"- **{item.get('what')}**: {item.get('why')}")
+    elif kind == "ndfl6":
+        lines.append("| таб. | сотрудник | доход | вычет | НДФЛ | ставки |")
+        lines.append("|---|---|---:|---:|---:|---|")
+        for row in report.get("rows") or []:
+            steps = "/".join(str(step) for step in row.get("rate_steps") or [])
+            lines.append(f"| {row.get('tab')} | {row.get('name')} | {rub(row.get('income'))} | "
+                         f"{rub(row.get('deduction'))} | {rub(row.get('tax'))} | {steps} |")
+        totals = report.get("totals") or {}
+        lines.append("")
+        lines.append(f"Доход {rub(totals.get('income'))}, вычеты {rub(totals.get('deduction'))}, "
+                     f"исчислено и удержано {rub(totals.get('tax_withheld'))}, сотрудников "
+                     f"{totals.get('employees')}")
+        if totals.get("tax_in_ledger") is not None:
+            lines.append(f"В журнале по 68.01 начислено {rub(totals.get('tax_in_ledger'))}, "
+                         f"уплачено {rub(totals.get('tax_paid'))}, к доплате "
+                         f"{rub(totals.get('tax_due'))}")
     else:
         lines.append("| таб. | сотрудник | база | взносы | травматизм |")
         lines.append("|---|---|---:|---:|---:|")
@@ -423,6 +857,22 @@ def to_markdown(report: dict) -> str:
         lines.append("; ".join(
             f"{key}: {int(value) if key in counts else rub(value)}"
             for key, value in totals.items() if key not in ("income", "deduction")))
+    if report.get("advances"):
+        adv = report["advances"]
+        lines.append("")
+        lines.append("## НДС с авансов")
+        lines.append("")
+        lines.append("| строка | что | сумма | источник |")
+        lines.append("|---|---|---:|---|")
+        for row in adv.get("lines") or []:
+            flag = " ⚠" if row.get("verify") else ""
+            lines.append(f"| {row.get('line')}{flag} | {row.get('what')} | "
+                         f"{rub(row.get('amount'))} | {row.get('source')} |")
+        lines.append("")
+        lines.append(f"Получено авансов {rub(adv.get('received'))} · зачтено "
+                     f"{rub(adv.get('offset'))} · к уплате с авансов "
+                     f"{rub(adv.get('to_pay'))} (ставка {adv.get('rate')} %).")
+        lines.append(f"{adv.get('note')}")
     if report.get("rate_audit"):
         lines.append("")
         lines.append("| документ | дата | база | НДС | ставка в журнале | законная | расхождение |")

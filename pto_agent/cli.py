@@ -291,7 +291,9 @@ def cmd_sync_1c(args):
         if args.summary and Path(args.summary).exists():
             summary = json.loads(Path(args.summary).read_text(encoding="utf-8"))
         elif args.push:
-            print("Для --push нужна сводка: укажите --summary", file=sys.stderr)
+            print(f"Для --push нужна сводка проверки, а её нет: {args.summary}. "
+                  f"Сначала выполните сверку (python3 -m pto_agent run --data data/demo --out ...) "
+                  f"или укажите --summary на существующий файл", file=sys.stderr)
             return 2
         result = sync(client, period=args.period, act_id=args.act_id, summary=summary,
                       quantity=args.quantity, push=args.push, object_name=args.object_name)
@@ -340,10 +342,14 @@ def cmd_review(args):
     for c in review["checked"]:
         mark = {"ok": "✓", "warning": "!", "fail": "✗", "skipped": "·"}.get(c["status"], "?")
         print(f"  {mark} {c['name']}: {c.get('detail', '')}")
-    if review["decisions"]:
-        print(f"Решения человека ({len(review['decisions'])}):")
-        for d in review["decisions"][:5]:
+    decisions = review["decisions"]
+    if decisions:
+        print(f"Решения человека ({len(decisions)}):")
+        for d in decisions[:5]:
             print(f"  • [{d['priority']}] {d['question']}")
+    else:
+        # раздел печатается всегда: «вопросов нет» — это вывод, а не отсутствие вывода
+        print("Решения человека (0): не требуется — вопросов к человеку не осталось")
     print(f"Отчёт:     {paths['markdown']} · {paths['json']}")
     return 0
 
@@ -1305,7 +1311,11 @@ def cmd_forms(args) -> int:
                                            ("Подрядчик", args.contractor),
                                            ("Номер акта", getattr(args, "number", ""))) if value}
     try:
-        if getattr(args, "stock", None):
+        if str(getattr(args, "form", "")).replace("-", "_") == "sf_advance":
+            ledger_state = (accounting.load(args.ledger) if getattr(args, "ledger", None)
+                            else accounting.new_state())
+            form = print_forms.build_advance_invoice(args.period, ledger_state=ledger_state)
+        elif getattr(args, "stock", None):
             state = stock_ledger.load(args.stock)
             rows = stock_ledger.m29_rows(state, period=args.period)
             form = print_forms.build_m29(
@@ -2465,9 +2475,24 @@ def cmd_payroll(args) -> int:
     rules = wage.load_rules()
     state = wage.load_state(args.state)
 
+    if action == "orders":
+        from . import orders as orders_mod
+
+        parsed = orders_mod.load_orders(args.orders)
+        result = orders_mod.report(parsed, staff, rules, period=args.period)
+        print(orders_mod.to_markdown(result))
+        for item in result["errors"]:
+            print(f"  ✗ [{item['code']}] {item['what']}: {item['why']}", file=sys.stderr)
+        return 0 if not result["errors"] else 1
+
     if action == "accrue":
         timesheet = wage.load_json(args.timesheet)
-        report = wage.accrue(state, timesheet, staff, rules)
+        orders = None
+        if getattr(args, "orders", None):
+            from . import orders as orders_mod
+
+            orders = orders_mod.load_orders(args.orders)
+        report = wage.accrue(state, timesheet, staff, rules, orders=orders)
         for item in report["errors"]:
             print(f"  отказ [{item['code']}] {item['what']}: {item['why']}", file=sys.stderr)
         for gap in report["gaps"]:
@@ -2479,12 +2504,24 @@ def cmd_payroll(args) -> int:
         wage.remember(state, report, rules=rules)
         wage.save_state(state, args.state)
         totals = report["totals"]
+        if report.get("orders"):
+            extra = report["orders"]["totals"]
+            print(f"  из них по приказам: больничные (работодатель) "
+                  f"{wage.rub(extra.get('sick_employer'))} · отпускные "
+                  f"{wage.rub(extra.get('vacation'))} · премии {wage.rub(extra.get('bonus'))} · "
+                  f"за счёт СФР {wage.rub(extra.get('sick_fund'))} (не наш расход)")
         print(f"начислено за {report['period']}: {wage.rub(totals['accrued'])} · НДФЛ "
               f"{wage.rub(totals['ndfl'])} · взносы {wage.rub(totals['contrib'])} · "
               f"травматизм {wage.rub(totals['injury'])} · к выплате {wage.rub(totals['net'])} · "
               f"стоимость {wage.rub(totals['cost'])}")
         for text in report.get("not_included") or []:
             print(f"  не считано: {text['what']} — {text['why']}", file=sys.stderr)
+        for item in report.get("order_errors") or []:
+            print(f"  приказ не посчитан [{item['code']}] {item['what']}: {item['why']}",
+                  file=sys.stderr)
+        if report.get("order_errors"):
+            print(f"  ВНИМАНИЕ: приказов не посчитано {len(report['order_errors'])} — суммы по ним "
+                  f"в начисление не вошли", file=sys.stderr)
         return 0
 
     if action == "sheet":
@@ -2590,8 +2627,8 @@ def cmd_tax(args) -> int:
             print(f"  не сделано: {text}")
         return 0
 
-    kind = {"vat": "vat", "ndfl": "ndfl6", "ndfl6": "ndfl6", "rsv": "rsv"}.get(action) or \
-        getattr(args, "kind", "")
+    kind = {"vat": "vat", "ndfl": "ndfl6", "ndfl6": "ndfl6", "rsv": "rsv",
+            "profit": "profit"}.get(action) or getattr(args, "kind", "")
     if action == "xml":
         kind = getattr(args, "kind", "")
         action = {"vat": "vat", "ndfl6": "ndfl", "ndfl": "ndfl", "rsv": "rsv"}.get(kind, "")
@@ -2608,8 +2645,49 @@ def cmd_tax(args) -> int:
         payroll_state = wage.load_state(args.payroll)
         ledger_state = accounting.load(args.ledger) if args.ledger else None
         report = taxes.rsv(payroll_state, args.period, ledger_state=ledger_state, rates=rates)
+    elif action == "profit" or kind == "profit":
+        if not args.ledger:
+            print("для прибыли нужен журнал: --ledger <файл>", file=sys.stderr)
+            return 2
+        report = taxes.profit_return(accounting.load(args.ledger), args.period, rates=rates)
+    elif action == "post-advances":
+        if not args.ledger:
+            print("нужен журнал: --ledger <файл>", file=sys.stderr)
+            return 2
+        ledger_state = accounting.load(args.ledger)
+        result = taxes.post_advance_vat(ledger_state, args.period, rates=rates)
+        if result["posted"] or result["duplicates"]:
+            accounting.save(ledger_state, args.ledger)
+        print(f"НДС с авансов за {args.period}: проведено {result['posted']}, "
+              f"дублей {result['duplicates']}, отказов {result['rejected']}")
+        print(f"  начислено на 76.АВ {wage.rub(result['accrued'])}, "
+              f"вычет {wage.rub(result['deducted'])}")
+        for item in result["no_invoice"]:
+            print(f"  счёт-фактура на аванс {item['document']}: не формируется — {item['why']}")
+        for item in result["errors"]:
+            print(f"  ✗ [{item['code']}] {item['what']}: {item['why']}", file=sys.stderr)
+        for item in result["gaps"]:
+            print(f"  нужно запросить: {item['what']} — {item['ask']}", file=sys.stderr)
+        return 0 if not result["errors"] else 1
+    elif action == "advances":
+        report = taxes.vat_return(accounting.load(args.ledger), args.period, rates=rates)
+        adv = report.get("advances") or {}
+        print(f"НДС с авансов за {args.period}: ставка {adv.get('rate')} %")
+        print(f"  получено авансов {wage.rub(adv.get('received'))} → налог "
+              f"{wage.rub(adv.get('vat_on_received'))}")
+        print(f"  зачтено {wage.rub(adv.get('offset'))} → вычет {wage.rub(adv.get('vat_on_offset'))}")
+        print(f"  к уплате с авансов {wage.rub(adv.get('to_pay'))}")
+        for row in adv.get("lines") or []:
+            flag = " (номер строки на проверку)" if row.get("verify") else ""
+            print(f"  строка {row.get('line')}: {row.get('what')} — {wage.rub(row.get('amount'))}"
+                  f"{flag}; источник: {row.get('source')}")
+        for item in report.get("problems") or []:
+            print(f"  ✗ [{item['code']}] {item['why']}", file=sys.stderr)
+        return 0 if not report.get("problems") else 1
     else:
-        print("что делать: rates · vat · ndfl · rsv · xml · check", file=sys.stderr)
+        print("что делать: rates · vat · ndfl · rsv · profit · advances · post-advances · "
+              "xml · check",
+              file=sys.stderr)
         return 2
 
     if getattr(args, "tax_action", "") == "xml":
@@ -3337,6 +3415,12 @@ def main(argv=None):
     for flag, options in common:
         fk3.add_argument(flag, **options)
     fk3.set_defaults(func=cmd_forms)
+    fsf = fms.add_parser("sf-advance",
+                         help="счёт-фактура на аванс полученный (черновик, номер не присвоен)")
+    fsf.add_argument("--ledger", default="out/ledger/state.json", help="журнал проводок")
+    for flag, options in common:
+        fsf.add_argument(flag, **options)
+    fsf.set_defaults(func=cmd_forms)
     fk6 = fms.add_parser("ks6a", help="журнал учёта выполненных работ (КС-6а)")
     fk6.add_argument("--acts", default="data/demo/acts/acts.json")
     fk6.add_argument("--works", default=None, help="справочник «код → наименование»")
@@ -3494,9 +3578,15 @@ def main(argv=None):
     pay_cal = pay_sub.add_parser("calendar", help="норма дней и часов месяца")
     pay_cal.add_argument("period")
     pay_cal.set_defaults(func=cmd_payroll)
-    pay_accrue = pay_sub.add_parser("accrue", help="начислить за месяц по табелю")
+    pay_accrue = pay_sub.add_parser("accrue", help="начислить за месяц по табелю и приказам")
     pay_accrue.add_argument("--timesheet", required=True)
+    pay_accrue.add_argument("--orders", default=None,
+                            help="файл приказов: больничные, отпускные, премии")
     pay_accrue.set_defaults(func=cmd_payroll)
+    pay_orders = pay_sub.add_parser("orders", help="приказы: что посчитано и что нет")
+    pay_orders.add_argument("--orders", required=True)
+    pay_orders.add_argument("--period", required=True)
+    pay_orders.set_defaults(func=cmd_payroll)
     pay_sheet = pay_sub.add_parser("sheet", help="расчётная ведомость Т-51")
     pay_sheet.add_argument("--period", required=True)
     pay_sheet.add_argument("--out", default=None)
@@ -3525,12 +3615,15 @@ def main(argv=None):
     tax_rates.set_defaults(func=cmd_tax)
     for name, help_text in (("vat", "декларация по НДС из журнала"),
                             ("ndfl", "6-НДФЛ из ведомости"),
-                            ("rsv", "РСВ и травматизм")):
+                            ("rsv", "РСВ и травматизм"),
+                            ("profit", "налог на прибыль из журнала"),
+                            ("advances", "НДС с авансов отдельными строками"),
+                            ("post-advances", "провести НДС с авансов на 76.АВ")):
         node = tax_sub.add_parser(name, help=help_text)
         node.add_argument("period")
         node.set_defaults(func=cmd_tax)
     tax_xml = tax_sub.add_parser("xml", help="XML отчёта")
-    tax_xml.add_argument("kind", choices=["vat", "ndfl6", "rsv"])
+    tax_xml.add_argument("kind", choices=["vat", "ndfl6", "rsv", "profit"])
     tax_xml.add_argument("period")
     tax_xml.set_defaults(func=cmd_tax)
     taxes.set_defaults(func=cmd_tax)
@@ -3576,9 +3669,9 @@ def main(argv=None):
 
     args = p.parse_args(argv)
     result = args.func(args)
-    if args.cmd in ("audit-verify", "approve", "prices", "materials", "procure", "audit",
-                    "takeoff", "tk", "cumulative", "atn", "consumption", "checklist",
-                    "journal", "quality", "docflow", "correspondence", "pack", "finance",
-                    "monthly", "forms", "stock"):
+    # Код возврата подкоманды — часть контракта с CI и скриптами: раньше он отдавался только
+    # для команд из белого списка, и отказ `sync-1c`, `review`, `payroll` или `tax` выглядел
+    # как успех (exit 0). Отказ обязан быть виден вызывающему.
+    if isinstance(result, int) and not isinstance(result, bool):
         return result
     return 0

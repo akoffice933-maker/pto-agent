@@ -1,0 +1,192 @@
+{% extends "base.html" %}
+{% block title %}Налоги{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Налоги за {{ period }}</h1>
+  <div class="muted">НДС, НДС с авансов, 6-НДФЛ, РСВ и налог на прибыль считаются теми же функциями,
+    что и в CLI (<code>tax.py</code>). Экран показывает результат и расхождения; сдавать отчётность
+    отсюда нельзя — выгрузки в формате ФНС и подписи в контуре нет.</div>
+</div>
+
+<section class="card">
+  <form method="get" action="/taxes" class="row">
+    <label class="inline">период
+      <select name="period" onchange="this.form.submit()">
+        {% for item in periods %}<option value="{{ item }}" {{ 'selected' if item == period else '' }}>{{ item }}</option>{% endfor %}
+      </select>
+    </label>
+    <noscript><button class="link" type="submit">показать</button></noscript>
+  </form>
+  {% if problems %}
+  <div class="flash flash-err">
+    {% for item in problems %}<div><b>{{ item.code }}</b> · {{ item.what }}: {{ item.why }}</div>{% endfor %}
+  </div>
+  {% else %}
+  <div class="flash flash-ok">Расхождений нет: суммы сошлись с журналом и ведомостью.</div>
+  {% endif %}
+</section>
+
+{% if vat %}
+<section class="card">
+  <h2>НДС за {{ period }}</h2>
+  <table class="table compact">
+    <thead><tr><th>объект</th><th class="num">реализация без НДС</th><th class="num">НДС</th><th>акты</th></tr></thead>
+    <tbody>
+    {% for row in vat.rows %}
+      <tr><td>{{ row.object }}</td><td class="num">{{ row.sales|rub }}</td>
+          <td class="num">{{ row.vat|rub }}</td><td class="small">{{ row.acts|join(', ') }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">
+    Начислено {{ vat.totals.vat_charged|rub }}, к вычету {{ vat.totals.vat_deducted|rub }},
+    с авансов {{ vat.totals.vat_on_advances|rub }} (вычет при отгрузке
+    {{ vat.totals.vat_on_advances_offset|rub }}), <b>к уплате {{ vat.totals.payable|rub }}</b>.
+  </p>
+  {% if vat.advances %}
+  <h3>НДС с авансов отдельными строками</h3>
+  <table class="table compact">
+    <thead><tr><th>строка</th><th>что</th><th class="num">сумма</th><th>источник</th></tr></thead>
+    <tbody>
+    {% for row in vat.advances.lines %}
+      <tr><td>{{ row.line }}{% if row.verify %} <span class="badge">на проверку</span>{% endif %}</td>
+          <td>{{ row.what }}</td><td class="num">{{ row.amount|rub }}</td>
+          <td class="small muted">{{ row.source }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">Получено авансов {{ vat.advances.received|rub }}, зачтено
+    {{ vat.advances.offset|rub }}, ставка {{ vat.advances.rate }} %. {{ vat.advances.note }}</p>
+  {% endif %}
+  {% if vat.rate_audit %}
+  <h3>Проверка ставок в первичке</h3>
+  <table class="table compact">
+    <thead><tr><th>документ</th><th>дата</th><th class="num">ставка в журнале</th><th class="num">законная</th><th class="num">расхождение</th></tr></thead>
+    <tbody>
+    {% for row in vat.rate_audit %}
+      <tr><td>{{ row.document }}</td><td>{{ row.date }}</td>
+          <td class="num">{{ row.rate_implied }} %</td><td class="num">{{ row.rate_lawful }} %</td>
+          <td class="num">{{ row.gap|rub }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  <p class="muted small">Срок сдачи: {{ deadlines.vat.return }}.</p>
+</section>
+{% else %}
+<section class="card"><h2>НДС</h2><p class="muted">В журнале нет операций за {{ period }} —
+  декларацию не из чего собрать.</p></section>
+{% endif %}
+
+{% if profit %}
+<section class="card">
+  <h2>Налог на прибыль за {{ period }}</h2>
+  <table class="table compact">
+    <thead><tr><th>объект</th><th class="num">доходы без НДС</th><th class="num">расходы</th><th class="num">прибыль</th><th>акты</th></tr></thead>
+    <tbody>
+    {% for row in profit.rows %}
+      <tr><td>{{ row.object }}{% if row.partial %} <span class="badge">месяц не закрыт</span>{% endif %}</td>
+          <td class="num">{{ row.revenue|rub }}</td><td class="num">{{ row.cost|rub }}</td>
+          <td class="num">{{ row.profit|rub }}</td><td class="small">{{ row.acts|join(', ') }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">
+    Прибыль от реализации {{ profit.totals.profit|rub }} · федеральный
+    {{ profit.totals.federal_tax|rub }} ({{ profit.totals.federal_rate }} %) + региональный
+    {{ profit.totals.regional_tax|rub }} ({{ profit.totals.regional_rate }} %) =
+    <b>{{ profit.totals.tax|rub }}</b>. Форма КНД 1151006; заполнен только расчёт от реализации.
+  </p>
+  {% if profit.not_included %}
+  <h3>Что не считается</h3>
+  <ul class="muted small">
+    {% for item in profit.not_included %}<li><b>{{ item.what }}</b>: {{ item.why }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if not ndfl %}
+<section class="card">
+  <h2>6-НДФЛ, РСВ и травматизм за {{ period }}</h2>
+  <p class="muted">В ведомостях нет начислений за {{ period }}: 6-НДФЛ и РСВ не из чего собрать.
+    Нули не показываем — нулевая декларация и отсутствие данных это разные вещи.</p>
+</section>
+{% endif %}
+
+{% if ndfl %}
+<section class="card">
+  <h2>6-НДФЛ за {{ period }}</h2>
+  <table class="table compact">
+    <thead><tr><th>таб.</th><th>сотрудник</th><th class="num">доход</th><th class="num">вычет</th><th class="num">НДФЛ</th></tr></thead>
+    <tbody>
+    {% for row in ndfl.rows %}
+      <tr><td>{{ row.tab }}</td><td>{{ row.name }}</td><td class="num">{{ row.income|rub }}</td>
+          <td class="num">{{ row.deduction|rub }}</td><td class="num">{{ row.tax|rub }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">Доход {{ ndfl.totals.income|rub }}, вычеты {{ ndfl.totals.deduction|rub }},
+    удержано {{ ndfl.totals.tax_withheld|rub }}{% if ndfl.totals.tax_in_ledger is defined %},
+    в журнале по 68.01 {{ ndfl.totals.tax_in_ledger|rub }}{% endif %}.
+    Срок сдачи: {{ deadlines.ndfl_return_day }}-е число.</p>
+  <p class="muted small">В доход попадает и больничный (часть работодателя): пособие облагается
+    НДФЛ, но взносами — нет, поэтому база в РСВ ниже дохода в 6-НДФЛ.</p>
+</section>
+{% endif %}
+
+{% if rsv %}
+<section class="card">
+  <h2>РСВ и травматизм за {{ period }}</h2>
+  <table class="table compact">
+    <thead><tr><th>таб.</th><th>сотрудник</th><th class="num">база</th><th class="num">взносы</th><th class="num">травматизм</th></tr></thead>
+    <tbody>
+    {% for row in rsv.rows %}
+      <tr><td>{{ row.tab }}</td><td>{{ row.name }}</td><td class="num">{{ row.base|rub }}</td>
+          <td class="num">{{ row.contrib|rub }}</td><td class="num">{{ row.injury|rub }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">База {{ rsv.totals.base|rub }}, взносы {{ rsv.totals.contrib|rub }},
+    травматизм {{ rsv.totals.injury|rub }}; тариф {{ rsv.tariffs.rate }} % до
+    {{ rsv.tariffs.base_limit|rub }}, сверх — {{ rsv.tariffs.over_rate }} %,
+    травматизм {{ rsv.tariffs.injury }} % (класс {{ rsv.tariffs.injury_class }}).
+    Срок сдачи: {{ deadlines.rsv_day }}-е число.</p>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>Формы и сроки</h2>
+  <table class="table compact">
+    <thead><tr><th>отчёт</th><th>КНД</th><th>приказ</th><th>формат</th><th>состояние</th></tr></thead>
+    <tbody>
+    {% for key, title in (('vat','НДС'), ('rsv','РСВ'), ('profit','Прибыль'), ('property','Имущество')) %}
+      {% set form = forms.get(key) or {} %}
+      {% if form %}
+      <tr>
+        <td>{{ title }}</td>
+        <td>{{ form.knd or '—' }}</td>
+        <td class="small">{{ form.order or '—' }}</td>
+        <td class="small">{{ form.format_version or '—' }}</td>
+        <td class="small">{% if form.knd_note %}{{ form.knd_note }}{% elif form.verify %}
+          <span class="badge">сверить</span>{% else %}{{ form.state or 'подтверждено' }}{% endif %}</td>
+      </tr>
+      {% endif %}
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="card">
+  <h2>Не сделано</h2>
+  <p class="muted small">Это не «потом допишем», а то, чего в контуре нет: экран обязан сказать
+    это прямо, иначе расчёт выглядит полным, не будучи им.</p>
+  <ul class="muted small">
+    {% for text in not_implemented %}<li>{{ text }}</li>{% endfor %}
+    {% for text in payroll_not_included %}<li>зарплата: {{ text }}</li>{% endfor %}
+    <li>сдача отчётности: выгрузки в формате ФНС (XSD 5.07 / 1.34) и отправки в личный кабинет
+      нет; XML собирается в нашем пространстве имён и со схемой ФНС не сверялся</li>
+    <li>подпись декларации: УКЭП не подключена, поэтому любая выгрузка — черновик без подписи</li>
+  </ul>
+</section>
+{% endblock %}
