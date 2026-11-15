@@ -192,8 +192,11 @@ def advances_vat(state: dict, period: str, *, rates: dict | None = None) -> dict
         "issued": {
             "advance": num(turnover(state, "60.02", period, side=ledger.DEBIT, prefix=False)),
             "offset": num(turnover(state, "60.02", period, side=ledger.CREDIT, prefix=False)),
-            "in_ledger": num(turnover(state, "76.ВА", period, side=ledger.DEBIT, prefix=False)),
-            "restored": num(turnover(state, "76.ВА", period, side=ledger.CREDIT, prefix=False)),
+            # 76.ВА — активный счёт: вычет налога с выданного аванса идёт в КРЕДИТ
+            # (Дт 68.02 Кт 76.ВА), восстановление при зачёте — в ДЕБЕТ (Дт 76.ВА Кт 68.02).
+            # В круге 32 здесь были перепутаны стороны, и вычет выглядел как 0.
+            "in_ledger": num(turnover(state, "76.ВА", period, side=ledger.CREDIT, prefix=False)),
+            "restored": num(turnover(state, "76.ВА", period, side=ledger.DEBIT, prefix=False)),
             "account": "76.ВА",
             "note": ("выданные авансы: вычет идёт на 76.ВА только по документам со ставкой; "
                      "если ставки в документе нет — вычет не ставим и запрашиваем счёт-фактуру"),
@@ -207,6 +210,14 @@ def advances_vat(state: dict, period: str, *, rates: dict | None = None) -> dict
             {"line": "3-130", "what": "НДС с авансов, принятый к вычету при отгрузке",
              "amount": num(vat_offset), "verify": True,
              "source": "проводки зачёта аванса Дт 62.02 Кт 62.01"},
+            {"line": None, "what": "НДС с авансов, выданных поставщикам (к вычету)",
+             "amount": num(turnover(state, "76.ВА", period, side=ledger.CREDIT, prefix=False)),
+             "verify": True,
+             "source": "проводки Дт 68.02 Кт 76.ВА по документам со ставкой (п. 12 ст. 171 НК РФ)"},
+            {"line": None, "what": "НДС с выданных авансов, восстановленный при зачёте",
+             "amount": num(turnover(state, "76.ВА", period, side=ledger.DEBIT, prefix=False)),
+             "verify": True,
+             "source": "проводки Дт 76.ВА Кт 68.02 при зачёте аванса (п. 3 ст. 170 НК РФ)"},
         ],
         "note": ("номера строк помечены «на проверку»: форма НДС менялась приказом ФНС "
                  "от 18.12.2025 № ЕД-7-3/1227@ — перед сдачей сверять с действующей редакцией"),
@@ -334,10 +345,35 @@ def post_advance_vat(state: dict, period: str, *, rates: dict | None = None,
     # ── выданные авансы: НДС к вычету (76.ВА) ─────────────────────────────
     # Сумма налога берётся только из документа: ставку «по умолчанию» не подставляем —
     # ровно как в правиле stock.receipt для 19.03.
+    # ставка по контрагенту и договору из всех документов: зачёт аванса — это не новый
+    # документ, ставка в нём не повторяется, её надо взять из самого аванса
+    rates_by_deal: dict[tuple[str, str], Decimal] = {}
+    for entry in state.get("entries") or []:
+        doc = entry.get("doc") or {}
+        hint = (doc.get("vat") or {}).get("rate") if isinstance(doc.get("vat"), dict) else None
+        if not hint:
+            continue
+        line = next((row for row in entry.get("lines") or []
+                     if str(row.get("account")) == "60.02"), None)
+        if not line:
+            continue
+        analytics = line.get("analytics") or {}
+        key = (str(analytics.get("контрагент") or ""), str(analytics.get("договор") or ""))
+        rates_by_deal.setdefault(key, Decimal(str(hint)))
+
     for entry in _entries(state, period):
         doc = entry.get("doc") or {}
         rate_hint = (doc.get("vat") or {}).get("rate") if isinstance(doc.get("vat"), dict) else \
             doc.get("vat_rate")
+        if not rate_hint:
+            # зачёт аванса: берём ставку из документа самого аванса
+            probe = next((row for row in entry.get("lines") or []
+                          if str(row.get("account")) == "60.02"), None)
+            analytics_probe = (probe or {}).get("analytics") or {}
+            found = rates_by_deal.get((str(analytics_probe.get("контрагент") or ""),
+                                       str(analytics_probe.get("договор") or "")))
+            if found:
+                rate_hint = found
         if not rate_hint:
             result["gaps"].append(
                 {"what": f"ставка НДС в документе аванса выданного {doc.get('number') or ''}",
@@ -424,8 +460,15 @@ def vat_return(state: dict, period: str, *, rates: dict | None = None,
     output_vat = turnover(state, "90.03", period, side=ledger.DEBIT)
     net_sales = gross - output_vat
     advances = advances_vat(state, period, rates=rates)
-    # вычеты, не связанные с авансами: зачёт 19.03 и прочие проводки по 68.02
-    non_advance_deducted = vat_account_debit - kopeck(advances["in_ledger"]["deducted"])
+    # выданные авансы: вычет живёт в журнале (76.ВА) и до круга 33 в декларации отсутствовал —
+    # журнал знал про вычет больше, чем декларация. Теперь это отдельная строка.
+    issued_deducted = kopeck(advances["issued"]["in_ledger"])
+    issued_restored = kopeck(advances["issued"]["restored"])
+    # вычеты, не связанные с авансами: зачёт 19.03 и прочие проводки по 68.02.
+    # Вычеты по авансам (полученным на 76.АВ и выданным на 76.ВА) вычитаются из оборота
+    # 68.02 явно, иначе они попадут в «прочие» и потеряют название
+    non_advance_deducted = (vat_account_debit
+                            - kopeck(advances["in_ledger"]["deducted"]) - issued_deducted)
     if non_advance_deducted < 0:
         non_advance_deducted = Decimal("0")
     charged, deducted = output_vat, non_advance_deducted
@@ -479,12 +522,17 @@ def vat_return(state: dict, period: str, *, rates: dict | None = None,
 
     report["advances"] = advances
     advance_vat = kopeck(advances["vat_on_received"]) - kopeck(advances["vat_on_offset"])
-    payable = charged - deducted + advance_vat
+    # вычет по выданным авансам уменьшает налог, восстановление — увеличивает
+    payable = charged - deducted + advance_vat - issued_deducted + issued_restored
     report["totals"] = {"sales": num(net_sales), "sales_gross": num(gross),
                         "vat_charged": num(charged), "vat_deducted": num(deducted),
                         "vat_from_sales": num(output_vat),
                         "vat_on_advances": num(kopeck(advances["vat_on_received"])),
                         "vat_on_advances_offset": num(kopeck(advances["vat_on_offset"])),
+                        "vat_on_issued_advances": num(issued_deducted),
+                        "vat_on_issued_restored": num(issued_restored),
+                        "vat_deducted_total": num(deducted + kopeck(advances["in_ledger"]["deducted"])
+                                                  + issued_deducted),
                         "payable": num(payable),
                         "refund": num(-payable) if payable < 0 else 0.0}
 
@@ -516,13 +564,22 @@ def vat_return(state: dict, period: str, *, rates: dict | None = None,
 
     advance_vat = kopeck(advances["vat_on_received"])
     advance_off = kopeck(advances["vat_on_offset"])
-    if output_vat + kopeck(advances["in_ledger"]["accrued"]) != vat_account_credit:
+    expected_credit = output_vat + kopeck(advances["in_ledger"]["accrued"]) + issued_restored
+    if expected_credit != vat_account_credit:
         report["problems"].append({
             "code": "VAT_MISMATCH", "what": period,
-            "why": f"НДС начисленный: по 90.03 {rub(output_vat)} + с авансов "
-                   f"{rub(advance_vat)} ≠ оборот Кт 68.02 {rub(vat_account_credit)}: расхождение "
-                   f"{rub(output_vat + advance_vat - vat_account_credit)} — либо не все счета-фактуры "
+            "why": f"НДС начисленный: по 90.03 {rub(output_vat)} + с авансов полученных "
+                   f"{rub(advance_vat)} + восстановлено по выданным {rub(issued_restored)} ≠ "
+                   f"оборот Кт 68.02 {rub(vat_account_credit)}: расхождение "
+                   f"{rub(expected_credit - vat_account_credit)} — либо не все счета-фактуры "
                    f"зарегистрированы, либо налог начислен не тем счётом"})
+
+    # вычет по выданным авансам: журнал и декларация должны сходиться по каждой стороне
+    if issued_deducted > 0 and not report.get("problems"):
+        report["warnings"].append(
+            f"НДС с выданных авансов принят к вычету на {rub(issued_deducted)} (76.ВА), "
+            f"но счёт-фактура поставщика на аванс в контуре не зарегистрирована: вычет "
+            f"заявлен по проводке, а не по документу — до сдачи нужен реестр счетов-фактур")
     if advance_off != (kopeck(advances["vat_on_offset"])) and \
             kopeck(advances["in_ledger"]["deducted"]) > kopeck(advances["vat_on_offset"]):
         report["problems"].append({

@@ -287,9 +287,13 @@ check(abs(with_adv["totals"]["payable"]
              + advances["to_pay"])) < 0.05, "к уплате не учёл НДС с авансов")
 check(any(item["code"] == "VAT_ADVANCE_NOT_POSTED" for item in with_adv["problems"]),
       "НДС с авансов попал в декларацию, но расхождение с журналом не названо")
-check(len(with_adv["advances"]["lines"]) == 2 and all(row["verify"]
-                                                      for row in with_adv["advances"]["lines"]),
-      "строки авансового НДС не помечены «на проверку»")
+# строк стало четыре: начисление и вычет по полученным + вычет и восстановление по выданным
+check(len(with_adv["advances"]["lines"]) == 4
+      and all(row["verify"] for row in with_adv["advances"]["lines"]),
+      f"строк авансового НДС {len(with_adv['advances']['lines'])}, и не все помечены "
+      f"«на проверку»")
+check(any("выданных" in row["what"] for row in with_adv["advances"]["lines"]),
+      "в строках НДС с авансов нет строки по выданным авансам")
 
 # ── 12. проводки НДС с авансов на 76.АВ ────────────────────────────────────
 posted = tax.post_advance_vat(adv, "2026-10", rates=rates)

@@ -26,7 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from .. import closing, forms, ledger, payroll, stock, tax, treasury
+from .. import closing, forms, invoices, ledger, payroll, stock, tax, treasury
 from . import auth, rbac
 from .store import Store
 
@@ -840,12 +840,19 @@ def create_app(*, root: str | Path | None = None, data_dir: str | Path | None = 
         payload = (json.loads(assets_path.read_text(encoding="utf-8"))
                    if assets_path.exists() else {})
         property_report = tax.property_tax(payload, prop_year, rates=rates)
+        # книга продаж: из реестра счетов-фактур, со сверкой с журналом
+        invoices_state = store.invoices_state()
+        sales_book = None
+        if periods:
+            sales_book = invoices.sales_book(invoices_state, ledger_state, period,
+                                             rates=rates)
+            sales_book["registry_empty"] = not (invoices_state.get("issued") or [])
         problems = []
         for report in (vat, ndfl, rsv_report, profit, property_report):
             if report:
                 problems.extend(report.get("problems") or [])
                 problems.extend(tax.validate(report, rates=rates))
-        return render(request, "taxes.html", user, period=period,
+        return render(request, "taxes.html", user, period=period, sales_book=sales_book,
                       year=prop_year, property=property_report,
                       periods=sorted(set(periods) | set(payroll_periods)),
                       vat=vat, ndfl=ndfl, rsv=rsv_report, profit=profit,
@@ -855,6 +862,30 @@ def create_app(*, root: str | Path | None = None, data_dir: str | Path | None = 
                       not_implemented=rates.get("not_implemented") or [],
                       payroll_not_included=(payroll.load_rules().get("not_implemented") or []),
                       can_file=False)
+
+    @app.post("/taxes/invoices", response_class=HTMLResponse)
+    async def taxes_issue_invoices(request: Request):
+        """Выставить счета-фактуры за период из журнала: нумерация и реестр.
+
+        Счета-фактуры выставляет человек: экран только нумерует и записывает документы.
+        Ничего не проводится — проводки уже есть в журнале, книга продаж строится по ним.
+        """
+        user = _guard(request, "taxes.view")
+        form = await request.form()
+        _check_csrf(request, str(form.get("csrf") or ""))
+        period = str(form.get("period") or "").strip() or _default_period(store)
+        ledger_state = store.ledger_state()
+        with store.lock:
+            registry = store.invoices_state()
+            result = invoices.auto_issue(registry, ledger_state, period)
+            store.save_invoices(registry)
+        _audit(request, user, "счёт-фактура.выставлены", period,
+               {"posted": result["posted"], "duplicates": result["duplicates"],
+                "rejected": result["rejected"]})
+        _flash(request, "ok" if not result["rejected"] else "warn",
+               f"{period}: выставлено {result['posted']}, уже было "
+               f"{result['duplicates']}, отклонено {result['rejected']}")
+        return RedirectResponse(f"/taxes?period={quote(period)}", status_code=303)
 
     @app.get("/closing", response_class=HTMLResponse)
     def closing_page(request: Request):
