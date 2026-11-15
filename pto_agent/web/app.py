@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import secrets
 from datetime import date as _date
@@ -831,12 +832,21 @@ def create_app(*, root: str | Path | None = None, data_dir: str | Path | None = 
         rsv_report = (tax.rsv(payroll_state, period, ledger_state=ledger_state, rates=rates)
                       if period in payroll_periods else None)
         profit = tax.profit_return(ledger_state, period, rates=rates) if periods else None
+        # имущество считается за год: отдельный параметр, чтобы месяц и год не путались
+        # регистр недвижимости лежит в контуре (его копирует build_demo); если его нет —
+        # это «нет данных», а не «налог равен нулю»
+        assets_path = store.root / "property" / "assets.json"
+        prop_year = request.query_params.get("year") or period[:4]
+        payload = (json.loads(assets_path.read_text(encoding="utf-8"))
+                   if assets_path.exists() else {})
+        property_report = tax.property_tax(payload, prop_year, rates=rates)
         problems = []
-        for report in (vat, ndfl, rsv_report, profit):
+        for report in (vat, ndfl, rsv_report, profit, property_report):
             if report:
                 problems.extend(report.get("problems") or [])
                 problems.extend(tax.validate(report, rates=rates))
         return render(request, "taxes.html", user, period=period,
+                      year=prop_year, property=property_report,
                       periods=sorted(set(periods) | set(payroll_periods)),
                       vat=vat, ndfl=ndfl, rsv=rsv_report, profit=profit,
                       problems=problems, rates=rates,

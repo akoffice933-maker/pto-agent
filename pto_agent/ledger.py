@@ -217,6 +217,20 @@ def _analytics_ok(chart: dict, line: dict) -> list[str]:
     return missing
 
 
+def _doc_payload(doc: dict, date: str) -> dict:
+    """Что от документа остаётся в проводке. НДС — только если он есть в документе.
+
+    Ставка нужна налоговым расчётам (76.ВА, 19.03): без неё вычет не посчитать, а
+    «по умолчанию 22 %» — это выдуманная цифра. Поэтому поле едет вместе с проводкой,
+    но не появляется там, где его не было.
+    """
+    payload = {"number": str(doc.get("number") or ""), "date": str(doc.get("date") or date),
+               "kind": doc.get("kind") or ""}
+    if doc.get("vat"):
+        payload["vat"] = doc["vat"]
+    return payload
+
+
 def post_entry(state: dict, *, event: str, date: str, doc: dict, lines: list[dict],
                kind: str = "balance", memo: str = "", rule: str = "", key: str = "",
                bases: list[dict] | None = None, chart: dict | None = None,
@@ -313,8 +327,7 @@ def post_entry(state: dict, *, event: str, date: str, doc: dict, lines: list[dic
             return result
         proposal = {"id": f"Пр-{len(state.get('proposals') or []) + 1:04d}",
                     "date": date, "period": period_of(date), "event": event, "rule": rule,
-                    "kind": kind, "doc": {"number": number, "date": str(doc.get("date") or date),
-                                          "kind": doc.get("kind") or ""},
+                    "kind": kind, "doc": _doc_payload(doc, date),
                     "memo": memo, "lines": clean, "bases": list(bases or []), "key": entry_key}
         state.setdefault("proposals", []).append(proposal)
         result.update({"status": STATUS_PROPOSED, "proposal": proposal})
@@ -329,8 +342,7 @@ def post_entry(state: dict, *, event: str, date: str, doc: dict, lines: list[dic
     prev = str((state.get("entries") or [{}])[-1].get("hash") or "") if state.get("entries") else ""
     payload = {"id": _entry_id(state), "date": date, "period": period_of(date),
                "event": event, "rule": rule, "kind": kind,
-               "doc": {"number": number, "date": str(doc.get("date") or date),
-                       "kind": doc.get("kind") or ""},
+               "doc": _doc_payload(doc, date),
                "memo": memo, "lines": clean, "bases": list(bases or []),
                "key": entry_key, "prev_hash": prev}
     entry = dict(payload)

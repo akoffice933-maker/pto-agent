@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from pto_agent import closing, ledger, orders, payroll, stock, tax
+from pto_agent import closing, ledger, orders, payroll, stock, tax, treasury
 
 REPO = Path(__file__).resolve().parents[1]
 OBJECT = "ЖК «Северный», корпус 2"
@@ -362,3 +362,133 @@ def test_reference_rules_have_sources(rules):
     assert benefits["vacation"]["avg_month_days"] == pytest.approx(29.3)
     assert benefits["sick"]["source"] and benefits["vacation"]["source"]
     assert Decimal(str(rules["mrot"])) == Decimal("27093")
+
+
+# ─────────────────────── налог на имущество (круг 32) ───────────────────────
+def _assets():
+    return json.loads((REPO / "data/demo/property/assets_2026.json").read_text(encoding="utf-8"))
+
+
+def test_property_advances_come_from_registry_not_from_rate():
+    """База аванса — средняя стоимость всех облагаемых объектов, а не деление налога на ставку."""
+    report = tax.property_tax(_assets(), "2026")
+    assert report["ready"] is True
+    bases = [row["basis"] for row in report["advance_payments"]]
+    assert bases == [120217500.0, 119835000.0, 119452500.0]
+    assert [row["amount"] for row in report["advance_payments"]] == [613196.0, 611093.0, 608989.0]
+    assert report["totals"]["advances_total"] == pytest.approx(1833278.0)
+
+
+def test_property_cadastral_object_and_year_total():
+    report = tax.property_tax(_assets(), "2026")
+    office = next(row for row in report["rows"] if row["base"] == "cadastral")
+    assert office["cadastral"] == pytest.approx(96000000.0)
+    assert office["advances"] == {"Q1": 480000.0, "H1": 480000.0, "9M": 480000.0}
+    assert office["year"] == pytest.approx(1920000.0)
+    assert report["totals"]["year"] == pytest.approx(2427540.0)
+    assert report["totals"]["to_pay_year"] == pytest.approx(594262.0)
+
+
+def test_property_movable_asset_is_excluded_with_reason():
+    report = tax.property_tax(_assets(), "2026")
+    movable = next(row for row in report["rows"] if not row["taxable"])
+    assert "374" in movable["why"], "причина исключения должна ссылаться на норму"
+    assert report["totals"]["objects"] == 3
+
+
+def test_property_incomplete_residual_values_is_no_data_not_zero():
+    """Порченый регистр — это `PROPERTY_NO_DATA`: ноль был бы выдуманной цифрой."""
+    payload = {"assets": [{"name": "Склад", "kind": "недвижимость", "base": "average",
+                           "residual": {"2026-01-01": 1000000, "2026-02-01": 900000}}]}
+    report = tax.property_tax(payload, "2026")
+    assert report["ready"] is False
+    codes = [item["code"] for item in report["problems"]]
+    assert "PROPERTY_NO_DATA" in codes
+    assert report["totals"].get("year") in (None, 0)
+
+
+def test_property_cadastral_without_value_is_not_taxed_silently():
+    payload = {"assets": [{"name": "Офис", "kind": "недвижимость", "base": "cadastral"}]}
+    report = tax.property_tax(payload, "2026")
+    assert report["ready"] is False
+    assert "PROPERTY_NO_DATA" in [item["code"] for item in report["problems"]]
+
+
+def test_property_deadlines_are_advances_then_declaration():
+    report = tax.property_tax(_assets(), "2026")
+    deadlines = report["deadlines"]
+    assert [row["deadline"] for row in report["advance_payments"]] == deadlines["advances"]
+    assert "25 февраля" in deadlines["declaration"]
+    assert "25" in deadlines["notice"], "уведомление по ЕНП — до 25-го числа"
+
+
+def test_property_posted_to_91_02_and_68_08():
+    state = ledger.new_state()
+    report = tax.property_tax(_assets(), "2026")
+    result = tax.post_property_tax(state, report, code="Q1")
+    assert result["status"] == ledger.STATUS_OK
+    assert ledger.balance_as_of(state, "91.02", "2026-04-30") == {(): Decimal("613196.00")}
+    assert ledger.balance_as_of(state, "68.08", "2026-04-30") == {(): Decimal("-613196.00")}
+    assert ledger.verify(state)["ok"] is True
+
+
+def test_property_posting_is_idempotent_and_unknown_period_rejected():
+    state = ledger.new_state()
+    report = tax.property_tax(_assets(), "2026")
+    tax.post_property_tax(state, report, code="Q1")
+    again = tax.post_property_tax(state, report, code="Q1")
+    assert again["status"] == ledger.STATUS_DUPLICATE
+    missing = tax.post_property_tax(state, report, code="Q2")
+    assert missing["status"] == ledger.STATUS_REJECTED
+    assert "PROPERTY_NO_PERIOD" in [item["code"] for item in missing["errors"]]
+
+
+def test_property_xml_and_markdown_are_not_fns_format():
+    report = tax.property_tax(_assets(), "2026")
+    xml = tax.to_xml(report)
+    assert "НеФорматФНС" in xml, "XML контура — не выгрузка для ФНС, это должно быть видно"
+    assert "<АвансыПоИмуществу>" in xml
+    text = tax.to_markdown(report)
+    assert "2 427 540,00" in text and "594 262,00" in text
+
+
+def _advance_scenario(contract: str | None):
+    state = ledger.new_state()
+    treasury_state = treasury.new_state(opening=50_000_000)
+    basis = {"number": "СЧ-908", "date": "2026-09-30", "kind": "счёт"}
+    if contract:
+        basis["contract"] = contract
+    treasury.add_request(treasury_state, {
+        "number": "З-501", "date": "2026-10-01", "article": "материалы", "amount": 12_200_000,
+        "counterparty": "ООО «Бетон-Сервис»", "requested_by": "snab", "vat": {"rate": 22},
+        "basis": basis}, rules=treasury.load_rules())
+    for role, person in (("снабжение", "Прохоров"), ("ПТО", "Кузнецов"),
+                         ("финдиректор", "Смирнов")):
+        treasury.approve(treasury_state, "З-501", role=role, person=person, date="2026-10-02")
+    treasury.pay(treasury_state, "З-501", date="2026-10-05", advance=True)
+    treasury.post_to_ledger(treasury_state, state)
+    return state
+
+
+def test_issued_advance_vat_goes_to_76_va_from_document_rate():
+    """Выданный аванс: Дт 68.02 Кт 76.ВА на 2 200 000 из ставки 22 % в заявке."""
+    state = _advance_scenario("Д-11/2025")
+    result = tax.post_advance_vat(state, "2026-10")
+    assert result["issued_deducted"] == pytest.approx(2200000.0)
+    assert ledger.balance_as_of(state, "76.ВА", "2026-10-31") == {(): Decimal("-2200000.00")}
+    again = tax.post_advance_vat(state, "2026-10")
+    assert again["duplicates"] >= 1, "повторный прогон не должен задваивать вычет"
+
+
+def test_issued_advance_without_contract_asks_instead_of_posting():
+    state = _advance_scenario(None)
+    result = tax.post_advance_vat(state, "2026-10")
+    assert result["issued_deducted"] == 0.0
+    assert any("договор" in item["what"] for item in result["gaps"])
+    assert ledger.balance_as_of(state, "76.ВА", "2026-10-31") == {}
+
+
+def test_advances_vat_reports_issued_side():
+    report = tax.advances_vat(ledger.new_state(), "2026-10")
+    assert report["issued"]["account"] == "76.ВА"
+    assert "ставк" in report["issued"]["note"]

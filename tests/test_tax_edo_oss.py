@@ -153,11 +153,18 @@ def test_forms_live_in_data_not_in_code():
 
 
 def test_unconfirmed_numbers_are_not_invented():
-    """Номер формы по имуществу не подтверждён — значит его нет, а не «похожий»."""
+    """История круга 32: номер формы по имуществу был «не подтверждён» — и его не было.
+
+    Теперь он подтверждён вторым поиском с точным номером приказа (ЕД-7-21/208@ →
+    КНД 1152026, формат 5.13). Правило прежнее: номер живёт в справочнике только вместе
+    с приказом; нет приказа — нет номера и есть `knd_note` с причиной.
+    """
     rates = json.loads((REPO / "data/reference/tax_rates.json").read_text(encoding="utf-8"))
     property_form = rates["forms"]["property"]
-    assert property_form.get("knd") is None
-    assert property_form.get("knd_note"), "вместо номера должна быть причина, почему его нет"
+    assert property_form["knd"] == "1152026"
+    assert "17.03.2025" in property_form["revision"], "редакция приказа должна быть названа"
+    assert property_form.get("verify") is False, \
+        "номер подтверждён приказом — флаг «на проверку» снят"
     for key, row in rates["forms"].items():
         if isinstance(row, dict) and row.get("verify"):
             assert row.get("order") or row.get("note"), \

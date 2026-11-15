@@ -28,6 +28,14 @@ def build(root: str | Path, *, demo_dir: str | Path | None = None,
     data_dir = Path(data_dir or REPO / "data" / "reference")
 
     catalog = _load(demo_dir / "stock" / "catalog.json")
+
+    # регистр недвижимости: экран налогов считает имущество по копии в контуре
+    assets_source = demo_dir / "property" / "assets_2026.json"
+    if assets_source.exists():
+        (root / "property").mkdir(parents=True, exist_ok=True)
+        (root / "property" / "assets.json").write_text(
+            json.dumps(_load(assets_source), ensure_ascii=False, indent=1) + "\n",
+            encoding="utf-8")
     documents = _load(demo_dir / "stock" / "documents_2026_10.json")
 
     stock_state = stock.new_state(object_name=catalog["object"],

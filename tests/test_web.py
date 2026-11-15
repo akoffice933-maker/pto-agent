@@ -477,7 +477,7 @@ def test_taxes_screen_shows_all_reports_and_its_limits(client):
     response = client.get("/taxes")
     assert response.status_code == 200
     for marker in ("НДС за", "НДС с авансов", "Налог на прибыль", "6-НДФЛ",
-                   "РСВ и травматизм", "Не сделано"):
+                   "РСВ и травматизм", "Налог на имущество", "Не сделано"):
         assert marker in response.text, f"на экране налогов нет блока «{marker}»"
     assert "сдача отчётности" in response.text or "сдавать отчётность" in response.text
 
@@ -494,3 +494,30 @@ def test_taxes_are_not_sent_from_screen(client):
     page = client.get("/taxes").text
     assert "УКЭП не подключена" in page
     assert "XSD" in page
+
+
+def test_taxes_screen_shows_property_tax_with_sources(client):
+    """Имущество считается за год: авансы по срокам, налог за год и «что не сделано»."""
+    login(client, "buh")
+    page = client.get("/taxes?year=2026").text
+    assert "Офис в бизнес-центре" in page, "объект по кадастру должен быть в таблице"
+    assert "2 427 540,00" in page, "налог за год из регистра"
+    assert "613 196,00" in page, "аванс за I квартал"
+    assert "не облагается" in page, "движимое имущество отсекается с причиной"
+    assert "Что не сделано по имуществу" in page, "не сделано пишется на экране"
+    assert "статьи 380" in page or "льгот" in page, "про льготы должно быть сказано прямо"
+
+
+def test_taxes_screen_property_reports_missing_registry_honestly(client, root):
+    """Если регистра нет — экран говорит об этом, а не показывает нули."""
+    import json as _json
+    path = root / "property" / "assets.json"
+    saved = path.read_text(encoding="utf-8")
+    try:
+        path.write_text(_json.dumps({"assets": []}, ensure_ascii=False), encoding="utf-8")
+        login(client, "buh")
+        page = client.get("/taxes?year=2026").text
+        assert "Расчёт не готов" in page
+        assert "регистр недвижимости" in page
+    finally:
+        path.write_text(saved, encoding="utf-8")
