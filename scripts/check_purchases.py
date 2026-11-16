@@ -43,7 +43,7 @@ def demo_ledger() -> dict:
     for number, name, net in (("УПД №118", "ООО «БетонТранс»", 1_426_000),
                               ("УПД №119", "ООО «МеталлСнаб»", 1_496_000),
                               ("УПД №120", "ООО «СтройБаза»", 98_000)):
-        vat = net * 0.20
+        vat = net * 0.22
         ledger.post_entry(state, event="receipt", date="2026-10-01",
                           doc={"number": number, "date": "2026-10-01", "kind": "upd"},
                           lines=[{"account": "20.01", "side": ledger.DEBIT, "amount": net,
@@ -76,16 +76,21 @@ ledger_state = demo_ledger()
 state = registry_state(ledger_state)
 book = invoices.purchase_book(state, ledger_state, "2026-10")
 check(book["totals"]["invoices"] == 2, f"строк в книге покупок {book['totals']['invoices']}")
-check(abs(book["totals"]["vat"] - 304_800) < 0.01,
-      f"НДС по книге покупок {book['totals']['vat']}, ожидали 304 800")
-check(abs(book["totals"]["journal_vat"] - 604_000) < 0.01,
-      f"вычет в журнале {book['totals']['journal_vat']}, ожидали 604 000")
-check(abs(book["totals"]["difference"] - 299_200) < 0.01,
-      f"непокрытый остаток {book['totals']['difference']}, ожидали 299 200")
+check(abs(book["totals"]["vat"] - 335_280) < 0.01,
+      f"НДС по книге покупок {book['totals']['vat']}, ожидали 335 280")
+check(abs(book["totals"]["journal_vat"] - 664_400) < 0.01,
+      f"вычет в журнале {book['totals']['journal_vat']}, ожидали 664 400")
+check(abs(book["totals"]["difference"] - 329_120) < 0.01,
+      f"непокрытый остаток {book['totals']['difference']}, ожидали 329 120")
 check(any(item["code"] == "PURCHASE_BOOK_MISMATCH" for item in book["problems"]),
       "расхождение книги с журналом не названо кодом PURCHASE_BOOK_MISMATCH")
-check(any("299 200" in str(gap.get("ask")) for gap in book["gaps"]),
+check(any("329 120" in str(gap.get("ask")) for gap in book["gaps"]),
       "в запросе нет суммы, которую надо закрыть счетом-фактурой")
+
+# демо-первичка обязана быть выписана по действующей ставке: иначе «Ставки в документах»
+# шумят всегда и перестают быть сигналом (круг 35, решение пользователя)
+check(not book["rate_notes"],
+      f"в демо есть документы по недействующей ставке: {book['rate_notes']}")
 
 # ── 2. СФ без проведённого основания ───────────────────────────────────────
 orphan = invoices.new_state()
@@ -118,11 +123,11 @@ down = invoices.register_correction(corr_state, for_kind="received", base_number
                                     date="2026-10-20", direction="decrease", delta_net=26_000,
                                     reason="сторнирование объёма бетона")
 check(down["status"] == invoices.STATUS_OK, f"уменьшение не зарегистрировано: {down['status']}")
-check(abs(down["correction"]["vat"] + 5_200) < 0.01,
-      f"НДС уменьшения {down['correction']['vat']}, ожидали -5200")
+check(abs(down["correction"]["vat"] + 5_720) < 0.01,
+      f"НДС уменьшения {down['correction']['vat']}, ожидали -5720")
 after_down = invoices.purchase_book(corr_state, ledger_state, "2026-10")
-check(abs(after_down["totals"]["vat"] - 299_600) < 0.01,
-      f"книга после уменьшения {after_down['totals']['vat']}, ожидали 299 600")
+check(abs(after_down["totals"]["vat"] - 329_560) < 0.01,
+      f"книга после уменьшения {after_down['totals']['vat']}, ожидали 329 560")
 
 up = invoices.register_correction(corr_state, for_kind="received", base_number="СФ №512",
                                   base_date="2026-10-03", number="К/513",
@@ -131,8 +136,8 @@ up = invoices.register_correction(corr_state, for_kind="received", base_number="
                                   reason="допоставка керамзита")
 check(up["status"] == invoices.STATUS_OK, f"увеличение не зарегистрировано: {up['status']}")
 after_up = invoices.purchase_book(corr_state, ledger_state, "2026-10")
-check(abs(after_up["totals"]["vat"] - 310_600) < 0.01,
-      f"книга после увеличения {after_up['totals']['vat']}, ожидали 310 600")
+check(abs(after_up["totals"]["vat"] - 340_560) < 0.01,
+      f"книга после увеличения {after_up['totals']['vat']}, ожидали 340 560")
 
 no_reason = invoices.register_correction(corr_state, for_kind="received", base_number="СФ №341",
                                          base_date="2026-10-01", number="К/514",
@@ -180,10 +185,10 @@ check(len(journal_report["part2"]) == 1,
       f"в журнале полученных {len(journal_report['part2'])} строк, ожидали 1")
 check(abs(journal_report["totals"]["vat2"] - 220_000) < 0.01,
       f"НДС полученных в журнале {journal_report['totals']['vat2']}, ожидали 220 000")
-check(journal_report["ready"] is False,
-      "журнал без кода вида операции помечен готовым")
-check(any("код вида операции" in str(gap.get("what")).lower() for gap in journal_report["gaps"]),
-      "отсутствие кода вида операции не названо в запросах")
+check(journal_report["ready"] is True,
+      "журнал не готов, хотя код вида операции выведен из справочника")
+check(journal_report["part2"][0]["operation_code"] == "01",
+      f"в журнале код {journal_report['part2'][0].get('operation_code')}, ожидали 01")
 empty_journal = invoices.intermediary_journal(state, "2026-10")
 check(not empty_journal["part1"] and not empty_journal["part2"],
       "журнал заполнился документами, не помеченными как посреднические")
@@ -196,8 +201,8 @@ report = closing.close_month(close_state, "2026-10",
                              dry_run=True)
 vat_step = next((step for step in report["steps"] if "19.03" in str(step.get("title"))), None)
 check(vat_step is not None, "в закрытии месяца нет шага зачёта НДС")
-check(abs(float(vat_step.get("amount") or 0) - 304_800) < 0.01,
-      f"закрытие зачло {vat_step.get('amount')} НДС, ожидали 304 800 (только по документам)")
+check(abs(float(vat_step.get("amount") or 0) - 335_280) < 0.01,
+      f"закрытие зачло {vat_step.get('amount')} НДС, ожидали 335 280 (только по документам)")
 check(vat_step.get("status") == "выполнено частично",
       f"частичный зачёт помечен как {vat_step.get('status')}")
 
@@ -212,7 +217,7 @@ check('КНД="1115103"' in xml_sales, "в выгрузке книги прод�
 check('СвереноСоСхемой="нет"' in xml_sales, "выгрузка не помечена как несверенная со схемой")
 xml_purchases = invoices.to_fns_xml(book, rules=invoices.load_rules())
 check('КНД="1115102"' in xml_purchases, "в выгрузке книги покупок нет КНД 1115102")
-check("285200.00" in xml_purchases and "19600.00" in xml_purchases,
+check("313720.00" in xml_purchases and "21560.00" in xml_purchases,
       "в выгрузке книги покупок нет сумм НДС по строкам")
 check("ПроверкаФайла" in xml_purchases, "в выгрузке нет перечня замечаний к файлу")
 xml_journal = invoices.to_fns_xml(journal_report)
@@ -237,7 +242,7 @@ print(f"корректировки: уменьшение уменьшает кн
       f"{after_down['totals']['vat']:,.2f} ₽, увеличение возвращает до "
       f"{after_up['totals']['vat']:,.2f} ₽")
 print(f"журнал посредников: выставлено {len(journal_report['part1'])}, получено "
-      f"{len(journal_report['part2'])}; код вида операции не заведён — запрос человеку")
+      f"{len(journal_report['part2'])}; код вида операции 01 — по правилу из приказа")
 print(f"выгрузка ФНС: КНД 1115103 / 1115102 / 1115104, все помечены «СвереноСоСхемой=нет»")
 print(f"проверок: {checks['done']}")
 if violations:

@@ -213,13 +213,16 @@
     Затем НДС по книге сверяется с начислением в журнале.</p>
   {% if sales_book.rows %}
   <table class="table compact">
-    <thead><tr><th>№ СФ</th><th>дата</th><th>вид</th><th>основание</th><th>покупатель</th>
-      <th class="num">без НДС</th><th class="num">ставка</th><th class="num">НДС</th><th class="num">с НДС</th></tr></thead>
+    <thead><tr><th>№ СФ</th><th>дата</th><th>код вида операции</th><th>вид</th><th>основание</th>
+      <th>покупатель</th><th class="num">без НДС</th><th class="num">ставка</th>
+      <th class="num">НДС</th><th class="num">с НДС</th></tr></thead>
     <tbody>
     {% for row in sales_book.rows %}
       <tr>
         <td>{{ row.number }}{% if row.late %} <span class="badge">просрочен +{{ row.late_days }} дн.</span>{% endif %}</td>
-        <td>{{ row.date }}</td><td class="small">{{ row.kind_title }}</td>
+        <td>{{ row.date }}</td>
+        <td class="num" title="{{ row.operation_code_why }}">{{ row.operation_code or "—" }}</td>
+        <td class="small">{{ row.kind_title }}</td>
         <td class="small">{{ row.base_number }}</td><td>{{ row.counterparty }}</td>
         <td class="num">{{ row.net|rub }}</td><td class="num">{{ row.rate }} %</td>
         <td class="num">{{ row.vat|rub }}</td><td class="num">{{ row.gross|rub }}</td>
@@ -263,12 +266,15 @@
     документу-основанию. НДС, которого нет в реестре, не зачитывается — он попадает в запрос.</p>
   {% if purchases_book.rows %}
   <table class="table compact">
-    <thead><tr><th>№ СФ поставщика</th><th>дата</th><th>основание</th><th>поставщик</th>
-      <th class="num">без НДС</th><th class="num">ставка</th><th class="num">НДС</th></tr></thead>
+    <thead><tr><th>№ СФ поставщика</th><th>дата</th><th>код вида операции</th><th>основание</th>
+      <th>поставщик</th><th class="num">без НДС</th><th class="num">ставка</th>
+      <th class="num">НДС</th></tr></thead>
     <tbody>
     {% for row in purchases_book.rows %}
       <tr>
-        <td>{{ row.number }}</td><td>{{ row.date }}</td>
+        <td>{{ row.number }}{% if row.fix_note %}<div class="muted small">{{ row.fix_note }}</div>{% endif %}</td>
+        <td>{{ row.date }}</td>
+        <td class="num" title="{{ row.operation_code_why }}">{{ row.operation_code or "—" }}</td>
         <td class="small">{{ row.base_number }}</td><td>{{ row.counterparty }}</td>
         <td class="num">{{ row.net|rub }}</td><td class="num">{{ row.rate }} %</td>
         <td class="num">{{ row.vat|rub }}</td>
@@ -301,6 +307,13 @@
     {% for gap in purchases_book.gaps %}<div>· {{ gap.what }} — {{ gap.why }}</div>{% endfor %}
   </div>
   {% endif %}
+  <p class="muted small">Код вида операции выведен правилом из справочника
+    ({{ purchases_book.rules.operation_codes.source }}): отгрузка и приобретение — 01,
+    аванс — 02, уменьшение — 18. Код не назначается «по смыслу»: правило и его источник
+    лежат рядом с кодом в <code>data/reference/vat_operation_codes.json</code>.</p>
+  <p class="muted small">Исправление счёта-фактуры не создаёт новый документ: номер и дата
+    остаются прежними, добавляются номер и дата исправления, и они видны в строке книги и в
+    выгрузке. Отметить: <code>invoices fix --kind received --number … --date … --fix-number …</code></p>
   <h3>Не сделано по книге покупок</h3>
   <ul class="muted small">
     {% for text in purchases_book.not_implemented %}<li>{{ text }}</li>{% endfor %}
@@ -349,11 +362,12 @@
   {% if journal.part1 or journal.part2 %}
   <h3>Часть 1. Выставленные</h3>
   <table class="table compact">
-    <thead><tr><th>№ п/п</th><th>№ СФ</th><th>дата</th><th>покупатель</th>
-      <th class="num">с НДС</th><th class="num">НДС</th></tr></thead>
+    <thead><tr><th>№ п/п</th><th>№ СФ</th><th>дата</th><th>код вида операции</th>
+      <th>покупатель</th><th class="num">с НДС</th><th class="num">НДС</th></tr></thead>
     <tbody>
     {% for row in journal.part1 %}
       <tr><td>{{ loop.index }}</td><td>{{ row.number }}</td><td>{{ row.date }}</td>
+        <td class="num" title="{{ row.operation_code_why }}">{{ row.operation_code or "—" }}</td>
         <td>{{ row.counterparty }}</td><td class="num">{{ row.gross|rub }}</td>
         <td class="num">{{ row.vat|rub }}</td></tr>
     {% endfor %}
@@ -361,11 +375,12 @@
   </table>
   <h3>Часть 2. Полученные</h3>
   <table class="table compact">
-    <thead><tr><th>№ п/п</th><th>№ СФ</th><th>дата</th><th>продавец</th>
-      <th class="num">с НДС</th><th class="num">НДС</th></tr></thead>
+    <thead><tr><th>№ п/п</th><th>№ СФ</th><th>дата</th><th>код вида операции</th>
+      <th>продавец</th><th class="num">с НДС</th><th class="num">НДС</th></tr></thead>
     <tbody>
     {% for row in journal.part2 %}
       <tr><td>{{ loop.index }}</td><td>{{ row.number }}</td><td>{{ row.date }}</td>
+        <td class="num" title="{{ row.operation_code_why }}">{{ row.operation_code or "—" }}</td>
         <td>{{ row.counterparty }}</td><td class="num">{{ row.gross|rub }}</td>
         <td class="num">{{ row.vat|rub }}</td></tr>
     {% endfor %}

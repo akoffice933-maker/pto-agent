@@ -2941,6 +2941,45 @@ def cmd_invoices(args) -> int:
             print(f"  · {gap.get('what')} — {gap.get('why')}", file=sys.stderr)
         return 1
 
+    if action == "fix":
+        if not path:
+            print("нужен реестр: --registry <файл>", file=sys.stderr)
+            return 2
+        state = sf.load(path) if path.exists() else sf.new_state()
+        result = sf.fix_invoice(state, for_kind=args.kind, number=args.number,
+                                date=args.date, fix_number=args.fix_number,
+                                fix_date=args.fix_date or "", reason=args.reason or "",
+                                rules=rules)
+        document = result.get("invoice") or {}
+        if result.get("status") == sf.STATUS_OK and document:
+            sf.save(state, path)
+            print(f"исправление № {document.get('fix_number')} от {document.get('fix_date')} · "
+                  f"к документу {document.get('number')} от {document.get('date')}")
+            for warning in result["warnings"]:
+                print(f"  ⚠ {warning}", file=sys.stderr)
+            return 0
+        print(f"не отмечено: {result.get('status')}", file=sys.stderr)
+        for item in result.get("errors") or []:
+            print(f"  ✗ {item.get('code')}: {item.get('why')}", file=sys.stderr)
+        for gap in result.get("gaps") or []:
+            print(f"  · {gap.get('what')} — {gap.get('why')}", file=sys.stderr)
+        return 1
+
+    if action == "codes":
+        codes = sf.load_operation_codes()
+        print(f"коды видов операций: {codes.get('source')}")
+        print(f"  где: {codes.get('where')}")
+        for row in codes.get("codes") or []:
+            print(f"  {row['code']} — {row['short']}")
+        print("правила вывода:")
+        for rule in codes.get("rules") or []:
+            print(f"  · {rule['when']} → {rule['code']} ({rule['why']})")
+        if codes.get("unresolved"):
+            print("не решается правилом:")
+            for text in codes["unresolved"]:
+                print(f"  · {text}")
+        return 0
+
     if action == "sf-xml":
         ledger_state = accounting.load(args.ledger)
         state = sf.load(path) if path and path.exists() else sf.new_state()
@@ -2962,7 +3001,8 @@ def cmd_invoices(args) -> int:
             print(f"  ⚠ не хватает: {gap.get('what')} — {gap.get('why')}", file=sys.stderr)
         return 0
 
-    print("что делать: rules · next · auto · sales-book · purchases · corr · journal · sf-xml",
+    print("что делать: rules · next · auto · sales-book · purchases · corr · fix · journal · "
+          "codes · sf-xml",
           file=sys.stderr)
     return 2
 
@@ -3876,6 +3916,17 @@ def main(argv=None):
     inv_jour = inv_sub.add_parser("journal", help="журнал учёта для посредников")
     inv_jour.add_argument("period")
     inv_jour.set_defaults(func=cmd_invoices)
+    inv_fix = inv_sub.add_parser("fix", help="отметить исправление счёта-фактуры")
+    inv_fix.add_argument("--kind", default="received", choices=["issued", "received"])
+    inv_fix.add_argument("--number", required=True, help="номер исправляемого СФ")
+    inv_fix.add_argument("--date", required=True, help="дата исправляемого СФ")
+    inv_fix.add_argument("--fix-number", default=None,
+                         help="номер исправления (у входящего — поставщика)")
+    inv_fix.add_argument("--fix-date", default=None)
+    inv_fix.add_argument("--reason", default=None)
+    inv_fix.set_defaults(func=cmd_invoices)
+    inv_codes = inv_sub.add_parser("codes", help="коды видов операций (приказ № ММВ-7-3/136@)")
+    inv_codes.set_defaults(func=cmd_invoices)
     inv_xml = inv_sub.add_parser("sf-xml", help="выгрузка книги/журнала в структуре формата ФНС")
     inv_xml.add_argument("period")
     inv_xml.add_argument("--book", default="sales", choices=["sales", "purchases", "journal"])

@@ -23,7 +23,7 @@ def demo_ledger() -> dict:
     for number, name, net in (("УПД №118", "ООО «БетонТранс»", 1_426_000),
                               ("УПД №119", "ООО «МеталлСнаб»", 1_496_000),
                               ("УПД №120", "ООО «СтройБаза»", 98_000)):
-        vat = net * 0.20
+        vat = net * 0.22
         result = ledger.post_entry(
             state, event="receipt", date="2026-10-01",
             doc={"number": number, "date": "2026-10-01", "kind": "upd"},
@@ -61,20 +61,26 @@ def book(ledger_state) -> dict:
 # ── книга покупок ──────────────────────────────────────────────────────────
 def test_purchase_book_totals(book):
     assert book["totals"]["invoices"] == 2
-    assert book["totals"]["vat"] == pytest.approx(304_800)
-    assert book["totals"]["journal_vat"] == pytest.approx(604_000)
-    assert book["totals"]["difference"] == pytest.approx(299_200)
+    assert book["totals"]["vat"] == pytest.approx(335_280)
+    assert book["totals"]["journal_vat"] == pytest.approx(664_400)
+    assert book["totals"]["difference"] == pytest.approx(329_120)
 
 
 def test_purchase_book_names_missing_invoice(book):
     codes = [item["code"] for item in book["problems"]]
     assert "PURCHASE_BOOK_MISMATCH" in codes
-    assert any("299 200" in str(gap.get("ask")) for gap in book["gaps"])
+    assert any("329 120" in str(gap.get("ask")) for gap in book["gaps"])
 
 
-def test_purchase_book_flags_rate_mismatch(book):
-    assert book["rate_notes"], "ставка 20 % при законной 22 % должна быть названа"
-    assert all("22" in note for note in book["rate_notes"])
+def test_purchase_book_flags_rate_mismatch(ledger_state):
+    """Демо приведено к 22 % (круг 35), поэтому расхождение проверяется отдельным документом."""
+    state = registry_state(ledger_state)
+    invoices.register_purchase(state, number="СФ №900", date="2026-10-08",
+                               base_number="УПД №118", base_date="2026-10-01",
+                               counterparty="ООО «БетонТранс»", net=1000, rate=20)
+    report = invoices.purchase_book(state, ledger_state, "2026-10")
+    assert report["rate_notes"], "ставка 20 % при законной 22 % должна быть названа"
+    assert all("22" in note for note in report["rate_notes"])
 
 
 def test_invoice_without_posting_is_flagged(ledger_state):
@@ -131,7 +137,7 @@ def test_for_closing_contract(ledger_state):
     assert set(contract) == {"invoices"}
     first = contract["invoices"][0]
     assert first["document"] == "УПД №118"
-    assert first["vat"] == pytest.approx(285_200)
+    assert first["vat"] == pytest.approx(313_720)
 
 
 def test_closing_deducts_only_documented_vat(ledger_state):
@@ -140,7 +146,7 @@ def test_closing_deducts_only_documented_vat(ledger_state):
         state, "2026-10",
         invoices=invoices.for_closing(registry_state(state), "2026-10"), dry_run=True)
     step = next(item for item in report["steps"] if "19.03" in str(item.get("title")))
-    assert float(step["amount"]) == pytest.approx(304_800)
+    assert float(step["amount"]) == pytest.approx(335_280)
     assert step["status"] == "выполнено частично"
 
 
@@ -153,9 +159,9 @@ def test_decrease_reduces_book(ledger_state):
                                           delta_net=26_000,
                                           reason="сторнирование объёма бетона")
     assert result["status"] == invoices.STATUS_OK
-    assert result["correction"]["vat"] == pytest.approx(-5_200)
+    assert result["correction"]["vat"] == pytest.approx(-5_720)  # 26 000 × 22 %
     report = invoices.purchase_book(state, ledger_state, "2026-10")
-    assert report["totals"]["vat"] == pytest.approx(299_600)
+    assert report["totals"]["vat"] == pytest.approx(329_560)
 
 
 def test_increase_grows_book(ledger_state):
@@ -165,7 +171,7 @@ def test_increase_grows_book(ledger_state):
                                  direction="increase", delta_net=50_000, rate=22,
                                  reason="допоставка")
     report = invoices.purchase_book(state, ledger_state, "2026-10")
-    assert report["totals"]["vat"] == pytest.approx(315_800)  # 304 800 + 50 000 × 22 %
+    assert report["totals"]["vat"] == pytest.approx(346_280)  # 335 280 + 50 000 × 22 %
 
 
 def test_correction_requires_reason():
@@ -239,15 +245,115 @@ def test_journal_empty_is_a_gap_not_a_zero():
     assert journal["gaps"] and journal["gaps"][0]["what"].startswith("посреднические")
 
 
-def test_journal_asks_for_operation_code():
+def test_journal_gets_operation_code_from_reference():
+    """Круг 35: коды заведены — журнал готов, код выведен правилом и назван."""
     state = invoices.new_state()
     invoices.register_purchase(state, number="СФ №77", date="2026-10-06",
                                base_number="УПД №130", base_date="2026-10-06",
                                counterparty="ООО «Заказчик-Инвест»", net=1_000_000,
                                rate=22, agency=True)
     journal = invoices.intermediary_journal(state, "2026-10")
-    assert journal["ready"] is False
-    assert any("код вида операции" in gap["what"].lower() for gap in journal["gaps"])
+    assert journal["ready"] is True
+    assert journal["part2"][0]["operation_code"] == "01"
+    assert "агентск" in journal["part2"][0]["operation_code_why"]
+
+
+def test_operation_code_rules_come_from_order():
+    codes = invoices.load_operation_codes()
+    assert "ММВ-7-3/136" in codes["source"]
+    assert len(codes["codes"]) == 24
+    assert codes["loaded_from_primary_source"] is True
+    assert invoices.operation_code_for("shipped")["code"] == "01"
+    assert invoices.operation_code_for("advance")["code"] == "02"
+    assert invoices.operation_code_for("purchase")["code"] == "01"
+    assert invoices.operation_code_for("correction", direction="decrease")["code"] == "18"
+    assert invoices.operation_code_for("correction", direction="increase")["code"] == "01"
+    assert invoices.operation_code_for("purchase", agent=True)["code"] == "06"
+
+
+def test_operation_code_unknown_kind_is_not_invented():
+    answer = invoices.operation_code_for("something-else")
+    assert answer["code"] is None and answer["resolved"] is False
+
+
+def test_operation_code_shows_up_in_xml(book):
+    xml = invoices.to_fns_xml(book)
+    assert "<КодВидОпер>01</КодВидОпер>" in xml
+    assert "КодВидОпер не определён" not in xml
+
+
+# ── исправленные счета-фактуры ─────────────────────────────────────────────
+def test_fix_keeps_number_and_date_of_document(ledger_state):
+    state = registry_state(ledger_state)
+    result = invoices.fix_invoice(state, for_kind="received", number="СФ №341",
+                                  date="2026-10-01", fix_number="И-1",
+                                  fix_date="2026-10-10", reason="неверные реквизиты")
+    assert result["status"] == invoices.STATUS_OK
+    document = result["invoice"]
+    assert document["number"] == "СФ №341" and document["date"] == "2026-10-01"
+    assert document["fix_number"] == "И-1" and document["fix_date"] == "2026-10-10"
+    report = invoices.purchase_book(state, ledger_state, "2026-10")
+    row = next(item for item in report["rows"] if item["number"] == "СФ №341")
+    assert "исправление № И-1 от 2026-10-10" == row["fix_note"]
+    xml = invoices.to_fns_xml(report)
+    assert 'НомерИспр="И-1"' in xml and 'ДатаИспр="10.10.2026"' in xml
+
+
+def test_fix_requires_reason_and_original(ledger_state):
+    state = registry_state(ledger_state)
+    no_original = invoices.fix_invoice(state, for_kind="received", number="СФ №000",
+                                       date="2026-10-01", fix_number="И-9",
+                                       fix_date="2026-10-10", reason="проба")
+    assert no_original["status"] == invoices.STATUS_REJECTED
+    assert no_original["errors"][0]["code"] == "FIX_NO_ORIGINAL"
+    no_reason = invoices.fix_invoice(state, for_kind="received", number="СФ №341",
+                                     date="2026-10-01", fix_number="И-2",
+                                     fix_date="2026-10-10", reason="  ")
+    assert no_reason["status"] == invoices.STATUS_REJECTED
+    assert state["received"][0].get("fix_number") is None
+
+
+def test_fix_date_cannot_be_earlier_than_document(ledger_state):
+    state = registry_state(ledger_state)
+    result = invoices.fix_invoice(state, for_kind="received", number="СФ №341",
+                                  date="2026-10-01", fix_number="И-3",
+                                  fix_date="2026-09-30", reason="проба")
+    assert result["status"] == invoices.STATUS_REJECTED
+    assert result["errors"][0]["code"] == "FIX_DATE_BEFORE_DOC"
+
+
+def test_received_fix_number_is_not_invented(ledger_state):
+    state = registry_state(ledger_state)
+    result = invoices.fix_invoice(state, for_kind="received", number="СФ №512",
+                                  date="2026-10-03", fix_date="2026-10-11",
+                                  reason="проба без номера")
+    assert result["status"] == invoices.STATUS_REJECTED
+    assert any("поставщик" in gap["why"] for gap in result["gaps"])
+
+
+def test_own_fix_number_is_sequential():
+    state = invoices.new_state()
+    first = invoices.register(state, kind="shipped", date="2026-10-29", base_date="2026-10-29",
+                              base_number="КС-2 №38", counterparty="ООО «Заказчик-Инвест»",
+                              net=1_000_000, rate=22, rules=invoices.load_rules())
+    one = invoices.fix_invoice(state, for_kind="issued", number=first["invoice"]["number"],
+                               date=first["invoice"]["date"], fix_date="2026-10-30",
+                               reason="неверный адрес покупателя")
+    two = invoices.fix_invoice(state, for_kind="issued", number=first["invoice"]["number"],
+                               date=first["invoice"]["date"], fix_date="2026-10-31",
+                               reason="повторное исправление")
+    assert one["invoice"]["fix_number"] == "1"
+    assert two["invoice"]["fix_number"] == "2"
+    assert len(two["invoice"]["fixes"]) == 2
+
+
+def test_fix_in_another_period_warns_about_extra_sheet(ledger_state):
+    state = registry_state(ledger_state)
+    result = invoices.fix_invoice(state, for_kind="received", number="СФ №341",
+                                  date="2026-10-01", fix_number="И-4",
+                                  fix_date="2026-11-05", reason="исправление в ноябре")
+    assert result["status"] == invoices.STATUS_OK
+    assert any("дополнительный лист" in warning for warning in result["warnings"])
 
 
 def test_journal_has_deadline_and_knd():
@@ -265,13 +371,14 @@ def test_sales_book_xml_marked_unverified():
     xml = invoices.to_fns_xml(invoices.sales_book(state, {"entries": []}, "2026-10"))
     assert 'КНД="1115103"' in xml
     assert 'СвереноСоСхемой="нет"' in xml
-    assert "КодВидОпер не заполнен" in xml
+    assert "<КодВидОпер>01</КодВидОпер>" in xml, "код вида операции должен быть в выгрузке"
+    assert "не сверялся со схемой XSD" in xml
 
 
 def test_purchase_book_xml(book):
     xml = invoices.to_fns_xml(book)
     assert 'КНД="1115102"' in xml
-    assert "285200.00" in xml and "19600.00" in xml
+    assert "313720.00" in xml and "21560.00" in xml
     assert "ПроверкаФайла" in xml
 
 
