@@ -398,6 +398,145 @@
 </section>
 {% endif %}
 
+
+{% if sections %}
+<section class="card">
+  <h2>Разделы декларации: 3, 7, 8, 9</h2>
+  <p class="muted small">Раздел 3 считается по счетам-фактурам (книгам), а не по оборотам 68.02;
+    разделы 8 и 9 — это книги покупок и продаж. Номера строк помечены «на проверку»:
+    {{ sections.layout_verify.verify_why }}</p>
+  {% if sections.problems %}
+  <div class="flash flash-err">
+    {% for item in sections.problems %}<div><b>{{ item.code }}</b> · {{ item.what }}: {{ item.why }}</div>{% endfor %}
+  </div>
+  {% endif %}
+
+  <h3>Раздел 3. Расчёт налога</h3>
+  <table class="table compact">
+    <thead><tr><th>показатель</th><th>строка</th><th class="num">сумма</th></tr></thead>
+    <tbody>
+    {% for row in sections.section3.rows %}
+      <tr><td>{{ row.what }}</td><td class="small">{{ row.line }}{% if row.verify_line %} <span class="badge">на проверку</span>{% endif %}</td>
+          <td class="num">{{ row.amount|rub }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <h3>Раздел 7. Операции, не подлежащие налогообложению</h3>
+  {% if sections.section7.rows %}
+  <table class="table compact">
+    <thead><tr><th>код</th><th>документ</th><th>дата</th><th class="num">база</th><th>основание</th><th>состояние</th></tr></thead>
+    <tbody>
+    {% for row in sections.section7.rows %}
+      <tr><td>{{ row.code or '—' }}</td><td>{{ row.document or '—' }}</td><td>{{ row.date or '—' }}</td>
+          <td class="num">{{ row.base|rub }}</td><td class="small">{{ row.basis or '—' }}</td>
+          <td class="small">{% if row.verify %}<span class="badge">на проверку</span>{% endif %} {{ row.state or '' }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted small">Необлагаемых операций за {{ period }} не задано: раздел 7 пуст.
+    Это не «их нет», а «в контур не введены» — данные вводятся ниже.</p>
+  {% endif %}
+
+  <h3>Раздел 8. Книга покупок</h3>
+  {% if sections.section8.rows %}
+  <table class="table compact">
+    <thead><tr><th>№</th><th>код</th><th>счёт-фактура</th><th>дата</th><th>контрагент</th><th>ИНН</th><th class="num">без НДС</th><th class="num">НДС</th></tr></thead>
+    <tbody>
+    {% for row in sections.section8.rows %}
+      <tr><td>{{ loop.index }}</td><td>{{ row.code or '—' }}</td><td>{{ row.invoice }}</td><td>{{ row.date }}</td>
+          <td>{{ row.counterparty }}</td><td>{{ row.inn or '—' }}</td>
+          <td class="num">{{ row.net|rub }}</td><td class="num">{{ row.vat|rub }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="muted small">Книга покупок за {{ period }} пуста.</p>{% endif %}
+
+  <h3>Раздел 9. Книга продаж</h3>
+  {% if sections.section9.rows %}
+  <table class="table compact">
+    <thead><tr><th>№</th><th>код</th><th>счёт-фактура</th><th>дата</th><th>контрагент</th><th>ИНН</th><th class="num">без НДС</th><th class="num">НДС</th></tr></thead>
+    <tbody>
+    {% for row in sections.section9.rows %}
+      <tr><td>{{ loop.index }}</td><td>{{ row.code or '—' }}</td><td>{{ row.invoice }}</td><td>{{ row.date }}</td>
+          <td>{{ row.counterparty }}</td><td>{{ row.inn or '—' }}</td>
+          <td class="num">{{ row.net|rub }}</td><td class="num">{{ row.vat|rub }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="muted small">Книга продаж за {{ period }} пуста.</p>{% endif %}
+
+  <h3>Раздельный учёт (п. 4 ст. 170 НК РФ)</h3>
+  {% set sep = sections.separate %}
+  <p class="muted small">Пропорция — по стоимости <b>отгруженных</b> товаров (абз. 4 п. 4 ст. 170 НК РФ),
+    правило 5 % — по <b>совокупным расходам</b> (абз. 9). Это разные базы, и подменять одну другой нельзя.</p>
+  <table class="table compact">
+    <tbody>
+      <tr><td>облагаемая выручка</td><td class="num">{{ sep.totals.taxable_revenue|rub }}</td></tr>
+      <tr><td>необлагаемая выручка</td><td class="num">{{ sep.totals.exempt_revenue|rub }}</td></tr>
+      <tr><td>доля необлагаемых</td><td class="num">{{ sep.totals.share_exempt }} %</td></tr>
+      <tr><td>входной НДС за период</td><td class="num">{{ sep.totals.input_vat|rub }}</td></tr>
+      <tr><td>к вычету</td><td class="num">{{ sep.totals.vat_deductible|rub }}</td></tr>
+      <tr><td>не к вычету (на 91.02)</td><td class="num">{{ sep.totals.vat_not_deductible|rub }}</td></tr>
+    </tbody>
+  </table>
+  <p class="muted small">Правило 5 %: {% if sep.rule5.checked %}проверено — {% else %}не проверено — {% endif %}{{ sep.rule5.why }}</p>
+  {% if sections.warnings %}
+  <div class="flash flash-warn">
+    {% for text in sections.warnings %}<div>⚠ {{ text }}</div>{% endfor %}
+  </div>
+  {% endif %}
+  {% if sections.posting and sections.posting.amount and sections.posting.amount > 0 %}
+  <p class="small">Предлагаемая проводка: <b>Дт {{ sections.posting.debit }} Кт {{ sections.posting.credit }}</b>
+    · {{ sections.posting.amount|rub }} · от {{ sections.posting.date }}. Проводку делает человек командой
+    <code>tax sections {{ period }}</code>; экран её не проводит.</p>
+  {% endif %}
+
+  {% if sections.checks %}
+  <h3>Контрольные соотношения</h3>
+  <table class="table compact">
+    <thead><tr><th>что сверяется</th><th class="num">слева</th><th class="num">справа</th><th>итог</th></tr></thead>
+    <tbody>
+    {% for item in sections.checks %}
+      <tr><td>{{ item.what }}</td><td class="num">{{ item.left|rub }}</td><td class="num">{{ item.right|rub }}</td>
+          <td class="small">{% if item.status == 'сходится' %}✓ сходится{% else %}✗ {{ item.status }}{% if item.why %} — {{ item.why }}{% endif %}{% endif %}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if sections.gaps %}
+  <div class="flash flash-warn">
+    <b>Чего не хватает для разделов:</b>
+    {% for gap in sections.gaps %}<div>· {{ gap.what }} — {{ gap.why }}{% if gap.ask %} → {{ gap.ask }}{% endif %}</div>{% endfor %}
+  </div>
+  {% endif %}
+
+  <h3>Необлагаемые операции за {{ period }}</h3>
+  <p class="muted small">Ничего не подставляется автоматически: документ, дата, сумма и основание
+    вводятся из первички. Если основание — освобождение по ст. 149 НК РФ, код раздела 7 нужно указать
+    самому: в справочнике контура только коды с подтверждённым основанием.</p>
+  <form method="get" action="/taxes" class="row">
+    <input type="hidden" name="period" value="{{ period }}">
+    <label class="inline">документ <input name="exempt_doc" value="{{ section_inputs.exempt_doc }}" size="14"></label>
+    <label class="inline">дата <input name="exempt_date" value="{{ section_inputs.exempt_date }}" placeholder="2026-10-15" size="10"></label>
+    <label class="inline">сумма, ₽ <input name="exempt_amount" value="{{ section_inputs.exempt_amount }}" size="10"></label>
+    <label class="inline">код раздела 7 <input name="exempt_code" value="{{ section_inputs.exempt_code }}" size="8"></label>
+    <label class="inline">основание <input name="exempt_basis" value="{{ section_inputs.exempt_basis }}" size="30"></label>
+    <label class="inline">расходы на необлагаемые <input name="expenses_not_taxable" value="{{ section_inputs.expenses_not_taxable }}" size="10"></label>
+    <label class="inline">совокупные расходы <input name="expenses_total" value="{{ section_inputs.expenses_total }}" size="10"></label>
+    <button type="submit">пересчитать</button>
+  </form>
+
+  {% if sections.not_implemented %}
+  <h3>Разделы: не сделано</h3>
+  <ul class="muted small">{% for text in sections.not_implemented %}<li>{{ text }}</li>{% endfor %}</ul>
+  {% endif %}
+</section>
+{% endif %}
+
+
 <section class="card">
   <h2>Формы и сроки</h2>
   <table class="table compact">
