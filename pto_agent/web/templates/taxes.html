@@ -537,6 +537,87 @@
 {% endif %}
 
 
+{% if declaration %}
+<section class="card">
+  <h2>Разделы 4–6, 12 и дополнительные листы книг</h2>
+  <p class="muted small">Ставка 0 %: срок подтверждения 180 дней (п. 9 ст. 165 НК РФ). Пока срок не
+    истёк, операция не попадает ни в раздел 4, ни в раздел 6 — и это видно строкой, а не
+    угадывается. Коды операций разделов 4–6 в контуре не заведены: они спрашиваются у человека.</p>
+
+  <h3>Разделы 4–6. Операции по ставке 0 %</h3>
+  {% set zero = declaration.zero %}
+  {% if zero.sections['4'].rows or zero.sections['5'].rows or zero.sections['6'].rows %}
+  <table class="table compact">
+    <thead><tr><th>раздел</th><th>код</th><th>документ</th><th>отгрузка</th><th class="num">база</th><th class="num">налог</th><th>срок / подтверждение</th><th>состояние</th></tr></thead>
+    <tbody>
+    {% for key in ('4','5','6') %}{% for row in zero.sections[key].rows %}
+      <tr><td>{{ key }}</td><td>{{ row.code or '—' }}</td><td>{{ row.document }}</td><td>{{ row.date }}</td>
+          <td class="num">{{ row.base|rub }}</td><td class="num">{{ row.get('accrued')|rub }}</td>
+          <td class="small">{{ row.get('confirmed_date') or row.get('deadline') or '—' }}</td>
+          <td class="small">{{ row.state }}{% if row.verify %} <span class="badge">на проверку</span>{% endif %}</td></tr>
+    {% endfor %}{% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">Итого: раздел 4 — {{ zero.totals.base4|rub }}, раздел 5 — {{ zero.totals.base5|rub }},
+    раздел 6 — {{ zero.totals.base6|rub }} (налог {{ zero.totals.accrued6|rub }}).</p>
+  {% else %}
+  <p class="muted small">Разделы 4–6 не заполняются: операций по ставке 0 % в контуре нет. Это не
+    «их не было», а «в контур не введены» — реестр экспортных операций вводится человеком.</p>
+  {% endif %}
+  {% if zero.gaps %}
+  <div class="flash flash-warn">{% for gap in zero.gaps %}<div>· {{ gap.what }} — {{ gap.why }}{% if gap.ask %} → {{ gap.ask }}{% endif %}</div>{% endfor %}</div>
+  {% endif %}
+
+  <h3>Раздел 12. Счета-фактуры лиц из п. 5 ст. 173 НК РФ</h3>
+  {% set s12 = declaration.section12 %}
+  {% if s12.rows %}
+  <table class="table compact">
+    <thead><tr><th>№</th><th>код</th><th>счёт-фактура</th><th>дата</th><th>покупатель</th><th>ИНН</th><th>КПП</th><th class="num">без НДС</th><th class="num">НДС</th><th>состояние</th></tr></thead>
+    <tbody>
+    {% for row in s12.rows %}
+      <tr><td>{{ row.number }}</td><td>{{ row.code or '—' }}</td><td>{{ row.invoice }}</td><td>{{ row.date }}</td>
+          <td>{{ row.buyer }}</td><td>{{ row.inn or '—' }}</td><td>{{ row.kpp or '—' }}</td>
+          <td class="num">{{ row.net|rub }}</td><td class="num">{{ row.vat|rub }}</td>
+          <td class="small">{{ row.state }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">Итого НДС {{ s12.totals.vat|rub }} → строка 030 раздела 1. {{ s12.line_030_note }}</p>
+  {% else %}
+  <p class="muted small">Раздел 12 не заполняется: организация — плательщик НДС и счетов-фактур по
+    п. 5 ст. 173 НК РФ не выставляла. Пустой раздел здесь — законный результат, а не забытый лист.</p>
+  {% endif %}
+
+  <h3>Дополнительные листы книг и приложения № 1 к разделам 8 и 9</h3>
+  {% for sheet in declaration.sheets %}
+  <p class="small"><b>{{ sheet.title }}</b>{% if sheet.knd_verify %} — КНД {{ sheet.knd }}
+     <span class="badge">на проверку</span>{% endif %}</p>
+  {% if sheet.rows %}
+  <table class="table compact">
+    <thead><tr><th>№</th><th>вид записи</th><th>код</th><th>счёт-фактура</th><th>дата</th><th>контрагент</th><th class="num">без НДС</th><th class="num">НДС</th></tr></thead>
+    <tbody>
+    {% for row in sheet.rows %}
+      <tr><td>{{ row.number }}</td><td>{{ row.kind }}</td><td>{{ row.code or '—' }}</td>
+          <td>{{ row.invoice }}</td><td>{{ row.date }}</td><td>{{ row.counterparty }}</td>
+          <td class="num">{{ row.net|rub }}</td><td class="num">{{ row.vat|rub }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">Изменение стоимости {{ sheet.totals.delta_net|rub }}, изменение НДС
+    {{ sheet.totals.delta_vat|rub }}; строка 005 приложения (итог всей книги):
+    {% if sheet.appendix.rows[1].value is not none %}{{ sheet.appendix.rows[1].value|rub }}{% else %}не передана{% endif %}.</p>
+  {% else %}
+  <p class="muted small">{{ sheet.title }}: изменений в ранее сданную книгу не было — лист не формируется.</p>
+  {% endif %}
+  {% endfor %}
+
+  {% if declaration.zero.not_implemented %}
+  <h3>Эти разделы: не сделано</h3>
+  <ul class="muted small">{% for text in declaration.zero.not_implemented %}<li>{{ text }}</li>{% endfor %}</ul>
+  {% endif %}
+</section>
+{% endif %}
+
 <section class="card">
   <h2>Формы и сроки</h2>
   <table class="table compact">
