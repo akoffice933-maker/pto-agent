@@ -66,6 +66,13 @@ def load_rules(path: str | Path | None = None) -> dict:
     return payload
 
 
+def load_withholding_rules(path: str | Path | None = None) -> dict:
+    """Нормы удержаний — из своего справочника, а не из ставок зарплаты."""
+    from . import withholdings as withhold_mod
+
+    return withhold_mod.load_rules(path)
+
+
 def load_json(path: str | Path) -> dict:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
@@ -293,7 +300,8 @@ def check_timesheet(timesheet: dict, staff: dict, rules: dict) -> tuple[dict, li
 
 # ─────────────────────────── начисление ───────────────────────────
 def accrue(state: dict, timesheet: dict, staff: dict, rules: dict,
-           *, period: str | None = None, orders: list[dict] | None = None) -> dict:
+           *, period: str | None = None, orders: list[dict] | None = None,
+           withholdings: list[dict] | None = None) -> dict:
     """Начислить зарплату за месяц: оклад по дням → НДФЛ → взносы. Возвращает строки."""
     period = period or str(timesheet.get("period") or "")
     result = {"period": period, "rows": [], "totals": {}, "errors": [], "gaps": [],
@@ -373,6 +381,7 @@ def accrue(state: dict, timesheet: dict, staff: dict, rules: dict,
             "extra": num(extra_taxable), "sick_employer": num(extra.get("sick_employer") or 0),
             "sick_fund": num(extra.get("sick_fund") or 0),
             "vacation": num(extra.get("vacation") or 0), "bonus": num(extra.get("bonus") or 0),
+            "dismissal": num(extra.get("dismissal") or 0),
             "deduction": ndfl["deduction"], "deduction_why": ndfl.get("deduction_why") or "",
             "ndfl_base": ndfl["base_ytd"], "ndfl": num(ndfl["tax"]),
             "ndfl_ytd": num(ndfl["tax_ytd"]), "ndfl_steps": ndfl["steps"],
@@ -395,7 +404,7 @@ def accrue(state: dict, timesheet: dict, staff: dict, rules: dict,
     }
     totals["cost"] = num(money_dec(totals["accrued"]) + money_dec(totals["contrib"])
                          + money_dec(totals["injury"]))
-    for key in ("sick_employer", "sick_fund", "vacation", "bonus"):
+    for key in ("sick_employer", "sick_fund", "vacation", "bonus", "dismissal"):
         totals[key] = num(sum((money_dec(row.get(key)) for row in rows), Decimal("0")))
     result["rows"] = rows
     result["totals"] = totals
@@ -410,6 +419,36 @@ def accrue(state: dict, timesheet: dict, staff: dict, rules: dict,
         result["not_included"].insert(0, {
             "what": "больничные, отпускные и премии",
             "why": "приказы не переданы: без документа суммы не считаются — нужен файл приказов"})
+    if withholdings is None:
+        result["not_included"].append({
+            "what": "удержания по исполнительным документам",
+            "why": "реестр документов не передан: к выплате показана сумма за вычетом НДФЛ, но без "
+                   "алиментов и исполнительных листов. Если они есть, к выплате это неверно"})
+    else:
+        from . import withholdings as withhold_mod
+
+        report = withhold_mod.apply({"period": period, "rows": rows}, withholdings)
+        by_tab = {str(slot.get("tab")): slot for slot in report["rows"]}
+        for row in rows:
+            slot = by_tab.get(str(row.get("tab")))
+            if not slot or not slot.get("documents"):
+                continue
+            row["accrued_net"] = row["net"]
+            row["withheld"] = slot["withheld"]
+            row["withheld_carried"] = slot["carried"]
+            row["withholdings"] = slot["documents"]
+            row["net"] = slot["net_after"]
+        totals["net_accrued"] = totals["net"]
+        totals["withheld"] = report["totals"]["withheld"]
+        totals["net"] = report["totals"]["net_after"]
+        totals["carried"] = report["totals"]["carried"]
+        result["withholdings"] = report
+        # ошибка в документе не отменяет оклад: она уходит в отдельный список, как и ошибки
+        # приказов, иначе один лист без номера остановил бы весь месяц
+        result["withholding_errors"] = list(report.get("errors") or [])
+        result["gaps"].extend(report["gaps"])
+        result["warnings"].extend(report["warnings"])
+        result["errors"].extend(report["problems"])
     result["mode"] = "расчёт"
     return result
 
@@ -458,13 +497,14 @@ def post_ledger(state: dict, accrued: dict, *, chart: dict | None = None,
 
     line_date = date or f"{period}-{_calendar.monthrange(int(period[:4]), int(period[5:7]))[1]:02d}"
 
-    def _post(event: str, number: str, lines: list[dict], memo: str) -> dict:
+    def _post(event: str, number: str, lines: list[dict], memo: str, *,
+              suffix: str = "") -> dict:
         outcome = accounting.post_entry(
             state, event=event, date=line_date,
             doc={"number": number, "kind": "расчётная ведомость", "date": line_date},
             lines=lines, chart=chart,
             mode=mode or accounting.MODE_POST, memo=memo,
-            key=f"{event}|{period}", rule="payroll")
+            key=f"{event}|{period}{('|' + suffix) if suffix else ''}", rule="payroll")
         result["results"].append({"event": event, "number": number, **{
             key: outcome.get(key) for key in ("status", "errors", "gaps", "warnings")}})
         if outcome.get("status") == accounting.STATUS_OK:
@@ -482,11 +522,32 @@ def post_ledger(state: dict, accrued: dict, *, chart: dict | None = None,
     for row in rows:
         slot = by_object.setdefault(str(row.get("object") or ""),
                                     {"accrued": Decimal("0"), "contrib": Decimal("0"),
-                                     "injury": Decimal("0"), "ndfl": Decimal("0")})
+                                     "injury": Decimal("0"), "ndfl": Decimal("0"),
+                                     "withheld": Decimal("0")})
         slot["accrued"] += money_dec(row.get("accrued"))
         slot["contrib"] += money_dec(row.get("contrib"))
         slot["injury"] += money_dec(row.get("injury"))
         slot["ndfl"] += money_dec(row.get("ndfl"))
+        slot["withheld"] += money_dec(row.get("withheld"))
+
+    # удержания: 76 требует контрагента, поэтому проводка идёт по каждому взыскателю отдельно,
+    # а не одной суммой «куда-то»
+    by_payee: dict[str, Decimal] = {}
+    for row in rows:
+        for document in row.get("withholdings") or []:
+            amount = money_dec(document.get("withheld"))
+            if amount <= 0:
+                continue
+            payee = str(document.get("payee") or "взыскатель не указан")
+            by_payee[payee] = by_payee.get(payee, Decimal("0")) + amount
+    for payee, amount in by_payee.items():
+        _post("payroll_withheld", f"удержания в пользу «{payee}» за {period}",
+              [{"account": "70", "side": accounting.DEBIT, "amount": num(amount),
+                "analytics": {"сотрудник": "сводно по удержаниям"}},
+               {"account": "76", "side": accounting.CREDIT, "amount": num(amount),
+                "analytics": {"контрагент": payee, "объект": ""}}],
+              memo=f"удержано по исполнительным документам в пользу «{payee}» за {period}",
+              suffix=payee)
 
     for object_name, slot in by_object.items():
         if slot["accrued"] > 0:
@@ -534,9 +595,47 @@ def payout_requests(accrued: dict, *, date: str, contract: str = "") -> list[dic
             "date": date, "counterparty": employee["name"], "article": "зарплата",
             "object": employee.get("object") or "",
             "amount": employee["net"],
-            "purpose": f"зарплата за {period} (таб. {employee['tab']})",
+            "purpose": (f"зарплата за {period} (таб. {employee['tab']})"
+                        + (f", за вычетом удержаний {rub(employee.get('withheld'))}"
+                           if money_dec(employee.get("withheld")) > 0 else "")),
+            "withheld": employee.get("withheld") or 0.0,
             "basis": {"kind": "ведомость", "number": f"Т-51 за {period}", "date": date},
             "contract": contract,
+        })
+    return rows
+
+
+def withholding_requests(accrued: dict, *, date: str) -> list[dict]:
+    """Заявки на перечисление удержанного взыскателям: Дт 76 Кт 51.
+
+    Отдельно от зарплатных заявок: деньги идут не работнику, а взыскателю, и статья платежа
+    другая. Без этой заявки 76 останется с кредитовым остатком — удержали, но не перечислили.
+    """
+    by_payee: dict[str, dict] = {}
+    period = str(accrued.get("period") or "")
+    for row in accrued.get("rows") or []:
+        for document in row.get("withholdings") or []:
+            amount = money_dec(document.get("withheld"))
+            if amount <= 0:
+                continue
+            payee = str(document.get("payee") or "взыскатель не указан")
+            slot = by_payee.setdefault(payee, {"amount": Decimal("0"), "count": 0,
+                                               "employees": []})
+            slot["amount"] += amount
+            slot["count"] += 1
+            slot["employees"].append(row.get("name"))
+    rows = []
+    for index, (payee, slot) in enumerate(sorted(by_payee.items()), start=1):
+        rows.append({
+            "number": f"УД-{period.replace('-', '')}-{index:02d}",
+            "date": date, "counterparty": payee, "article": "удержания по исполнительным",
+            "object": "",
+            "amount": num(slot["amount"]),
+            "purpose": (f"перечисление удержаний за {period} по документам: "
+                        f"{slot['count']} шт."),
+            "basis": {"kind": "исполнительный документ", "number": f"реестр за {period}",
+                      "date": date},
+            "employees": slot["employees"],
         })
     return rows
 
@@ -581,10 +680,13 @@ def verify(state: dict) -> dict:
                 problems.append({"code": "NEGATIVE_NET", "period": period.get("period"),
                                  "what": item.get("name"),
                                  "why": "к выплате отрицательная сумма: НДФЛ больше начисления"})
-            if money_dec(item.get("accrued")) - money_dec(item.get("ndfl")) - money_dec(item.get("net")) > EPS:
+            gap = (money_dec(item.get("accrued")) - money_dec(item.get("ndfl"))
+                   - money_dec(item.get("withheld")) - money_dec(item.get("net")))
+            if gap > EPS:
                 problems.append({"code": "NET_MISMATCH", "period": period.get("period"),
                                  "what": item.get("name"),
-                                 "why": "начислено − НДФЛ ≠ к выплате"})
+                                 "why": ("начислено − НДФЛ − удержания ≠ к выплате "
+                                         f"(расхождение {rub(gap)})")})
     return {"ok": not problems, "problems": problems,
             "periods": len(state.get("periods") or []),
             "summary": "начисления сходятся со строками" if not problems

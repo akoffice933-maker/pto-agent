@@ -187,8 +187,16 @@ check(all(row["route"] == ["руководитель"] for row in salary_request
 check(all(row["basis"]["number"] == "Т-51 за 2026-10" for row in salary_requests),
       "у заявок на зарплату нет основания Т-51")
 total_wages = round(sum(float(row["amount"]) for row in salary_requests), 2)
-check(abs(total_wages - 783084.81) < 0.05,
-      f"сумма заявок на зарплату {total_wages}, по ведомости 783 084,81")
+# ведомость Т-51 показывает «к выплате» уже после удержаний: 897 821,38 − 151 557,17
+check(abs(total_wages - 746264.21) < 0.05,
+      f"сумма заявок на зарплату {total_wages}, по ведомости после удержаний 746 264,21")
+transfer = [row for row in read(work, "treasury")["requests"]
+            if str(row["number"]).startswith("УД-")]
+check(len(transfer) == 4, f"заявок на перечисление удержаний {len(transfer)}, ожидали 4")
+check(abs(round(sum(float(row["amount"]) for row in transfer), 2) - 151557.17) < 0.05,
+      "заявки взыскателям не равны сумме удержаний")
+check(all(row["article"] == "удержания по исполнительным" for row in transfer),
+      "у заявки взыскателю не своя статья платежа: деньги уйдут как зарплата")
 
 # ── 4. маршрут согласования и оплата ────────────────────────────────────────
 first = read(work, "treasury")["requests"][1]["number"]

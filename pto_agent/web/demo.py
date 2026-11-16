@@ -69,7 +69,18 @@ def build(root: str | Path, *, demo_dir: str | Path | None = None,
         path = demo_dir / "payroll" / f"timesheet_{period.replace('-', '_')}.json"
         if not path.exists():
             continue
-        report = payroll.accrue(payroll_state, _load(path), staff_payload, payroll_rules)
+        orders_path = demo_dir / "payroll" / f"orders_{period.replace('-', '_')}.json"
+        orders = None
+        if orders_path.exists():
+            from .. import orders as orders_mod
+
+            orders = orders_mod.load_orders(orders_path)
+        wh_path = demo_dir / "payroll" / f"withholdings_{period.replace('-', '_')}.json"
+        documents = None
+        if wh_path.exists():
+            documents = (_load(wh_path) or {}).get("documents") or []
+        report = payroll.accrue(payroll_state, _load(path), staff_payload, payroll_rules,
+                                orders=orders, withholdings=documents)
         if report.get("errors"):
             continue
         payroll.remember(payroll_state, report, rules=payroll_rules)

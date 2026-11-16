@@ -237,8 +237,42 @@ check(by_tab["004"]["accrued"] == 88000 + 8136.99,
       f"начисление по 004 = {by_tab['004']['accrued']}, ожидали оклад + пособие")
 check(any("П-35/2026" in item["what"] for item in extra.get("order_errors") or []),
       "приказ без заработка за два года не отмечен как недосчитанный")
-check(extra["totals"]["accrued"] == round(totals["accrued"] + 8136.99 + 56764.54 + 45000, 2),
+check(extra["totals"]["accrued"] == round(totals["accrued"] + 8136.99 + 56764.54 + 45000
+                                          + extra["totals"]["dismissal"], 2),
       f"итог с приказами {extra['totals']['accrued']} ≠ оклад + приказы")
+
+# компенсация при увольнении: дни по стажу (п. 28 и 35 Правил № 169), а не «2,33 за месяц»
+dismissal_row = next((row for row in extra["orders"]["lines"] if row["kind"] == "dismissal"),
+                     None)
+check(dismissal_row is not None, "приказ об увольнении не посчитан")
+if dismissal_row:
+    months = orders_mod.seniority_months("2026-05-05", "2026-10-30")["months"]
+    check(months == 6, f"стаж по Правилам № 169 = {months} мес., ожидали 6 (излишек 25 дн.)")
+    check(dismissal_row["earned_days"] == 14.0,
+          f"заработано дней {dismissal_row['earned_days']}, ожидали 14 (6 × 2,3333)")
+    check(round(dismissal_row["sdz"], 2) == round(552000 / 12 / 29.3, 2),
+          f"СДЗ {dismissal_row['sdz']} ≠ база за 12 месяцев / 12 / 29,3")
+    check(dismissal_row["amount"] == round(dismissal_row["sdz"] * 14, 2),
+          "сумма компенсации ≠ дни × СДЗ")
+    check(dismissal_row["contrib_base"] == dismissal_row["amount"],
+          "компенсация не попала в базу по взносам: она облагается")
+    check(orders_mod.seniority_months("2026-01-12", "2026-11-20")["months"] == 10,
+          "излишек меньше 15 дней не отброшен")
+    check(orders_mod.seniority_months("2026-01-12", "2026-11-27")["months"] == 11,
+          "излишек 15+ дней не округлён до полного месяца")
+    eleven = orders_mod.dismissal({"number": "П-99", "kind": "dismissal", "tab": "001",
+                                   "dismissal_date": "2026-11-27", "hired": "2025-12-20",
+                                   "vacation_days_taken": 0, "base_12m": 1200000},
+                                  {"hired": "2025-12-20"}, rules, period="2026-11")
+    check(eleven["months"] == 11 and eleven["earned_days"] == 28.0,
+          f"11 месяцев стажа не дали полную компенсацию: {eleven['months']} мес., "
+          f"{eleven['earned_days']} дн.")
+    short = orders_mod.dismissal({"number": "П-98", "kind": "dismissal", "tab": "001",
+                                  "dismissal_date": "2026-03-10", "hired": "2026-01-10",
+                                  "vacation_days_taken": 10, "base_12m": 1200000},
+                                 {"hired": "2026-01-10"}, rules, period="2026-03")
+    check(any(item["code"] == "DISMISSAL_OVERPAID" for item in short["errors"]),
+          "отгулянные сверх заработанного дни не отмечены как переплата")
 
 undefined = orders_mod.report(parsed, staff, rules, period="2026-11")
 check(undefined["lines"] == [], "приказы октября посчитаны в ноябре")

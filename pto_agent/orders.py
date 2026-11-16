@@ -26,7 +26,8 @@ import calendar
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 
-KINDS = {"sick": "Больничный", "vacation": "Отпуск", "bonus": "Премия"}
+KINDS = {"sick": "Больничный", "vacation": "Отпуск", "bonus": "Премия",
+         "dismissal": "Увольнение (компенсация за неиспользованный отпуск)"}
 
 EPS = Decimal("0.01")
 
@@ -38,9 +39,13 @@ NOT_INCLUDED = [
     {"what": "расчёт больничного из МРОТ при неполной ставке",
      "why": "минимум зависит от доли ставки и районного коэффициента; в карточке сотрудника "
             "этих полей нет, поэтому минимум берётся общий и помечается предупреждением"},
-    {"what": "компенсация за неиспользованный отпуск при увольнении",
-     "why": "нужен отпускной стаж и остаток дней: в контуре их нет, считать «2,33 за месяц» "
-            "на глазок — выдумывать"},
+    {"what": "выходное пособие и выплаты при увольнении, кроме компенсации за отпуск",
+     "why": "средний месячный заработок, двухнедельный и трёхкратный средний — отдельный "
+            "расчёт по п. 3–6 Положения № 540; в контуре только компенсация за "
+            "неиспользованный отпуск"},
+    {"what": "декретные (пособие по беременности и родам)",
+     "why": "нужны замена лет расчётного периода, районный коэффициент и доля ставки: "
+            "механизм тот же, что у больничного, но цифры без этих полей будут неверными"},
 ]
 
 
@@ -263,12 +268,163 @@ def bonus(order: dict, employee: dict, rules: dict, *, period: str) -> dict:
     }
 
 
+def seniority_months(hired: str, dismissal: str, *, excluded_days: int = 0) -> dict:
+    """Отпускной стаж в месяцах по п. 35 Правил НКТ СССР № 169.
+
+    Считается полными месяцами от даты приёма до даты увольнения; излишек меньше половины
+    месяца отбрасывается, 15 дней и более — округляются до полного месяца. Дни, не входящие
+    в стаж (отпуск без сохранения зарплаты свыше 14 дней, отпуск по уходу за ребёнком —
+    ст. 121 ТК РФ), отнимаются от даты увольнения: иначе стаж окажется больше реального.
+    """
+    from datetime import date, timedelta
+
+    start = date.fromisoformat(str(hired)[:10])
+    end = date.fromisoformat(str(dismissal)[:10])
+    excluded = int(excluded_days or 0)
+    if excluded:
+        end = end - timedelta(days=excluded)
+    if end < start:
+        return {"months": 0, "rest_days": 0, "rounded_up": False, "excluded_days": excluded,
+                "basis": "дата увольнения раньше даты приёма — стажа нет"}
+    months = (end.year - start.year) * 12 + (end.month - start.month)
+    if end.day < start.day:
+        months -= 1
+    months = max(months, 0)
+    # остаток дней после полных месяцев
+    year, month = start.year + (start.month - 1 + months) // 12, (start.month - 1 + months) % 12 + 1
+    day = min(start.day, calendar.monthrange(year, month)[1])
+    anchor = date(year, month, day)
+    rest = (end - anchor).days
+    rounded = False
+    if rest >= 15:
+        months += 1
+        rest -= 15
+        rounded = True
+    return {"months": months, "rest_days": rest, "rounded_up": rounded,
+            "excluded_days": excluded,
+            "basis": (f"стаж с {hired} по {dismissal}"
+                      + (f" без {excluded} дн. вне стажа" if excluded else "")
+                      + f" = {months} полных месяцев"
+                      + (" (излишек 15+ дней округлён)" if rounded else
+                         " (излишек меньше 15 дней отброшен)"))}
+
+
+def dismissal(order: dict, employee: dict, rules: dict, *, period: str) -> dict:
+    """Увольнение: компенсация за неиспользованный отпуск.
+
+    Дни компенсации = стаж в месяцах × 2,33 (28 / 12) минус отгулянные дни; за 11 и более
+    месяцев рабочего года — полные 28 дней (п. 28 Правил № 169). Средний дневной заработок —
+    как у отпускных (база за 12 месяцев / 12 / 29,3), но не ниже МРОТ / 29,3.
+
+    Компенсация облагается НДФЛ и страховыми взносами: это выплата в рамках трудовых
+    отношений, а не государственное пособие.
+    """
+    rules_dis = (rules.get("benefits") or {}).get("dismissal") or {}
+    days_per_month = Decimal(str(rules_dis.get("days_per_month") or "2.3333"))
+    year_days = Decimal(str(rules_dis.get("year_days") or 28))
+    errors: list[dict] = []
+    warnings: list[str] = []
+    verify = False
+
+    hired = order.get("hired") or employee.get("hired")
+    date_out = order.get("dismissal_date") or order.get("date")
+    if not hired:
+        errors.append({"code": "DISMISSAL_NO_HIRED", "what": order.get("number"),
+                       "why": "нет даты приёма: отпускной стаж не из чего считать"})
+    if not date_out:
+        errors.append({"code": "DISMISSAL_NO_DATE", "what": order.get("number"),
+                       "why": "нет даты увольнения"})
+
+    taken_raw = order.get("vacation_days_taken")
+    taken_given = taken_raw not in (None, "")
+    taken = Decimal(str(taken_raw if taken_given else 0))
+    if not taken_given:
+        verify = True
+        warnings.append("не указано, сколько дней отпуска уже отгуляно: принято 0 — "
+                        "компенсация может быть завышена, цифра на проверку")
+
+    months_info = {"months": 0, "basis": "", "rounded_up": False}
+    if hired and date_out:
+        months_info = seniority_months(hired, date_out,
+                                       excluded_days=int(order.get("excluded_days") or 0))
+    months = int(months_info.get("months") or 0)
+    full_years, rest_months = divmod(months, 12)
+    if rest_months >= 11:
+        rest_days = year_days  # п. 28 Правил № 169: 11 месяцев и более — полная компенсация
+        rest_rule = "п. 28 Правил № 169: 11 месяцев и более — полные 28 дней"
+    else:
+        rest_days = (Decimal(rest_months) * days_per_month).quantize(EPS, rounding=ROUND_HALF_UP)
+        rest_rule = f"{rest_months} мес. × {days_per_month}"
+    earned = kopeck(Decimal(full_years) * year_days + rest_days)
+    left = kopeck(earned - taken)
+    if left < 0:
+        errors.append({"code": "DISMISSAL_OVERPAID", "what": order.get("number"),
+                       "why": f"отгуляно {taken} дн. больше заработанного {earned}: "
+                              f"переплата отпускных, а не компенсация — нужен расчёт удержания"})
+        left = Decimal("0")
+    # округление дней — только в пользу работника (письмо Роструда от 31.10.2008 № 5921-ТЗ)
+    days_paid = Decimal(int(left.to_integral_value(rounding=ROUND_HALF_UP)))
+    if days_paid < left:
+        days_paid += Decimal("1")
+    if days_paid > left:
+        warnings.append(f"дни компенсации {left} округлены до {days_paid} в пользу работника "
+                        f"(письмо Роструда от 31.10.2008 № 5921-ТЗ); законом округление не "
+                        f"предусмотрено")
+
+    avg_days = Decimal(str(((rules.get("benefits") or {}).get("vacation") or {})
+                           .get("avg_month_days") or "29.3"))
+    months_base = Decimal(str(((rules.get("benefits") or {}).get("vacation") or {})
+                              .get("months") or 12))
+    base = order.get("base_12m")
+    direct_sdz = order.get("sdz")
+    sdz = Decimal("0")
+    source = ""
+    if direct_sdz not in (None, ""):
+        sdz = kopeck(direct_sdz)
+        source = "средний дневной заработок указан в приказе"
+    elif base not in (None, "") and kopeck(base) > 0:
+        sdz = kopeck(Decimal(str(base)) / months_base / avg_days)
+        source = f"база за 12 месяцев {rub(base)} / {int(months_base)} / {avg_days}"
+    else:
+        errors.append({"code": "DISMISSAL_NO_BASE", "what": order.get("number"),
+                       "why": "нет ни заработка за 12 месяцев, ни среднего дневного заработка: "
+                              "компенсация из оклада не считается — нужна ведомость за "
+                              "расчётный период (Положение № 540)"})
+    mrot = Decimal(str(rules.get("mrot") or 0))
+    min_sdz = kopeck(mrot / avg_days) if mrot else Decimal("0")
+    raised = False
+    if sdz and min_sdz and sdz < min_sdz:
+        sdz, raised = min_sdz, True
+        warnings.append(f"средний дневной заработок ниже минимума {rub(min_sdz)} "
+                        f"(МРОТ {rub(mrot)} / {avg_days}): взят минимум")
+
+    amount = kopeck(sdz * days_paid)
+    row = {
+        "kind": "dismissal", "number": order.get("number"), "date": order.get("date"),
+        "days": float(days_paid), "start": hired, "end": date_out,
+        "months": months, "years": full_years, "rest_months": rest_months,
+        "earned_days": num(earned), "taken_days": num(taken),
+        "days_rule": rest_rule, "seniority_basis": months_info.get("basis") or "",
+        "sdz": num(sdz), "sdz_source": source, "raised_to_min": raised,
+        "amount": num(amount), "fund_amount": 0.0,
+        "taxable": num(amount), "contrib_base": num(amount),
+        "verify": verify, "errors": errors, "warnings": warnings,
+        "memo": (f"увольнение {order.get('number')}: стаж {months} мес. → заработано {earned} дн., "
+                 f"отгуляно {taken}, к компенсации {days_paid} дн. × {rub(sdz)} = {rub(amount)}; "
+                 f"облагается НДФЛ и взносами"),
+    }
+    if any(item.get("code") == "DISMISSAL_OVERPAID" for item in errors):
+        row["not_calculated"] = True
+    return row
+
+
 def report(orders: list[dict], staff: dict, rules: dict, *, period: str) -> dict:
     """Собрать все приказы месяца: строки по людям, суммы, что не посчиталось и почему."""
     employees = {str(row.get("tab")): row for row in staff.get("employees") or []}
     result = {"period": period, "lines": [], "by_tab": {}, "errors": [], "gaps": [],
               "warnings": [], "totals": {"count": 0, "amount": 0.0, "sick_employer": 0.0,
                                           "sick_fund": 0.0, "vacation": 0.0, "bonus": 0.0,
+                                          "dismissal": 0.0,
                                           "taxable": 0.0, "contrib_base": 0.0},
               "not_included": [dict(item) for item in NOT_INCLUDED]}
     seen: set[tuple] = set()
@@ -299,7 +455,8 @@ def report(orders: list[dict], staff: dict, rules: dict, *, period: str) -> dict
             result["gaps"].append({"what": f"приказ {number}", "why": "относится к другому месяцу",
                                    "ask": f"провести в {order_period} или изменить дату приказа"})
             continue
-        row = {"sick": sick, "vacation": vacation, "bonus": bonus}[kind](
+        row = {"sick": sick, "vacation": vacation, "bonus": bonus,
+               "dismissal": dismissal}[kind](
             order, employee, rules, period=period)
         row["tab"] = tab
         row["name"] = employee.get("name")
@@ -315,13 +472,15 @@ def report(orders: list[dict], staff: dict, rules: dict, *, period: str) -> dict
                                                  "sick_employer": Decimal("0"),
                                                  "sick_fund": Decimal("0"),
                                                  "vacation": Decimal("0"),
-                                                 "bonus": Decimal("0")})
+                                                 "bonus": Decimal("0"),
+                                                 "dismissal": Decimal("0")})
         slot["taxable"] += kopeck(row["taxable"])
         slot["contrib_base"] += kopeck(row["contrib_base"])
         slot["sick_employer"] += kopeck(row["amount"]) if kind == "sick" else Decimal("0")
         slot["sick_fund"] += kopeck(row["fund_amount"])
         slot["vacation"] += kopeck(row["amount"]) if kind == "vacation" else Decimal("0")
         slot["bonus"] += kopeck(row["amount"]) if kind == "bonus" else Decimal("0")
+        slot["dismissal"] += kopeck(row["amount"]) if kind == "dismissal" else Decimal("0")
         totals = result["totals"]
         totals["amount"] = num(kopeck(totals["amount"]) + kopeck(row["amount"]))
         totals["sick_employer"] = num(kopeck(totals["sick_employer"])
@@ -331,6 +490,8 @@ def report(orders: list[dict], staff: dict, rules: dict, *, period: str) -> dict
                                  + (kopeck(row["amount"]) if kind == "vacation" else 0))
         totals["bonus"] = num(kopeck(totals["bonus"])
                               + (kopeck(row["amount"]) if kind == "bonus" else 0))
+        totals["dismissal"] = num(kopeck(totals["dismissal"])
+                                  + (kopeck(row["amount"]) if kind == "dismissal" else 0))
         totals["taxable"] = num(kopeck(totals["taxable"]) + kopeck(row["taxable"]))
         totals["contrib_base"] = num(kopeck(totals["contrib_base"]) + kopeck(row["contrib_base"]))
         totals["count"] += 1
@@ -360,7 +521,8 @@ def to_markdown(result: dict, rules: dict | None = None) -> str:
     lines.append("")
     lines.append(f"Приказов {totals.get('count')}: начислено {rub(totals.get('amount'))} "
                  f"(больничные работодателя {rub(totals.get('sick_employer'))}, отпускные "
-                 f"{rub(totals.get('vacation'))}, премии {rub(totals.get('bonus'))}); "
+                 f"{rub(totals.get('vacation'))}, премии {rub(totals.get('bonus'))}, "
+                 f"компенсации при увольнении {rub(totals.get('dismissal'))}); "
                  f"за счёт СФР {rub(totals.get('sick_fund'))} — не наш расход.")
     if result.get("errors"):
         lines.append("")

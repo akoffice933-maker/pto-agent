@@ -666,6 +666,17 @@ def create_app(*, root: str | Path | None = None, data_dir: str | Path | None = 
         staff = store.staff()
         check = (payroll.check_timesheet(timesheet, staff, rules)
                  if timesheet else (None, [], []))
+        withheld_rows = [row for row in ((sheet or {}).get("rows") or [])
+                         if row.get("withholdings")]
+        withheld_totals = {
+            "withheld": round(sum(float(row.get("withheld") or 0) for row in withheld_rows), 2),
+            "carried": round(sum(float(row.get("withheld_carried") or 0)
+                                 for row in withheld_rows), 2),
+            "documents": sum(len(row.get("withholdings") or []) for row in withheld_rows),
+            "net_accrued": round(sum(float(row.get("accrued_net") or row.get("net") or 0)
+                                     for row in withheld_rows), 2),
+        }
+        withhold_rules = payroll.load_withholding_rules()
         return render(request, "payroll.html", user, period=period, periods=periods,
                       current=period, sheet=sheet, timesheet=timesheet,
                       norm=check[0], problems=check[1], gaps=check[2],
@@ -675,7 +686,11 @@ def create_app(*, root: str | Path | None = None, data_dir: str | Path | None = 
                       sources=(rules.get("source") or {}).get("items") or [],
                       conflicts=(rules.get("source") or {}).get("conflicts") or [],
                       checked_on=(rules.get("source") or {}).get("checked_on") or "",
-                      not_included=rules.get("not_implemented") or [])
+                      not_included=rules.get("not_implemented") or [],
+                      withheld_rows=withheld_rows, withheld_totals=withheld_totals,
+                      withhold_limits=(withhold_rules.get("limits") or {}),
+                      withhold_not_implemented=(withhold_rules.get("not_implemented") or []),
+                      withhold_rules_text=(withhold_rules.get("rules") or []))
 
     @app.post("/payroll/post")
     async def payroll_post(request: Request):
@@ -719,7 +734,8 @@ def create_app(*, root: str | Path | None = None, data_dir: str | Path | None = 
         cash_state = store.treasury_state()
         created, refused = 0, []
         with store.lock:
-            for item in payroll.payout_requests(row, date=date):
+            transfers = payroll.withholding_requests(row, date=date)
+            for item in payroll.payout_requests(row, date=date) + transfers:
                 result = treasury.add_request(cash_state, item)
                 if result.get("errors"):
                     refused.append({"number": item["number"],

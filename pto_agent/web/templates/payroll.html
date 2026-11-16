@@ -106,6 +106,69 @@
 </section>
 {% endif %}
 
+{% if sheet %}
+<section class="card">
+  <h2>Удержания за {{ sheet.period }}</h2>
+  {% if withheld_rows %}
+  <p class="muted small">Предел удержания считается от суммы <b>после НДФЛ</b>:
+    распоряжение работодателя — {{ withhold_limits.employer.percent }} %,
+    исполнительный документ — {{ withhold_limits.enforcement.percent }} %,
+    алименты на несовершеннолетних, вред здоровью, вред в связи со смертью кормильца и ущерб
+    от преступления — {{ withhold_limits.priority.percent }} %.</p>
+  <table class="table compact">
+    <thead>
+      <tr><th>сотрудник</th><th class="num">к выплате до удержаний</th><th>документ</th>
+          <th>кому</th><th class="num">по документу</th><th class="num">удержано</th>
+          <th class="num">остаток</th><th>состояние</th></tr>
+    </thead>
+    <tbody>
+      {% for row in withheld_rows %}
+        {% for doc in row.withholdings %}
+        <tr>
+          {% if loop.first %}
+          <td rowspan="{{ row.withholdings|length }}">{{ row.name }}<div class="muted small">таб. {{ row.tab }}</div></td>
+          <td class="num" rowspan="{{ row.withholdings|length }}">{{ (row.accrued_net or row.net)|rub }}</td>
+          {% endif %}
+          <td>{{ doc.number or '—' }}<div class="muted small">{{ doc.title }}</div></td>
+          <td class="muted small">{{ doc.payee or '—' }}</td>
+          <td class="num">{{ doc.amount|rub }}</td>
+          <td class="num">{{ doc.withheld|rub }}</td>
+          <td class="num">{{ doc.carried|rub }}</td>
+          <td class="small">{{ doc.state }}{% if doc.why %}<div class="muted small">{{ doc.why }}</div>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      {% endfor %}
+    </tbody>
+    <tfoot>
+      <tr>
+        <th colspan="2">итого: {{ withheld_rows|length }} чел., {{ withheld_totals.documents }} док.</th>
+        <th colspan="3" class="num">к выплате до удержаний {{ withheld_totals.net_accrued|rub }}</th>
+        <th class="num">{{ withheld_totals.withheld|rub }}</th>
+        <th class="num">{{ withheld_totals.carried|rub }}</th>
+        <th></th>
+      </tr>
+    </tfoot>
+  </table>
+  <p class="muted small">Удержано: Дт 70 Кт 76 по каждому взыскателю; перечисление взыскателю —
+    Дт 76 Кт 51 заявкой в казначействе, а не автоматически. Остаток, не влезший в предел,
+    переносится на следующий месяц и показан числом, а не забыт.</p>
+  {% else %}
+  <p class="muted small">Документов на удержание за {{ sheet.period }} в контур не введено.
+    Это не значит, что их нет у сотрудников — значит, реестр не передан. Сумма «к выплате»
+    показана без алиментов и исполнительных листов.</p>
+  {% endif %}
+  {% if withhold_rules_text %}
+  <details><summary class="muted small">правила, по которым считается предел</summary>
+    <ul class="small">{% for rule in withhold_rules_text %}<li>{{ rule }}</li>{% endfor %}</ul>
+  </details>
+  {% endif %}
+  {% if withhold_not_implemented %}
+  <h3>Не сделано по удержаниям</h3>
+  <ul class="small muted">{% for text in withhold_not_implemented %}<li>{{ text }}</li>{% endfor %}</ul>
+  {% endif %}
+</section>
+{% endif %}
+
 {% if timesheet %}
 <section class="card">
   <h2>Табель {{ period }}</h2>
