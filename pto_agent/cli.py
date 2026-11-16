@@ -2879,7 +2879,91 @@ def cmd_invoices(args) -> int:
             print(f"  файл: {out}")
         return 0 if report["ready"] else 1
 
-    print("что делать: rules · next · auto · sales-book", file=sys.stderr)
+    if action == "purchases":
+        ledger_state = accounting.load(args.ledger)
+        state = sf.load(path) if path and path.exists() else sf.new_state()
+        if args.register:
+            payload = json.loads(Path(args.register).read_text(encoding="utf-8"))
+            result = sf.auto_register_purchases(state, payload, args.period,
+                                                ledger_state=ledger_state, rules=rules)
+            sf.save(state, path)
+            print(f"{result.get('mode') or 'post'}: зарегистрировано {result['posted']} · уже было "
+                  f"{result['duplicates']} · отклонено {result['rejected']}")
+            for row in result["results"]:
+                invoice = row.get("invoice") or {}
+                if invoice:
+                    print(f"  № {invoice.get('number')} от {invoice.get('date')} · "
+                          f"{invoice.get('base_number')} · НДС {invoice.get('vat')}")
+                else:
+                    gap = (row.get("gaps") or [{}])[0]
+                    print(f"  ✗ {row.get('status')}: {gap.get('what')} — {gap.get('why')}")
+            for warning in result["warnings"]:
+                print(f"  ⚠ {warning}", file=sys.stderr)
+        report = sf.purchase_book(state, ledger_state, args.period, rules=rules)
+        print(sf.to_markdown(report))
+        if args.out:
+            out = Path(args.out)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(sf.to_markdown(report), encoding="utf-8")
+            print(f"  файл: {out}")
+        return 0 if report["ready"] else 1
+
+    if action == "journal":
+        ledger_state = accounting.load(args.ledger)
+        state = sf.load(path) if path and path.exists() else sf.new_state()
+        report = sf.intermediary_journal(state, args.period, rules=rules)
+        print(sf.to_markdown(report))
+        return 0 if report["ready"] else 1
+
+    if action == "corr":
+        if not path:
+            print("нужен реестр: --registry <файл>", file=sys.stderr)
+            return 2
+        state = sf.load(path) if path.exists() else sf.new_state()
+        result = sf.register_correction(state, for_kind=args.kind, base_number=args.base,
+                                        base_date=args.base_date or "",
+                                        number=args.number, date=args.date or "",
+                                        direction=args.direction, delta_net=args.net,
+                                        reason=args.reason,
+                                        counterparty=args.counterparty or "",
+                                        contract=args.contract or "", rules=rules)
+        correction = result.get("correction") or {}
+        if result.get("status") == sf.STATUS_OK and correction:
+            sf.save(state, path)
+            print(f"корректировочный СФ № {correction.get('number')} от "
+                  f"{correction.get('date')} · {correction.get('direction')} · "
+                  f"к {correction.get('base_number')} · НДС {correction.get('vat')}")
+            for warning in result["warnings"]:
+                print(f"  ⚠ {warning}", file=sys.stderr)
+            return 0
+        print(f"не зарегистрирован: {result.get('status')}", file=sys.stderr)
+        for gap in result.get("gaps") or []:
+            print(f"  · {gap.get('what')} — {gap.get('why')}", file=sys.stderr)
+        return 1
+
+    if action == "sf-xml":
+        ledger_state = accounting.load(args.ledger)
+        state = sf.load(path) if path and path.exists() else sf.new_state()
+        if args.book == "sales":
+            report = sf.sales_book(state, ledger_state, args.period, rules=rules)
+        elif args.book == "purchases":
+            report = sf.purchase_book(state, ledger_state, args.period, rules=rules)
+        else:
+            report = sf.intermediary_journal(state, args.period, rules=rules)
+        xml = sf.to_fns_xml(report, rules=rules)
+        target = Path(args.out) if args.out else Path(
+            f"out/fns/KND_{args.book}_{args.period.replace('-', '')}_1.xml")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(xml, encoding="utf-8")
+        print(f"{report.get('title')} за {args.period} → {target}")
+        print("  файл не сверен со схемой XSD и не подписан: сдавать его нельзя, "
+              "это черновик структуры")
+        for gap in report.get("gaps") or []:
+            print(f"  ⚠ не хватает: {gap.get('what')} — {gap.get('why')}", file=sys.stderr)
+        return 0
+
+    print("что делать: rules · next · auto · sales-book · purchases · corr · journal · sf-xml",
+          file=sys.stderr)
     return 2
 
 def main(argv=None):
@@ -3765,6 +3849,38 @@ def main(argv=None):
     inv_book = inv_sub.add_parser("sales-book", help="книга продаж и сверка с журналом")
     inv_book.add_argument("period")
     inv_book.set_defaults(func=cmd_invoices)
+    inv_purch = inv_sub.add_parser("purchases", help="книга покупок: регистрация входящих СФ")
+    inv_purch.add_argument("period")
+    inv_purch.add_argument("--register", default=None,
+                           help='JSON с входящими СФ: {"invoices": [...]} или '
+                                '{"purchases": [...]}')
+    inv_purch.add_argument("--dry-run", action="store_true", help="показать без записи")
+    inv_purch.set_defaults(func=cmd_invoices)
+    inv_corr = inv_sub.add_parser("corr", help="корректировочный счёт-фактура")
+    inv_corr.add_argument("--kind", default="issued", choices=["issued", "received"],
+                          help="выставленный или полученный")
+    inv_corr.add_argument("--base", required=True, help="номер документа-основания")
+    inv_corr.add_argument("--base-date", default=None, help="дата документа-основания")
+    inv_corr.add_argument("--number", default=None,
+                          help="номер корректировочного СФ (у полученного — поставщика)")
+    inv_corr.add_argument("--date", default=None)
+    inv_corr.add_argument("--direction", default="decrease", choices=["increase", "decrease"])
+    inv_corr.add_argument("--net", required=True, help="изменение стоимости без НДС")
+    inv_corr.add_argument("--rate", type=float, default=None)
+    inv_corr.add_argument("--reason", required=True, help="причина корректировки")
+    inv_corr.add_argument("--counterparty", default=None)
+    inv_corr.add_argument("--contract", default=None)
+    inv_corr.add_argument("--object", default=None)
+    inv_corr.add_argument("--period", default=None)
+    inv_corr.set_defaults(func=cmd_invoices)
+    inv_jour = inv_sub.add_parser("journal", help="журнал учёта для посредников")
+    inv_jour.add_argument("period")
+    inv_jour.set_defaults(func=cmd_invoices)
+    inv_xml = inv_sub.add_parser("sf-xml", help="выгрузка книги/журнала в структуре формата ФНС")
+    inv_xml.add_argument("period")
+    inv_xml.add_argument("--book", default="sales", choices=["sales", "purchases", "journal"])
+    inv_xml.add_argument("--out", default=None, help="путь XML (по умолчанию out/fns/…)")
+    inv_xml.set_defaults(func=cmd_invoices)
     inv.set_defaults(func=cmd_invoices)
 
     signing = sub.add_parser("sign", help="подпись документа (УКЭП через КриптоПро)")

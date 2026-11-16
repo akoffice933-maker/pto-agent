@@ -255,6 +255,134 @@
 </section>
 {% endif %}
 
+{% if purchases_book %}
+<section class="card">
+  <h2>Книга покупок за {{ period }}</h2>
+  <p class="muted small">Единственное место, где вычет опирается на проводки: реестра входящих
+    счетов-фактур в контуре нет, поэтому каждая строка книги сверяется с дебетом 19.03 по
+    документу-основанию. НДС, которого нет в реестре, не зачитывается — он попадает в запрос.</p>
+  {% if purchases_book.rows %}
+  <table class="table compact">
+    <thead><tr><th>№ СФ поставщика</th><th>дата</th><th>основание</th><th>поставщик</th>
+      <th class="num">без НДС</th><th class="num">ставка</th><th class="num">НДС</th></tr></thead>
+    <tbody>
+    {% for row in purchases_book.rows %}
+      <tr>
+        <td>{{ row.number }}</td><td>{{ row.date }}</td>
+        <td class="small">{{ row.base_number }}</td><td>{{ row.counterparty }}</td>
+        <td class="num">{{ row.net|rub }}</td><td class="num">{{ row.rate }} %</td>
+        <td class="num">{{ row.vat|rub }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">Счетов-фактур {{ purchases_book.totals.invoices }} · НДС по книге
+    <b>{{ purchases_book.totals.vat|rub }}</b> · вычет в журнале
+    {{ purchases_book.totals.journal_vat|rub }} · разница
+    <b>{{ purchases_book.totals.difference|rub }}</b>
+    {% if purchases_book.totals.deducted %}· зачтено {{ purchases_book.totals.deducted|rub }}{% endif %}</p>
+  {% else %}
+  <div class="flash flash-err">Входящих счетов-фактур за {{ period }} нет: книга покупок пустая.
+    Вычет по НДС заявлять не на что — это «нет данных», а не ноль.</div>
+  {% endif %}
+  {% if purchases_book.problems %}
+  <div class="flash flash-err">
+    {% for item in purchases_book.problems %}<div><b>{{ item.code }}</b> · {{ item.what }}: {{ item.why }}</div>{% endfor %}
+  </div>
+  {% endif %}
+  {% if purchases_book.rate_notes %}
+  <div class="flash flash-warn">
+    {% for text in purchases_book.rate_notes %}<div>{{ text }}</div>{% endfor %}
+  </div>
+  {% endif %}
+  {% if purchases_book.gaps %}
+  <div class="flash flash-warn">
+    <b>Чего не хватает:</b>
+    {% for gap in purchases_book.gaps %}<div>· {{ gap.what }} — {{ gap.why }}</div>{% endfor %}
+  </div>
+  {% endif %}
+  <h3>Не сделано по книге покупок</h3>
+  <ul class="muted small">
+    {% for text in purchases_book.not_implemented %}<li>{{ text }}</li>{% endfor %}
+    <li>книга покупок помечена «на проверку»: {{ purchases_book.rules.purchases_book.verify_why }}</li>
+  </ul>
+</section>
+{% endif %}
+
+{% if corrections is not none %}
+<section class="card">
+  <h2>Корректировочные счета-фактуры за {{ period }}</h2>
+  <p class="muted small">Уменьшение или увеличение стоимости оформляется отдельным документом со
+    ссылкой на основание. Пока их нет — здесь пусто, и это нормальное состояние, а не пропуск.</p>
+  {% if corrections %}
+  <table class="table compact">
+    <thead><tr><th>№</th><th>дата</th><th>направление</th><th>к документу</th><th>контрагент</th>
+      <th class="num">без НДС</th><th class="num">НДС</th><th>причина</th></tr></thead>
+    <tbody>
+    {% for row in corrections %}
+      <tr>
+        <td>{{ row.number }}</td><td>{{ row.date }}</td>
+        <td class="small">{% if row.direction == "decrease" %}уменьшение{% else %}увеличение{% endif %}</td>
+        <td>{{ row.base_number }}</td><td>{{ row.counterparty }}</td>
+        <td class="num">{{ row.net|rub }}</td><td class="num">{{ row.vat|rub }}</td>
+        <td class="small">{{ row.reason }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted small">Корректировочных счетов-фактур за {{ period }} в реестре нет.</p>
+  {% endif %}
+  <p class="muted small">Добавить: <code>invoices corr --registry … --kind issued|received
+    --base Д-142/2026-3 --direction decrease --net … --reason «…»</code></p>
+</section>
+{% endif %}
+
+{% if journal %}
+<section class="card">
+  <h2>Журнал учёта полученных и выставленных счетов-фактур за {{ period }}</h2>
+  <p class="muted small">Нужен посредникам: агентское и комиссионное имущество проходит через нас,
+    но вычетом не становится. Посреднические счета-фактуры в книги не попадают — только в журнал;
+    счёт-фактура на наше вознаграждение в журнал не включается.</p>
+  <p class="muted small">Сдача — {{ journal.deadline }}. КНД {{ journal.knd }}.
+    {{ journal.applicable_why }}</p>
+  {% if journal.part1 or journal.part2 %}
+  <h3>Часть 1. Выставленные</h3>
+  <table class="table compact">
+    <thead><tr><th>№ п/п</th><th>№ СФ</th><th>дата</th><th>покупатель</th>
+      <th class="num">с НДС</th><th class="num">НДС</th></tr></thead>
+    <tbody>
+    {% for row in journal.part1 %}
+      <tr><td>{{ loop.index }}</td><td>{{ row.number }}</td><td>{{ row.date }}</td>
+        <td>{{ row.counterparty }}</td><td class="num">{{ row.gross|rub }}</td>
+        <td class="num">{{ row.vat|rub }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <h3>Часть 2. Полученные</h3>
+  <table class="table compact">
+    <thead><tr><th>№ п/п</th><th>№ СФ</th><th>дата</th><th>продавец</th>
+      <th class="num">с НДС</th><th class="num">НДС</th></tr></thead>
+    <tbody>
+    {% for row in journal.part2 %}
+      <tr><td>{{ loop.index }}</td><td>{{ row.number }}</td><td>{{ row.date }}</td>
+        <td>{{ row.counterparty }}</td><td class="num">{{ row.gross|rub }}</td>
+        <td class="num">{{ row.vat|rub }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted small">Посреднических операций за {{ period }} нет — журнал не заполняется.</p>
+  {% endif %}
+  {% if journal.gaps %}
+  <div class="flash flash-warn">
+    <b>Чего не хватает:</b>
+    {% for gap in journal.gaps %}<div>· {{ gap.what }} — {{ gap.why }}</div>{% endfor %}
+  </div>
+  {% endif %}
+</section>
+{% endif %}
+
 <section class="card">
   <h2>Формы и сроки</h2>
   <table class="table compact">

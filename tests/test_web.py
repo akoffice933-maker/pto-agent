@@ -530,7 +530,8 @@ def test_taxes_screen_shows_sales_book_and_its_gap(client):
     assert "Книга продаж за 2026-10" in page
     assert "В реестре нет ни одного счёта-фактуры" in page
     assert "Не сделано по счетам-фактурам" in page
-    assert "книга покупок" in page, "предел книги должен быть на экране"
+    assert "Книга покупок за 2026-10" in page, "книга покупок должна быть на экране"
+    assert "книга покупок помечена «на проверку»" in page, "предел книги должен быть на экране"
 
 
 def test_invoices_can_be_issued_from_screen(client, root):
