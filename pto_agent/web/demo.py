@@ -65,7 +65,7 @@ def build(root: str | Path, *, demo_dir: str | Path | None = None,
     payroll_rules = payroll.load_rules()
     payroll_state = payroll.new_state(object_name=staff_payload.get("object") or "")
     payroll_done = []
-    for period in ("2026-09", "2026-10"):
+    for period in ("2026-09", "2026-10", "2026-11"):
         path = demo_dir / "payroll" / f"timesheet_{period.replace('-', '_')}.json"
         if not path.exists():
             continue

@@ -186,6 +186,18 @@ def ndfl_for_month(rules: dict, *, employee: dict, income_month: Decimal,
         return {"tax": kopeck(tax_ytd - withheld_ytd_before), "tax_ytd": tax_ytd,
                 "base_ytd": num(base), "deduction": 0.0, "resident": False,
                 "steps": [], "why": "нерезидент: плоская ставка 30 % без вычетов"}
+    if income_month <= 0:
+        # вычет — против дохода месяца: без дохода он не «накапливается», иначе следующий
+        # месяц получит двойной вычет и НДФЛ окажется заниженным
+        deduction = {"amount": Decimal("0.00"), "why": "нет дохода за месяц — вычет не применён"}
+        return {"tax": kopeck(Decimal("0.00") - withheld_ytd_before
+                              if withheld_ytd_before < 0 else Decimal("0.00")),
+                "tax_ytd": num(money_dec(income_ytd_before) - deductions_ytd_before),
+                "base_ytd": num(max(money_dec(income_ytd_before) - deductions_ytd_before,
+                                    Decimal("0"))),
+                "deduction": 0.0, "deductions_ytd": float(deductions_ytd_before),
+                "deduction_why": deduction["why"], "resident": True, "steps": [],
+                "why": "месяц без дохода: НДФЛ не начисляется, вычет переносится"}
     deduction = deductions_of(rules, employee, income_ytd_before)
     deductions_ytd = deductions_ytd_before + deduction["amount"]
     base_ytd = income_ytd_before + income_month - deductions_ytd
@@ -357,13 +369,18 @@ def accrue(state: dict, timesheet: dict, staff: dict, rules: dict,
                 f"не отмечены, оклад и пособие могут задвоиться")
         extra_taxable = money_dec(extra.get("taxable"))
         extra_contrib = money_dec(extra.get("contrib_base"))
-        pay = kopeck(salary_part + extra_taxable)
+        # gross — полная сумма приказов, включая необлагаемую часть (выходное пособие в пределах
+        # трёх средних месячных заработков): она начисляется и выплачивается, но НДФЛ и взносов
+        # с неё нет, поэтому доход для НДФЛ и начисление — разные величины
+        extra_gross = money_dec(extra.get("gross")) if extras is not None else extra_taxable
+        pay = kopeck(salary_part + extra_gross)
+        ndfl_income = kopeck(salary_part + extra_taxable)
         slot = before.get(str(row["tab"]), {})
         income_before = money_dec(slot.get("income"))
         withheld_before = money_dec(slot.get("withheld"))
         deductions_before = money_dec(slot.get("deductions"))
         contrib_before = money_dec(slot.get("contrib_base"))
-        ndfl = ndfl_for_month(rules, employee=employee, income_month=pay,
+        ndfl = ndfl_for_month(rules, employee=employee, income_month=ndfl_income,
                               income_ytd_before=income_before,
                               withheld_ytd_before=withheld_before,
                               deductions_ytd_before=deductions_before)
@@ -371,26 +388,38 @@ def accrue(state: dict, timesheet: dict, staff: dict, rules: dict,
         contrib_month = kopeck(salary_part + extra_contrib) if extras is not None else pay
         contrib = contributions_for_month(rules, income_month=contrib_month,
                                           base_ytd_before=contrib_before)
-        net = kopeck(pay - ndfl["tax"])
+        # НДФЛ не может быть отрицательным: вычет без дохода — не возврат, а несделанный вычет.
+        # Возврат переплаты — отдельная процедура (ст. 231 НК РФ), её контур не делает.
+        tax_month = kopeck(ndfl["tax"])
+        if tax_month < 0 and pay <= 0:
+            tax_month = Decimal("0.00")
+            result["warnings"].append(
+                f"{employee.get('name')}: за месяц нет начисления, вычет "
+                f"{rub(ndfl.get('deduction'))} не применён — переносится на следующий месяц")
+        net = kopeck(pay - tax_month)
         rows.append({
             "tab": str(employee["tab"]), "name": employee.get("name"),
             "position": employee.get("position"), "object": employee.get("object"),
             "salary": num(salary), "coefficient": num(coefficient),
             "worked_days": num(worked), "norm_days": norm["days"],
             "accrued": num(pay), "salary_part": num(salary_part),
-            "extra": num(extra_taxable), "sick_employer": num(extra.get("sick_employer") or 0),
+            "extra": num(extra_taxable), "extra_gross": num(extra_gross),
+            "tax_free": num(kopeck(extra_gross - extra_taxable)),
+            "sick_employer": num(extra.get("sick_employer") or 0),
             "sick_fund": num(extra.get("sick_fund") or 0),
             "vacation": num(extra.get("vacation") or 0), "bonus": num(extra.get("bonus") or 0),
             "dismissal": num(extra.get("dismissal") or 0),
+            "severance": num(extra.get("severance") or 0),
+            "maternity_fund": num(extra.get("maternity_fund") or 0),
             "deduction": ndfl["deduction"], "deduction_why": ndfl.get("deduction_why") or "",
-            "ndfl_base": ndfl["base_ytd"], "ndfl": num(ndfl["tax"]),
+            "ndfl_base": ndfl["base_ytd"], "ndfl": num(tax_month),
             "ndfl_ytd": num(ndfl["tax_ytd"]), "ndfl_steps": ndfl["steps"],
             "ndfl_note": ndfl.get("why") or "",
             "contrib_base": num(contrib_month), "contrib": num(contrib["total"]),
             "contrib_ytd": num(contrib["total_ytd"]),
             "injury": num(contrib["injury"]), "contrib_note": contrib["note"],
             "net": num(net), "children": employee.get("children") or 0,
-            "income_ytd": num(income_before + pay),
+            "income_ytd": num(income_before + ndfl_income),
         })
 
     totals = {
@@ -404,7 +433,8 @@ def accrue(state: dict, timesheet: dict, staff: dict, rules: dict,
     }
     totals["cost"] = num(money_dec(totals["accrued"]) + money_dec(totals["contrib"])
                          + money_dec(totals["injury"]))
-    for key in ("sick_employer", "sick_fund", "vacation", "bonus", "dismissal"):
+    for key in ("sick_employer", "sick_fund", "vacation", "bonus", "dismissal",
+                "severance", "maternity_fund", "tax_free"):
         totals[key] = num(sum((money_dec(row.get(key)) for row in rows), Decimal("0")))
     result["rows"] = rows
     result["totals"] = totals

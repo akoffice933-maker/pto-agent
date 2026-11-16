@@ -433,6 +433,17 @@ def test_payroll_screen_shows_withholdings_and_their_limit(client):
     assert "Не сделано по удержаниям" in text
 
 
+def test_payroll_november_shows_maternity_and_severance(client):
+    """Декрет и выходное пособие — на экране, с пометкой «не облагается» и с суммой СФР."""
+    login(client, "buh")
+    text = client.get("/payroll?period=2026-11").text
+    assert "390 422,20" in text, "декретные (платит СФР) не показаны"
+    assert "104 975,00" in text, "выходное пособие не показано"
+    assert "в т.ч. не облагается" in text, "не сказано, что часть начисления не облагается"
+    assert "декрет" in text
+    assert "СФР, справочно" in text
+
+
 def test_agent_sees_payroll_but_cannot_post_it(client):
     login(client, "agent")
     page = client.get("/payroll")

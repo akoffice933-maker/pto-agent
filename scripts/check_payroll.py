@@ -281,6 +281,51 @@ check(all(gap["why"] == "относится к другому месяцу" for 
 check(orders_mod.report([], staff, rules, period="2026-10")["gaps"][0]["what"] == "приказы за месяц",
       "пустой файл приказов не отмечен как «нет данных»")
 
+# ── 12. ноябрь: декрет и увольнение по сокращению ──────────────────────────
+nov_state = payroll.new_state(object_name=staff["object"])
+nov_ts = json.loads((ROOT / "data/demo/payroll" / "timesheet_2026_11.json").read_text(encoding="utf-8"))
+nov_orders = orders_mod.load_orders(ROOT / "data/demo/payroll" / "orders_2026_11.json")
+nov = payroll.accrue(nov_state, nov_ts, staff, rules, period="2026-11", orders=nov_orders)
+nov_rows = {row["tab"]: row for row in nov["rows"]}
+stats["months"] += 1
+check(not nov["errors"] and not nov.get("order_errors"),
+      f"ноябрь не посчитан: {nov['errors'][:1]} {nov.get('order_errors', [])[:1]}")
+check(nov["totals"]["maternity_fund"] == 390422.2,
+      f"декретные {nov['totals']['maternity_fund']}, ожидали 390 422,20")
+check(nov_rows["006"]["extra"] == 0.0 and nov_rows["006"]["ndfl"] == 0.0,
+      "декретные попали в доход для НДФЛ: п. 1 ст. 217 НК РФ говорит обратное")
+check(nov_rows["006"]["contrib"] == 0.0, "с декретных начислены взносы")
+check(nov_rows["006"]["net"] == 0.0, "сотрудница в декрете получила «к выплате» из начисления")
+check(nov_rows["006"]["maternity_fund"] == 390422.2,
+      "декретные не показаны как сумма СФР")
+check(nov["totals"]["severance"] == 104975.0,
+      f"выходное пособие {nov['totals']['severance']}, ожидали 104 975,00")
+check(nov_rows["003"]["tax_free"] == 104975.0,
+      "выходное пособие в пределах 3× попало в облагаемый доход")
+check(nov_rows["003"]["extra"] == 101535.7,
+      f"в доход для НДФЛ попало {nov_rows['003']['extra']}, ожидали только компенсацию "
+      f"за отпуск 101 535,70 без выходного пособия")
+check(abs(nov_rows["003"]["net"] - (nov_rows["003"]["accrued"] - nov_rows["003"]["ndfl"])) < 0.02,
+      "выходное пособие не вошло в сумму к выплате")
+check(nov["totals"]["tax_free"] == 104975.0, "необлагаемая часть не вынесена в итоги")
+check(payroll.verify({"periods": [{"period": "2026-11", "rows": nov["rows"],
+                                   "totals": nov["totals"]}]})["ok"],
+      "ноябрьская ведомость не сходится со строками")
+
+mat_line = next(row for row in nov["orders"]["lines"] if row["kind"] == "maternity")
+check(mat_line["days"] == 140, f"дни декрета {mat_line['days']}, ожидали 140")
+check(abs(mat_line["sdz"] - 1980000 / 710) < 0.01,
+      f"СДЗ декрета {mat_line['sdz']}: замена лет и исключённые дни не применены")
+check("замена" in mat_line["sdz_source"], "источник СДЗ не называет замену лет")
+sev_line = next(row for row in nov["orders"]["lines"] if row["kind"] == "severance")
+check(abs(sev_line["monthly"] - 5100 * 247 / 12) < 0.02,
+      f"средний месячный заработок {sev_line['monthly']} ≠ СДЗ × 247/12")
+check(abs(sev_line["amount"] - 5100 * 20 * 1) > 0.5,
+      "выходное пособие посчитано по дням месяца, а не по среднему за год")
+dis_line = next(row for row in nov["orders"]["lines"] if row["kind"] == "dismissal")
+check(dis_line["months"] == 21 and dis_line["days"] == 35.0,
+      f"стаж {dis_line['months']} мес. / дни {dis_line['days']}, ожидали 21 мес. и 35 дн.")
+
 fund = payroll.fund_report(state, rules=rules)
 print(f"зарплата: месяцев {stats['months']} · строк {stats['rows']} · проводок "
       f"{stats['entries']} · проверок {stats['checks']}")
