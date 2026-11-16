@@ -171,7 +171,10 @@ def test_sales_book_markdown_names_limits():
     text = invoices.to_markdown(invoices.sales_book(registry, journal, "2026-10", rules=rules))
     assert "Книга продаж" in text
     assert "на проверку" in text, "графы книги не помечены «на проверку»"
-    assert "книга покупок" in text, "не сделано должно быть в тексте, а не только в отчёте"
+    # с круга 34 книга покупок сделана: предел сместился на коды видов операций и XSD,
+    # и он обязан остаться в тексте, а не только в отчёте
+    assert "Не сделано" in text
+    assert "КодВидОпер" in text, "предел выгрузки должен быть в тексте"
 
 
 # ─────────────────────────── 76.ВА в декларации ───────────────────────────
@@ -237,4 +240,6 @@ def test_rules_have_sources_and_limits():
     assert "168" in rules["issue"]["source"]
     assert "1137" in rules["numbering"]["source"]
     assert rules["sales_book"]["verify"] is True, "графы книги должны быть «на проверку»"
-    assert any("книга покупок" in text for text in rules["not_implemented"])
+    assert rules["purchases_book"]["verify"] is True, "книга покупок должна быть «на проверку»"
+    assert not any("книга покупок не сделана" in text for text in rules["not_implemented"]), \
+        "книга покупок сделана — в списке не сделано её быть не должно"

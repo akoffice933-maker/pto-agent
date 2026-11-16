@@ -843,16 +843,28 @@ def create_app(*, root: str | Path | None = None, data_dir: str | Path | None = 
         # книга продаж: из реестра счетов-фактур, со сверкой с журналом
         invoices_state = store.invoices_state()
         sales_book = None
+        purchases_book = journal_report = None
         if periods:
             sales_book = invoices.sales_book(invoices_state, ledger_state, period,
                                              rates=rates)
             sales_book["registry_empty"] = not (invoices_state.get("issued") or [])
+            # книга покупок опирается на проводки: реестра входящих СФ больше нигде нет
+            purchases_book = invoices.purchase_book(invoices_state, ledger_state, period,
+                                                    rates=rates)
+            purchases_book["registry_empty"] = not (invoices_state.get("received") or [])
+            journal_report = invoices.intermediary_journal(invoices_state, period,
+                                                          rules=invoices.load_rules())
+            journal_report["registry_empty"] = not (
+                invoices_state.get("corrections") or invoices_state.get("issued") or [])
         problems = []
         for report in (vat, ndfl, rsv_report, profit, property_report):
             if report:
                 problems.extend(report.get("problems") or [])
                 problems.extend(tax.validate(report, rates=rates))
         return render(request, "taxes.html", user, period=period, sales_book=sales_book,
+                      purchases_book=purchases_book, journal=journal_report,
+                      corrections=[row for row in invoices_state.get("corrections") or []
+                                   if str(row.get("period")) == period],
                       year=prop_year, property=property_report,
                       periods=sorted(set(periods) | set(payroll_periods)),
                       vat=vat, ndfl=ndfl, rsv=rsv_report, profit=profit,
