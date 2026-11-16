@@ -2629,6 +2629,49 @@ def cmd_tax(args) -> int:
 
     kind = {"vat": "vat", "ndfl": "ndfl6", "ndfl6": "ndfl6", "rsv": "rsv",
             "profit": "profit"}.get(action) or getattr(args, "kind", "")
+    if action == "sections":
+        from . import invoices as sf
+        from . import vat_sections as sections
+        from . import ledger as accounting
+
+        ledger_state = accounting.load(args.ledger)
+        reg_path = Path(args.invoices) if getattr(args, "invoices", None) else None
+        reg = sf.load(reg_path) if reg_path and reg_path.exists() else sf.new_state()
+        exempt = None
+        if getattr(args, "exempt", None):
+            payload = json.loads(Path(args.exempt).read_text(encoding="utf-8"))
+            exempt = payload.get("sales") or payload.get("exempt") or payload
+            if isinstance(exempt, dict):
+                exempt = exempt.get("sales")
+        report = sections.vat_sections(
+            reg, ledger_state, args.period, exempt=exempt,
+            expenses_not_taxable=args.expenses_not_taxable,
+            expenses_total=args.expenses_total, rates=rates)
+        text = sections.to_markdown(report)
+        print(text)
+        if args.out:
+            out = Path(args.out)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(text, encoding="utf-8")
+            print(f"  файл: {out}")
+        suggestion = report.get("posting") or {}
+        if suggestion.get("amount"):
+            print(f"проводка (предложение): Дт 91.02 Кт 19.03 · {suggestion['amount']} ₽ "
+                  f"от {suggestion.get('date')}")
+            if not getattr(args, "no_post", False):
+                result = sections.post_non_deductible(
+                    ledger_state, args.period, separate=report["separate"],
+                    date=args.date, mode="post")
+                if result.get("posted"):
+                    accounting.save(ledger_state, Path(args.ledger))
+                print(f"  {result.get('status')}: {result.get('amount') or 0} ₽ · "
+                      f"{result.get('lines_count') or 0} строк 19.03")
+                for warning in result.get("warnings") or []:
+                    print(f"  ⚠ {warning}", file=sys.stderr)
+                for gap in result.get("gaps") or []:
+                    print(f"  ✗ {gap.get('what')}: {gap.get('why')}", file=sys.stderr)
+        return 0 if not report["problems"] else 1
+
     if action == "xml":
         kind = getattr(args, "kind", "")
         action = {"vat": "vat", "ndfl6": "ndfl", "ndfl": "ndfl", "rsv": "rsv",
@@ -3863,6 +3906,21 @@ def main(argv=None):
     tax_post_prop.add_argument("--code", default="Q1", choices=["Q1", "H1", "9M", "YEAR"])
     tax_post_prop.add_argument("--date", default=None)
     tax_post_prop.set_defaults(func=cmd_tax)
+    tax_sec = tax_sub.add_parser(
+        "sections", help="разделы декларации по НДС 3/7/8/9 и раздельный учёт")
+    tax_sec.add_argument("period")
+    tax_sec.add_argument("--invoices", default="out/invoices/registry.json",
+                         help="реестр счетов-фактур (книги покупок и продаж)")
+    tax_sec.add_argument("--exempt", default=None,
+                         help="JSON с необлагаемыми операциями: {\"sales\": [...]}")
+    tax_sec.add_argument("--expenses-not-taxable", type=float, default=None,
+                         help="расходы на необлагаемые операции за период, ₽")
+    tax_sec.add_argument("--expenses-total", type=float, default=None,
+                         help="совокупные расходы за период, ₽ (для правила 5 %%)")
+    tax_sec.add_argument("--no-post", action="store_true",
+                         help="только предложить проводку Дт 91.02 Кт 19.03")
+    tax_sec.add_argument("--date", default=None, help="дата проводки (по умолчанию конец периода)")
+    tax_sec.set_defaults(func=cmd_tax)
     tax_xml = tax_sub.add_parser("xml", help="XML отчёта")
     tax_xml.add_argument("kind", choices=["vat", "ndfl6", "rsv", "profit", "property"])
     tax_xml.add_argument("period")

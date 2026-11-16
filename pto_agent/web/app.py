@@ -26,7 +26,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from .. import closing, forms, invoices, ledger, payroll, stock, tax, treasury
+from .. import (closing, forms, invoices, ledger, payroll, stock, tax, treasury,
+                vat_sections)
 from . import auth, rbac
 from .store import Store
 
@@ -856,6 +857,33 @@ def create_app(*, root: str | Path | None = None, data_dir: str | Path | None = 
                                                           rules=invoices.load_rules())
             journal_report["registry_empty"] = not (
                 invoices_state.get("corrections") or invoices_state.get("issued") or [])
+        # разделы декларации и раздельный учёт: необлагаемые операции вводятся человеком —
+        # в контуре их нет, а придумывать суммы нельзя
+        sections = None
+        if periods:
+            q = request.query_params
+            exempt = None
+            try:
+                exempt_amount = float(str(q.get("exempt_amount") or "").replace(" ", "")
+                                      .replace(",", "."))
+            except ValueError:
+                exempt_amount = 0.0
+            if exempt_amount > 0:
+                exempt = [{"document": q.get("exempt_doc") or None,
+                           "date": q.get("exempt_date") or None,
+                           "amount": exempt_amount,
+                           "code": q.get("exempt_code") or None,
+                           "basis": q.get("exempt_basis") or None}]
+            def _amount(name):
+                try:
+                    value = float(str(q.get(name) or "").replace(" ", "").replace(",", "."))
+                except ValueError:
+                    return None
+                return value if value > 0 else None
+            sections = vat_sections.vat_sections(
+                invoices_state, ledger_state, period, exempt=exempt,
+                expenses_not_taxable=_amount("expenses_not_taxable"),
+                expenses_total=_amount("expenses_total"), rates=rates)
         problems = []
         for report in (vat, ndfl, rsv_report, profit, property_report):
             if report:
@@ -873,6 +901,12 @@ def create_app(*, root: str | Path | None = None, data_dir: str | Path | None = 
                       deadlines=rates.get("deadlines") or {},
                       not_implemented=rates.get("not_implemented") or [],
                       payroll_not_included=(payroll.load_rules().get("not_implemented") or []),
+                      sections=sections,
+                      section_inputs={key: (request.query_params.get(key) or "")
+                                      for key in ("exempt_amount", "exempt_doc",
+                                                  "exempt_date", "exempt_code",
+                                                  "exempt_basis", "expenses_not_taxable",
+                                                  "expenses_total")},
                       can_file=False)
 
     @app.post("/taxes/invoices", response_class=HTMLResponse)
