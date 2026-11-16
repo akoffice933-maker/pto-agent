@@ -403,8 +403,8 @@ def test_payroll_screen_shows_sheet_and_rates(client):
     assert page.status_code == 200, page.text
     text = page.text
     assert "Т-51" in text, "ведомость должна быть на экране, а не только в CLI"
-    assert "897 318,18" in text, "начисление за октябрь берётся из расчёта, а не рисуется"
-    assert "114 233,37" in text, "НДФЛ за октябрь"
+    assert "1 029 199,29" in text, "начисление за октябрь берётся из расчёта, а не рисуется"
+    assert "131 377,91" in text, "НДФЛ за октябрь"
     assert "Не считается" in text, "на экране должно быть написано, чего нет"
     assert "больничные" in text, "причина «не включено» — тоже на экране"
     assert "2 979 000" in text or "30 %" in text
@@ -415,7 +415,22 @@ def test_payroll_period_switch_reads_saved_month(client):
     september = client.get("/payroll?period=2026-09")
     october = client.get("/payroll?period=2026-10")
     assert "910 000,00" in september.text, "сентябрь — по сохранённому расчёту"
-    assert "897 318,18" in october.text
+    assert "1 029 199,29" in october.text
+
+
+def test_payroll_screen_shows_withholdings_and_their_limit(client):
+    """Удержания — на экране: предел 50 % назван, остаток показан числом, не сделано — вслух."""
+    login(client, "buh")
+    text = client.get("/payroll?period=2026-10").text
+    assert "Удержания за 2026-10" in text, "блок удержаний не на экране"
+    assert "после НДФЛ" in text, "база предела должна быть названа: сумма после НДФЛ"
+    assert "50 %" in text and "20 %" in text and "70 %" in text
+    assert "151 557,17" in text, "итог удержаний"
+    assert "17 998,41" in text, "перенесённый остаток должен быть числом, а не забыт"
+    assert "удержано в пределах лимита" in text
+    assert "у документа нет номера" in text, "документ без номера не исполнен — и это видно"
+    assert "Дт 70 Кт 76" in text
+    assert "Не сделано по удержаниям" in text
 
 
 def test_agent_sees_payroll_but_cannot_post_it(client):

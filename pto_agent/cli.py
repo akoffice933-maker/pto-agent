@@ -2492,7 +2492,15 @@ def cmd_payroll(args) -> int:
             from . import orders as orders_mod
 
             orders = orders_mod.load_orders(args.orders)
-        report = wage.accrue(state, timesheet, staff, rules, orders=orders)
+        withheld = None
+        if getattr(args, "withholdings", None):
+            import json as _json
+
+            payload = _json.loads(Path(args.withholdings).read_text(encoding="utf-8"))
+            withheld = payload.get("documents") if isinstance(payload, dict) else payload
+        report = wage.accrue(state, timesheet, staff, rules,
+                             period=getattr(args, "period", None), orders=orders,
+                             withholdings=withheld)
         for item in report["errors"]:
             print(f"  отказ [{item['code']}] {item['what']}: {item['why']}", file=sys.stderr)
         for gap in report["gaps"]:
@@ -2514,8 +2522,15 @@ def cmd_payroll(args) -> int:
               f"{wage.rub(totals['ndfl'])} · взносы {wage.rub(totals['contrib'])} · "
               f"травматизм {wage.rub(totals['injury'])} · к выплате {wage.rub(totals['net'])} · "
               f"стоимость {wage.rub(totals['cost'])}")
+        if "withheld" in totals:
+            print(f"  удержания по документам: {wage.rub(totals['withheld'])} · "
+                  f"перенесено на следующий месяц {wage.rub(totals.get('carried'))} · "
+                  f"к выплате до удержаний {wage.rub(totals.get('net_accrued'))}")
         for text in report.get("not_included") or []:
             print(f"  не считано: {text['what']} — {text['why']}", file=sys.stderr)
+        for item in report.get("withholding_errors") or []:
+            print(f"  удержание не исполнено [{item['code']}] {item['what']}: {item['why']}",
+                  file=sys.stderr)
         for item in report.get("order_errors") or []:
             print(f"  приказ не посчитан [{item['code']}] {item['what']}: {item['why']}",
                   file=sys.stderr)
@@ -2523,6 +2538,33 @@ def cmd_payroll(args) -> int:
             print(f"  ВНИМАНИЕ: приказов не посчитано {len(report['order_errors'])} — суммы по ним "
                   f"в начисление не вошли", file=sys.stderr)
         return 0
+
+    if action == "withhold":
+        import json as _json
+
+        from . import withholdings as wh
+
+        payload = _json.loads(Path(args.withholdings).read_text(encoding="utf-8"))
+        documents = payload.get("documents") if isinstance(payload, dict) else payload
+        period = getattr(args, "period", None) or (payload.get("period")
+                                                   if isinstance(payload, dict) else None)
+        row = next((item for item in state.get("periods") or []
+                    if item.get("period") == period), None)
+        if not row:
+            print(f"за {period} начисления нет: сначала payroll accrue", file=sys.stderr)
+            return 1
+        report = wh.apply(row, documents)
+        text = wh.to_markdown(report)
+        print(text)
+        if getattr(args, "out", None):
+            path = Path(args.out)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+            print(f"  файл: {path}")
+        for item in report["problems"] + report["errors"]:
+            print(f"  ✗ [{item.get('code')}] {item.get('what')}: {item.get('why')}",
+                  file=sys.stderr)
+        return 0 if report["ready"] else 1
 
     if action == "sheet":
         report = wage.sheet(state, args.period)
@@ -2582,6 +2624,13 @@ def cmd_payroll(args) -> int:
         for request in requests:
             print(f"  {request['number']} · {request['counterparty']} · "
                   f"{wage.rub(request['amount'])}")
+        withheld = wage.withholding_requests(row, date=args.date or f"{args.period}-30")
+        if withheld:
+            print(f"заявки на перечисление удержаний: {len(withheld)}")
+            for request in withheld:
+                print(f"  {request['number']} · {request['counterparty']} · "
+                      f"{wage.rub(request['amount'])} (Дт 76 Кт 51)")
+            requests = requests + withheld
         if args.out:
             path = Path(args.out)
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -2590,7 +2639,8 @@ def cmd_payroll(args) -> int:
             print(f"  файл: {path}")
         return 0
 
-    print("что делать: rules · calendar · accrue · sheet · post · fund · verify · requests",
+    print("что делать: rules · calendar · accrue · withhold · sheet · post · fund · verify · "
+          "requests",
           file=sys.stderr)
     return 2
 
@@ -3946,7 +3996,10 @@ def main(argv=None):
     pay_accrue = pay_sub.add_parser("accrue", help="начислить за месяц по табелю и приказам")
     pay_accrue.add_argument("--timesheet", required=True)
     pay_accrue.add_argument("--orders", default=None,
-                            help="файл приказов: больничные, отпускные, премии")
+                            help="файл приказов: больничные, отпускные, премии, увольнения")
+    pay_accrue.add_argument("--withholdings", default=None,
+                            help="реестр удержаний: алименты, исполнительные листы, распоряжения")
+    pay_accrue.add_argument("--period", default=None, help="месяц ГГГГ-ММ (иначе из табеля)")
     pay_accrue.set_defaults(func=cmd_payroll)
     pay_orders = pay_sub.add_parser("orders", help="приказы: что посчитано и что нет")
     pay_orders.add_argument("--orders", required=True)
@@ -3964,6 +4017,11 @@ def main(argv=None):
     pay_fund.set_defaults(func=cmd_payroll)
     pay_verify = pay_sub.add_parser("verify", help="сходимость ведомостей")
     pay_verify.set_defaults(func=cmd_payroll)
+    pay_with = pay_sub.add_parser("withhold", help="удержания: алименты, исполнительные листы")
+    pay_with.add_argument("--withholdings", required=True, help="реестр документов")
+    pay_with.add_argument("--period", default=None)
+    pay_with.add_argument("--out", default=None)
+    pay_with.set_defaults(func=cmd_payroll)
     pay_req = pay_sub.add_parser("requests", help="заявки на выплату зарплаты")
     pay_req.add_argument("--period", required=True)
     pay_req.add_argument("--date", default=None)
