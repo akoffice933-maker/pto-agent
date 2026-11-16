@@ -27,7 +27,9 @@ from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 
 KINDS = {"sick": "Больничный", "vacation": "Отпуск", "bonus": "Премия",
-         "dismissal": "Увольнение (компенсация за неиспользованный отпуск)"}
+         "dismissal": "Увольнение (компенсация за неиспользованный отпуск)",
+         "maternity": "Декрет (пособие по беременности и родам)",
+         "severance": "Выходное пособие (средний месячный заработок)"}
 
 EPS = Decimal("0.01")
 
@@ -268,6 +270,241 @@ def bonus(order: dict, employee: dict, rules: dict, *, period: str) -> dict:
     }
 
 
+def maternity(order: dict, employee: dict, rules: dict, *, period: str) -> dict:
+    """Декретные: 100 % среднего заработка за 140 / 156 / 194 дня.
+
+    Отличия от больничного, из-за которых их нельзя считать «как больничный»:
+
+    * процент не зависит от стажа — всегда 100 %;
+    * расчётный период — два года, но с **исключаемыми днями** (болезнь, прошлый декрет,
+      отпуск по уходу), поэтому делитель не 730, а 730 − исключённые дни;
+    * **замена лет** по заявлению работницы (ч. 1 ст. 14 255-ФЗ) — только на предшествующие
+      годы и только если пособие от этого вырастет; контур считает оба варианта и берёт больший,
+      а не «как получится»;
+    * НДФЛ **не удерживается** (п. 1 ст. 217 НК РФ) и взносы не начисляются;
+    * при стаже меньше 6 месяцев пособие за полный месяц не выше МРОТ (ч. 3 ст. 11 255-ФЗ);
+    * платит СФР напрямую, поэтому в контуре сумма справочная: она не наш расход и не база.
+
+    Дни отпуска: 140 (70+70), 156 при осложнённых родах (70+86), 194 при многоплодной (84+110).
+    """
+    rules_mat = (rules.get("benefits") or {}).get("maternity") or {}
+    days_by_kind = {str(key): int(value) for key, value in
+                    (rules_mat.get("days_by_kind") or {}).items()}
+    errors: list[dict] = []
+    warnings: list[str] = []
+    verify = False
+
+    kind_days = str(order.get("leave") or order.get("days_kind") or "обычные роды")
+    days = int(order.get("days") or days_by_kind.get(kind_days) or 0)
+    if days <= 0:
+        errors.append({"code": "MATERNITY_NO_DAYS", "what": order.get("number"),
+                       "why": "не указано число дней отпуска по беременности и родам"})
+    elif kind_days not in days_by_kind:
+        verify = True
+        warnings.append(f"вид отпуска «{kind_days}» не из справочника ({', '.join(days_by_kind)}): "
+                        f"дни взяты из приказа — {days}; сверить с ЭЛН")
+    elif order.get("days") and int(order.get("days")) != days_by_kind[kind_days]:
+        warnings.append(f"в приказе {order.get('days')} дн., справочник для «{kind_days}» даёт "
+                        f"{days_by_kind[kind_days]}: считать по ЭЛН, %s" % "взят приказ")
+
+    years = order.get("service_years")
+    if years is not None and Decimal(str(years)) < Decimal("0.5"):
+        warnings.append(f"страховой стаж {years} лет меньше 6 месяцев: пособие за полный месяц "
+                        f"не выше МРОТ (ч. 3 ст. 11 255-ФЗ) — расчёт помечен «на проверку»")
+        verify = True
+
+    max_daily = Decimal(str(rules_mat.get("max_daily") or 0))
+    min_sdz = Decimal(str(rules_mat.get("min_sdz") or 0))
+    mrot = Decimal(str(rules.get("mrot") or 0))
+    excluded = int(order.get("excluded_days") or 0)
+
+    def variant(earnings, excluded_days: int, label: str) -> dict:
+        if earnings in (None, "") or kopeck(earnings) <= 0:
+            return {"label": label, "sdz": Decimal("0"), "raw": Decimal("0"),
+                    "earnings": Decimal("0"), "excluded": excluded_days,
+                    "missing": True}
+        base = Decimal(str(earnings))
+        divisor = Decimal("730") - Decimal(max(excluded_days, 0))
+        if divisor <= 0:
+            return {"label": label, "sdz": Decimal("0"), "raw": Decimal("0"),
+                    "earnings": base, "excluded": excluded_days, "missing": True,
+                    "why": f"исключённых дней {excluded_days} — делитель не положителен"}
+        raw = kopeck(base / divisor)
+        sdz = raw
+        capped = False
+        if max_daily and sdz > max_daily:
+            sdz, capped = max_daily, True
+        return {"label": label, "sdz": sdz, "raw": raw, "earnings": base,
+                "excluded": excluded_days, "capped": capped, "missing": False}
+
+    base_variant = variant(order.get("earnings_2y"), excluded, "основные годы")
+    replaced = order.get("replaced") or None
+    replaced_variant = None
+    if replaced:
+        years_from = replaced.get("from_years") or []
+        years_to = replaced.get("to_years") or []
+        if not replaced.get("statement"):
+            errors.append({"code": "MATERNITY_NO_STATEMENT", "what": order.get("number"),
+                           "why": "замена лет без заявления работницы не применяется: "
+                                  "ч. 1 ст. 14 255-ФЗ требует заявления"})
+        elif years_to and years_from and min(years_to) >= min(years_from):
+            errors.append({"code": "MATERNITY_REPLACE_ORDER", "what": order.get("number"),
+                           "why": f"замена лет возможна только на предшествующие: "
+                                  f"{years_from} → {years_to}"})
+        else:
+            replaced_variant = variant(replaced.get("earnings_2y"),
+                                       int(replaced.get("excluded_days") or 0),
+                                       f"замена лет {years_from} → {years_to} по заявлению")
+
+    if base_variant["missing"] and not replaced_variant:
+        errors.append({"code": "MATERNITY_NO_BASE", "what": order.get("number"),
+                       "why": "нет заработка за два предшествующих года: декретные из оклада не "
+                              "считаются — нужна справка о заработке (в т.ч. с прошлых мест)"})
+        chosen = base_variant
+        label = "не рассчитано"
+    else:
+        variants = [item for item in (base_variant, replaced_variant) if item and not item["missing"]]
+        chosen = max(variants, key=lambda item: item["sdz"]) if variants else base_variant
+        label = chosen["label"]
+        if replaced_variant and not replaced_variant["missing"] and \
+                replaced_variant["sdz"] > base_variant["sdz"]:
+            warnings.append(f"замена лет выгоднее: СДЗ {rub(replaced_variant['sdz'])} против "
+                            f"{rub(base_variant['sdz'])} — взята замена")
+        elif replaced_variant and not replaced_variant["missing"]:
+            warnings.append("замена лет подана, но пособие от неё не растёт: взяты основные годы")
+
+    sdz = chosen["sdz"]
+    raised = False
+    if sdz and min_sdz and sdz < min_sdz:
+        sdz, raised = min_sdz, True
+        warnings.append(f"средний дневной заработок {rub(chosen['sdz'])} ниже минимума "
+                        f"{rub(min_sdz)} (МРОТ {rub(mrot)} × 24 / 730): взят минимум")
+
+    # ч. 3 ст. 11 255-ФЗ: при стаже меньше 6 месяцев — потолок МРОТ за полный месяц
+    month_cap_total = Decimal("0")
+    capped_by_month = False
+    if years is not None and Decimal(str(years)) < Decimal("0.5") and mrot and days:
+        month_cap_total = kopeck(mrot / Decimal(_days_in_month(period)))
+        if sdz > month_cap_total:
+            sdz, capped_by_month = month_cap_total, True
+            warnings.append(f"стаж меньше 6 месяцев: дневное пособие ограничено МРОТ месяца "
+                            f"{rub(month_cap_total)} (ч. 3 ст. 11 255-ФЗ)")
+
+    amount = kopeck(sdz * days)
+    row = {
+        "kind": "maternity", "number": order.get("number"), "date": order.get("date"),
+        "days": days, "leave": kind_days, "start": order.get("start"), "end": order.get("end"),
+        "sdz": num(sdz), "sdz_raw": num(chosen["raw"]), "sdz_source": label,
+        "capped": bool(chosen.get("capped")), "raised_to_min": raised,
+        "capped_by_month": capped_by_month,
+        "amount": 0.0,                 # платит СФР: не наш расход
+        "fund_amount": num(amount),    # справочно
+        "taxable": 0.0,                # п. 1 ст. 217 НК РФ — НДФЛ не удерживается
+        "contrib_base": 0.0,           # взносы не начисляются
+        "verify": verify, "errors": errors, "warnings": warnings,
+        "memo": (f"декрет {order.get('number')}: {days} к.д. × {rub(sdz)} = {rub(amount)} "
+                 f"({label}); платит СФР, НДФЛ и взносов нет"),
+    }
+    if chosen.get("missing"):
+        row["not_calculated"] = True
+    return row
+
+
+def severance(order: dict, employee: dict, rules: dict, *, period: str) -> dict:
+    """Выходное пособие: средний месячный заработок по ст. 178 ТК РФ и п. 9 Положения № 540.
+
+    С 01.09.2025 средний месячный заработок — это **средний дневной × среднее число рабочих
+    дней в месяце года** (рабочие дни года / 12), а не дни конкретного месяца после увольнения.
+    Считать по первому месяцу — ошибка, из-за которой сумма зависит от даты увольнения.
+
+    Обложение: НДФЛ и взносы — только с превышения трёхкратного (шестикратного для северных
+    и при ликвидации) среднего месячного заработка (п. 1 ст. 217, п. 1 ст. 422 НК РФ).
+    В контуре считается превышение над трёхкратным: остальное — на проверку человеком.
+    """
+    rules_sev = (rules.get("benefits") or {}).get("severance") or {}
+    multiple = Decimal(str(order.get("multiple") or rules_sev.get("default_multiple") or 1))
+    multipliers = {str(key): value for key, value in (rules_sev.get("multiple_basis") or {}).items()}
+    tax_free_multiple = Decimal(str(rules_sev.get("tax_free_multiple") or 3))
+    errors: list[dict] = []
+    warnings: list[str] = []
+    verify = False
+
+    base = order.get("base_12m")
+    worked_days = order.get("worked_days_12m")
+    worked_days = int(worked_days) if worked_days not in (None, "") else 0
+    sdz = Decimal("0")
+    source = ""
+    if base in (None, "") or kopeck(base) <= 0:
+        errors.append({"code": "SEVERANCE_NO_BASE", "what": order.get("number"),
+                       "why": "нет выплат за 12 месяцев перед увольнением: пособие из оклада не "
+                              "считается — нужна расчётная ведомость за расчётный период"})
+    elif worked_days <= 0:
+        errors.append({"code": "SEVERANCE_NO_DAYS", "what": order.get("number"),
+                       "why": "не указано число фактически отработанных дней за 12 месяцев: "
+                              "средний дневной заработок без знаменателя не считается"})
+    else:
+        sdz = kopeck(Decimal(str(base)) / Decimal(worked_days))
+        source = f"выплаты {rub(base)} / отработано {worked_days} р.д."
+
+    year_days = order.get("working_days_year") or \
+        ((rules.get("calendar") or {}).get("working_days_year") or {}).get("days")
+    if not year_days:
+        errors.append({"code": "SEVERANCE_NO_CALENDAR", "what": order.get("number"),
+                       "why": "нет числа рабочих дней в году увольнения: среднее число рабочих "
+                              "дней в месяце берётся из производственного календаря"})
+        year_days = 0
+    per_month = (Decimal(str(year_days)) / Decimal("12")) if year_days else Decimal("0")
+    monthly = kopeck(sdz * per_month)
+    amount = kopeck(monthly * multiple)
+
+    mrot = Decimal(str(rules.get("mrot") or 0))
+    raised = False
+    if amount and mrot and amount < mrot:
+        amount, raised = kopeck(mrot), True
+        warnings.append(f"средний месячный заработок {rub(monthly)} ниже МРОТ {rub(mrot)}: "
+                        f"взят МРОТ (п. 18 Положения № 540)")
+
+    # двухнедельное пособие: закон порядок прямо не задаёт, поэтому берётся доля 14 / 30,4
+    # от среднего месячного заработка и цифра помечается «на проверку»
+    if multiple and Decimal("0") < multiple < Decimal("1"):
+        two_week_share = Decimal(str(rules_sev.get("two_week_share") or
+                                     (Decimal("14") / Decimal("30.4"))))
+        amount = kopeck(monthly * two_week_share)
+        verify = True
+        warnings.append(f"кратность {multiple:g} — доля месячного заработка {two_week_share:.4f} "
+                        f"(14 / 30,4): порядок расчёта двухнедельного пособия законом прямо не "
+                        f"установлен, цифра на проверку")
+
+    tax_free_limit = kopeck(monthly * tax_free_multiple)
+    taxable = kopeck(amount - tax_free_limit) if amount > tax_free_limit else Decimal("0")
+    if multiple > tax_free_multiple:
+        verify = True
+        warnings.append(f"кратность {multiple:g} выше трёх: часть сверх трёхкратного размера "
+                        f"облагается НДФЛ по правилам для северных и ликвидации — проверить "
+                        f"основание")
+    row = {
+        "kind": "severance", "number": order.get("number"), "date": order.get("date"),
+        "days": None, "multiple": float(multiple),
+        "multiple_basis": multipliers.get(str(int(multiple))) or order.get("basis") or "",
+        "sdz": num(sdz), "sdz_source": source,
+        "working_days_year": int(year_days) if year_days else 0,
+        "working_days_per_month": float(per_month.quantize(Decimal("0.0001"))),
+        "monthly": num(monthly), "amount": num(amount), "fund_amount": 0.0,
+        "tax_free_limit": num(tax_free_limit), "taxable": num(taxable),
+        "contrib_base": num(taxable), "raised_to_min": raised, "verify": verify,
+        "errors": errors, "warnings": warnings,
+        "memo": (f"выходное пособие {order.get('number')}: {multiple:g} × {rub(monthly)} "
+                 f"= {rub(amount)}; {source}; рабочих дней в году {year_days}, "
+                 f"в месяце {float(per_month.quantize(Decimal('0.01')))}; "
+                 f"НДФЛ и взносы с {rub(taxable)} (сверх {tax_free_multiple:g}× = "
+                 f"{rub(tax_free_limit)})"),
+    }
+    if not sdz:
+        row["not_calculated"] = True
+        row["amount"] = 0.0
+    return row
+
+
 def seniority_months(hired: str, dismissal: str, *, excluded_days: int = 0) -> dict:
     """Отпускной стаж в месяцах по п. 35 Правил НКТ СССР № 169.
 
@@ -425,6 +662,8 @@ def report(orders: list[dict], staff: dict, rules: dict, *, period: str) -> dict
               "warnings": [], "totals": {"count": 0, "amount": 0.0, "sick_employer": 0.0,
                                           "sick_fund": 0.0, "vacation": 0.0, "bonus": 0.0,
                                           "dismissal": 0.0,
+                                          "maternity_fund": 0.0, "severance": 0.0,
+                                          "gross": 0.0,
                                           "taxable": 0.0, "contrib_base": 0.0},
               "not_included": [dict(item) for item in NOT_INCLUDED]}
     seen: set[tuple] = set()
@@ -456,7 +695,8 @@ def report(orders: list[dict], staff: dict, rules: dict, *, period: str) -> dict
                                    "ask": f"провести в {order_period} или изменить дату приказа"})
             continue
         row = {"sick": sick, "vacation": vacation, "bonus": bonus,
-               "dismissal": dismissal}[kind](
+               "dismissal": dismissal, "maternity": maternity,
+               "severance": severance}[kind](
             order, employee, rules, period=period)
         row["tab"] = tab
         row["name"] = employee.get("name")
@@ -465,7 +705,7 @@ def report(orders: list[dict], staff: dict, rules: dict, *, period: str) -> dict
         result["errors"].extend(row.pop("errors"))
         result["warnings"].extend(row.pop("warnings"))
         result["lines"].append(row)
-        if row["amount"] <= 0 and kind != "sick":
+        if row["amount"] <= 0 and kind not in ("sick", "maternity"):
             continue
         slot = result["by_tab"].setdefault(tab, {"taxable": Decimal("0"),
                                                  "contrib_base": Decimal("0"),
@@ -473,25 +713,38 @@ def report(orders: list[dict], staff: dict, rules: dict, *, period: str) -> dict
                                                  "sick_fund": Decimal("0"),
                                                  "vacation": Decimal("0"),
                                                  "bonus": Decimal("0"),
-                                                 "dismissal": Decimal("0")})
+                                                 "dismissal": Decimal("0"),
+                                                 "maternity_fund": Decimal("0"),
+                                                 "severance": Decimal("0"),
+                                                 "gross": Decimal("0")})
+        slot["gross"] += kopeck(row["amount"])
         slot["taxable"] += kopeck(row["taxable"])
         slot["contrib_base"] += kopeck(row["contrib_base"])
         slot["sick_employer"] += kopeck(row["amount"]) if kind == "sick" else Decimal("0")
-        slot["sick_fund"] += kopeck(row["fund_amount"])
+        slot["sick_fund"] += kopeck(row["fund_amount"]) if kind == "sick" else Decimal("0")
         slot["vacation"] += kopeck(row["amount"]) if kind == "vacation" else Decimal("0")
         slot["bonus"] += kopeck(row["amount"]) if kind == "bonus" else Decimal("0")
         slot["dismissal"] += kopeck(row["amount"]) if kind == "dismissal" else Decimal("0")
+        slot["maternity_fund"] += kopeck(row["fund_amount"]) if kind == "maternity" \
+            else Decimal("0")
+        slot["severance"] += kopeck(row["amount"]) if kind == "severance" else Decimal("0")
         totals = result["totals"]
         totals["amount"] = num(kopeck(totals["amount"]) + kopeck(row["amount"]))
         totals["sick_employer"] = num(kopeck(totals["sick_employer"])
                                       + (kopeck(row["amount"]) if kind == "sick" else 0))
-        totals["sick_fund"] = num(kopeck(totals["sick_fund"]) + kopeck(row["fund_amount"]))
+        totals["sick_fund"] = num(kopeck(totals["sick_fund"])
+                                  + (kopeck(row["fund_amount"]) if kind == "sick" else 0))
         totals["vacation"] = num(kopeck(totals["vacation"])
                                  + (kopeck(row["amount"]) if kind == "vacation" else 0))
         totals["bonus"] = num(kopeck(totals["bonus"])
                               + (kopeck(row["amount"]) if kind == "bonus" else 0))
         totals["dismissal"] = num(kopeck(totals["dismissal"])
                                   + (kopeck(row["amount"]) if kind == "dismissal" else 0))
+        totals["maternity_fund"] = num(kopeck(totals["maternity_fund"])
+                                       + (kopeck(row["fund_amount"]) if kind == "maternity" else 0))
+        totals["severance"] = num(kopeck(totals["severance"])
+                                  + (kopeck(row["amount"]) if kind == "severance" else 0))
+        totals["gross"] = num(kopeck(totals["gross"]) + kopeck(row["amount"]))
         totals["taxable"] = num(kopeck(totals["taxable"]) + kopeck(row["taxable"]))
         totals["contrib_base"] = num(kopeck(totals["contrib_base"]) + kopeck(row["contrib_base"]))
         totals["count"] += 1
@@ -522,7 +775,9 @@ def to_markdown(result: dict, rules: dict | None = None) -> str:
     lines.append(f"Приказов {totals.get('count')}: начислено {rub(totals.get('amount'))} "
                  f"(больничные работодателя {rub(totals.get('sick_employer'))}, отпускные "
                  f"{rub(totals.get('vacation'))}, премии {rub(totals.get('bonus'))}, "
-                 f"компенсации при увольнении {rub(totals.get('dismissal'))}); "
+                 f"компенсации при увольнении {rub(totals.get('dismissal'))}, выходные пособия "
+                 f"{rub(totals.get('severance'))}, декретные за счёт СФР "
+                 f"{rub(totals.get('maternity_fund'))}); "
                  f"за счёт СФР {rub(totals.get('sick_fund'))} — не наш расход.")
     if result.get("errors"):
         lines.append("")

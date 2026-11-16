@@ -67,7 +67,8 @@
   <table class="table compact">
     <thead>
       <tr><th>таб.</th><th>сотрудник</th><th>объект</th><th class="num">оклад</th>
-          <th class="num">дни</th><th class="num">начислено</th><th class="num">вычет</th>
+          <th class="num">дни</th><th class="num">начислено</th>
+          <th class="num">СФР, справочно</th><th class="num">вычет</th>
           <th class="num">НДФЛ</th><th class="num">взносы</th><th class="num">травм.</th>
           <th class="num">к выплате</th></tr>
     </thead>
@@ -79,7 +80,11 @@
         <td class="muted small">{{ row.object }}</td>
         <td class="num">{{ row.salary|rub }}</td>
         <td class="num">{{ row.worked_days }} / {{ row.norm_days }}</td>
-        <td class="num">{{ row.accrued|rub }}</td>
+        <td class="num">{{ row.accrued|rub }}
+          {% if row.tax_free %}<div class="muted small">в т.ч. не облагается {{ row.tax_free|rub }}</div>{% endif %}</td>
+        <td class="num">{{ ((row.sick_fund or 0) + (row.maternity_fund or 0))|rub }}
+          {% if row.maternity_fund %}<div class="muted small">декрет</div>
+          {% elif row.sick_fund %}<div class="muted small">больничный</div>{% endif %}</td>
         <td class="num">{{ row.deduction|rub }}{% if row.deduction_why %}<div class="muted small">{{ row.deduction_why }}</div>{% endif %}</td>
         <td class="num">{{ row.ndfl|rub }}<div class="muted small">{{ row.ndfl_steps|length }} ступ.</div></td>
         <td class="num">{{ row.contrib|rub }}</td>
@@ -92,6 +97,7 @@
       <tr>
         <th colspan="5">итого: {{ sheet.rows|length }} чел.</th>
         <th class="num">{{ sheet.totals.accrued|rub }}</th>
+        <th class="num">{{ ((sheet.totals.sick_fund or 0) + (sheet.totals.maternity_fund or 0))|rub }}</th>
         <th class="num">{{ sheet.totals.deductions|rub }}</th>
         <th class="num">{{ sheet.totals.ndfl|rub }}</th>
         <th class="num">{{ sheet.totals.contrib|rub }}</th>
@@ -103,6 +109,10 @@
   <p class="muted small">Оклад делится на норму дней месяца: {{ sheet.norm.days }} дн. /
     {{ sheet.norm.hours }} ч. Недоделанные дни уменьшают начисление, переработка не
     оплачивается молча — она попадает в замечания.</p>
+  <p class="muted small">«СФР, справочно» — деньги фонда, а не расход организации: декретные
+    (140 / 156 / 194 дня, 100 % среднего заработка, НДФЛ и взносов нет) и часть больничного
+    с 4-го дня. Выходное пособие попадает в «начислено» только в облагаемой части: до трёх
+    средних месячных заработков НДФЛ и взносов нет (п. 1 ст. 217, п. 1 ст. 422 НК РФ).</p>
 </section>
 {% endif %}
 
