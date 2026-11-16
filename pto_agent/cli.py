@@ -2672,6 +2672,32 @@ def cmd_tax(args) -> int:
                     print(f"  ✗ {gap.get('what')}: {gap.get('why')}", file=sys.stderr)
         return 0 if not report["problems"] else 1
 
+    if action in ("zero-rate", "section12"):
+        from . import vat_declaration as declaration
+
+        if action == "zero-rate":
+            exports = None
+            if getattr(args, "exports", None):
+                payload = json.loads(Path(args.exports).read_text(encoding="utf-8"))
+                exports = payload.get("exports") if isinstance(payload, dict) else payload
+            report = declaration.zero_rate(args.period, exports=exports, rates=rates)
+        else:
+            invoices_list = None
+            if getattr(args, "invoices_file", None):
+                payload = json.loads(Path(args.invoices_file).read_text(encoding="utf-8"))
+                invoices_list = payload.get("invoices") if isinstance(payload, dict) else payload
+            report = declaration.section12(args.period, invoices=invoices_list, rates=rates)
+        text = declaration.to_markdown(report)
+        print(text)
+        if getattr(args, "out", None):
+            out = Path(args.out)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(text, encoding="utf-8")
+            print(f"  файл: {out}")
+        for gap in report.get("gaps") or []:
+            print(f"  ✗ {gap.get('what')}: {gap.get('why')}", file=sys.stderr)
+        return 0 if report.get("ready") else 1
+
     if action == "xml":
         kind = getattr(args, "kind", "")
         action = {"vat": "vat", "ndfl6": "ndfl", "ndfl": "ndfl", "rsv": "rsv",
@@ -2812,6 +2838,25 @@ def cmd_sign(args) -> int:
     print(f"  отпечаток: {result['fingerprint']['sha256'][:32]}… "
           f"({result['fingerprint']['kind']})")
     return 1
+
+
+def cmd_xmlcheck(args) -> int:
+    """Проверить XML: структура по профилю контура и, если передана, внешняя XSD."""
+    from . import xml_check
+
+    path = Path(args.file)
+    if not path.exists():
+        print(f"файл не найден: {path}", file=sys.stderr)
+        return 2
+    report = xml_check.validate(path.read_text(encoding="utf-8"),
+                                profile_kind=args.profile, xsd_path=args.xsd)
+    print(xml_check.to_markdown(report))
+    if args.out:
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(xml_check.to_markdown(report), encoding="utf-8")
+        print(f"  файл: {out}")
+    return 0 if report["ok"] else 1
 
 
 def cmd_edo(args) -> int:
@@ -3007,6 +3052,51 @@ def cmd_invoices(args) -> int:
         for gap in result.get("gaps") or []:
             print(f"  · {gap.get('what')} — {gap.get('why')}", file=sys.stderr)
         return 1
+
+    if action == "book-fix":
+        from . import vat_declaration as declaration
+
+        if not path:
+            print("нужен реестр: --registry <файл>", file=sys.stderr)
+            return 2
+        state = sf.load(path) if path.exists() else sf.new_state()
+        result = declaration.register_book_fix(
+            state, sheet=args.sheet, base_period=args.base_period, number=args.number,
+            date=args.date, net_before=args.net_before, vat_before=args.vat_before,
+            net_after=args.net_after, vat_after=args.vat_after,
+            operation_code=args.code, inn=args.inn, reason=args.reason,
+            entry_date=args.entry_date)
+        print(f"{result['status']}")
+        for error in result.get("errors") or []:
+            print(f"  ✗ {error['code']}: {error['why']}")
+        for gap in result.get("gaps") or []:
+            print(f"  ? {gap.get('what')}: {gap.get('why')} → {gap.get('ask')}")
+        if result.get("fix"):
+            sf.save(state, path)
+            sheet = declaration.additional_sheets(
+                state, result["fix"]["period"], sheet=args.sheet,
+                book_total_vat=args.book_total_vat)
+            print(declaration.to_markdown(sheet))
+        for warning in result.get("warnings") or []:
+            print(f"  ⚠ {warning}", file=sys.stderr)
+        return 0 if result.get("fix") else 1
+
+    if action == "additional-sheet":
+        from . import vat_declaration as declaration
+
+        if not path or not path.exists():
+            print("нужен реестр: --registry <файл>", file=sys.stderr)
+            return 2
+        state = sf.load(path)
+        report = declaration.additional_sheets(state, args.period, sheet=args.sheet,
+                                               book_total_vat=args.book_total_vat)
+        print(declaration.to_markdown(report))
+        if args.out:
+            out = Path(args.out)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(declaration.to_markdown(report), encoding="utf-8")
+            print(f"  файл: {out}")
+        return 0 if report["ready"] else 1
 
     if action == "codes":
         codes = sf.load_operation_codes()
@@ -3921,6 +4011,18 @@ def main(argv=None):
                          help="только предложить проводку Дт 91.02 Кт 19.03")
     tax_sec.add_argument("--date", default=None, help="дата проводки (по умолчанию конец периода)")
     tax_sec.set_defaults(func=cmd_tax)
+    tax_zero = tax_sub.add_parser("zero-rate",
+                                  help="разделы 4–6: операции по ставке 0 %")
+    tax_zero.add_argument("period")
+    tax_zero.add_argument("--exports", default=None,
+                          help='JSON с реестром операций: {"exports": [...]}')
+    tax_zero.set_defaults(func=cmd_tax)
+    tax_s12 = tax_sub.add_parser("section12",
+                                 help="раздел 12: счета-фактуры лиц из п. 5 ст. 173 НК РФ")
+    tax_s12.add_argument("period")
+    tax_s12.add_argument("--invoices-file", default=None,
+                         help='JSON с реестром: {"invoices": [...]}')
+    tax_s12.set_defaults(func=cmd_tax)
     tax_xml = tax_sub.add_parser("xml", help="XML отчёта")
     tax_xml.add_argument("kind", choices=["vat", "ndfl6", "rsv", "profit", "property"])
     tax_xml.add_argument("period")
@@ -3985,6 +4087,30 @@ def main(argv=None):
     inv_fix.set_defaults(func=cmd_invoices)
     inv_codes = inv_sub.add_parser("codes", help="коды видов операций (приказ № ММВ-7-3/136@)")
     inv_codes.set_defaults(func=cmd_invoices)
+    inv_bookfix = inv_sub.add_parser(
+        "book-fix", help="исправление книги прошлого периода → дополнительный лист")
+    inv_bookfix.add_argument("--sheet", default="purchases",
+                             choices=["purchases", "sales"], help="книга покупок или продаж")
+    inv_bookfix.add_argument("--base-period", required=True, help="период исправляемой книги")
+    inv_bookfix.add_argument("--number", required=True, help="номер счёта-фактуры из книги")
+    inv_bookfix.add_argument("--date", required=True, help="дата счёта-фактуры")
+    inv_bookfix.add_argument("--net-before", type=float, default=None, help="стоимость «до»")
+    inv_bookfix.add_argument("--vat-before", type=float, default=None, help="НДС «до»")
+    inv_bookfix.add_argument("--net-after", type=float, default=None, help="стоимость «после»")
+    inv_bookfix.add_argument("--vat-after", type=float, default=None, help="НДС «после»")
+    inv_bookfix.add_argument("--code", default=None, help="код вида операции (2 знака)")
+    inv_bookfix.add_argument("--inn", default="", help="ИНН контрагента")
+    inv_bookfix.add_argument("--reason", required=True, help="основание исправления")
+    inv_bookfix.add_argument("--entry-date", required=True, help="дата записи доп. листа")
+    inv_bookfix.add_argument("--book-total-vat", type=float, default=None,
+                             help="итоговая сумма налога по книге (строка 005 приложения)")
+    inv_bookfix.set_defaults(func=cmd_invoices)
+    inv_sheet = inv_sub.add_parser("additional-sheet",
+                                   help="дополнительный лист книги и приложение к разделу 8/9")
+    inv_sheet.add_argument("period")
+    inv_sheet.add_argument("--sheet", default="purchases", choices=["purchases", "sales"])
+    inv_sheet.add_argument("--book-total-vat", type=float, default=None)
+    inv_sheet.set_defaults(func=cmd_invoices)
     inv_xml = inv_sub.add_parser("sf-xml", help="выгрузка книги/журнала в структуре формата ФНС")
     inv_xml.add_argument("period")
     inv_xml.add_argument("--book", default="sales", choices=["sales", "purchases", "journal"])
@@ -4004,6 +4130,11 @@ def main(argv=None):
     sign_sign.set_defaults(func=cmd_sign)
     signing.set_defaults(func=cmd_sign)
 
+    xmlcheck = sub.add_parser("xmlcheck", help="проверка XML: профиль контура и XSD")
+    xmlcheck.add_argument("file", help="путь к XML")
+    xmlcheck.add_argument("--profile", default="books", choices=["books", "vat"])
+    xmlcheck.add_argument("--xsd", default=None, help="путь к XSD-схеме ФНС, если она есть")
+    xmlcheck.set_defaults(func=cmd_xmlcheck)
     edo = sub.add_parser("edo", help="ЭДО: Диадок, тренировка и отправка")
     edo.add_argument("--state", default="out/edo/state.json")
     edo.add_argument("--box", default="")

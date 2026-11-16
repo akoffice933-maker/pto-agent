@@ -884,6 +884,17 @@ def create_app(*, root: str | Path | None = None, data_dir: str | Path | None = 
                 invoices_state, ledger_state, period, exempt=exempt,
                 expenses_not_taxable=_amount("expenses_not_taxable"),
                 expenses_total=_amount("expenses_total"), rates=rates)
+        # разделы 4–6, 12 и доп. листы книг: считаются тем же модулем, что в CLI
+        declaration = None
+        if periods:
+            from .. import vat_declaration
+            zero = vat_declaration.zero_rate(period, rates=rates)
+            s12 = vat_declaration.section12(period, rates=rates)
+            book_total = ((purchases_book or {}).get("totals") or {}).get("vat")
+            sheets = [vat_declaration.additional_sheets(
+                invoices_state, period, sheet=name, book_total_vat=book_total)
+                for name in ("purchases", "sales")]
+            declaration = {"zero": zero, "section12": s12, "sheets": sheets}
         problems = []
         for report in (vat, ndfl, rsv_report, profit, property_report):
             if report:
@@ -901,7 +912,7 @@ def create_app(*, root: str | Path | None = None, data_dir: str | Path | None = 
                       deadlines=rates.get("deadlines") or {},
                       not_implemented=rates.get("not_implemented") or [],
                       payroll_not_included=(payroll.load_rules().get("not_implemented") or []),
-                      sections=sections,
+                      sections=sections, declaration=declaration,
                       section_inputs={key: (request.query_params.get(key) or "")
                                       for key in ("exempt_amount", "exempt_doc",
                                                   "exempt_date", "exempt_code",
