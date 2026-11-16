@@ -37,8 +37,9 @@ from pathlib import Path
 
 from . import ledger, tax
 
-SCHEMA = "pto-agent/invoices@2"
-RULES_PATH = Path(__file__).resolve().parents[1] / "data" / "reference" / "invoice_rules.json"
+SCHEMA = "pto-agent/invoices@3"
+DATA = Path(__file__).resolve().parents[1] / "data"
+RULES_PATH = DATA / "reference" / "invoice_rules.json"
 KINDS = {"shipped": "отгрузка (акт подписан)", "advance": "аванс полученный",
          "correction": "корректировочный"}
 
@@ -68,6 +69,59 @@ def load_rules(path: str | Path | None = None) -> dict:
                                                 "pto-agent/invoice-rules@2"):
         raise ValueError(f"правила счетов-фактур: схема {payload.get('schema')!r} не та")
     return payload
+
+
+OPERATION_CODES_PATH = DATA / "reference" / "vat_operation_codes.json"
+
+
+def load_operation_codes(path: str | Path | None = None) -> dict:
+    """Справочник кодов видов операций (приказ ФНС от 14.03.2016 № ММВ-7-3/136@).
+
+    Коды в контуре не назначаются «на глаз»: справочник переписан из приказа целиком, а
+    правило вывода кода для конкретного документа лежит рядом с кодом (`rules`), чтобы
+    расхождение можно было проверить, а не поверить.
+    """
+    payload = json.loads(Path(path or OPERATION_CODES_PATH).read_text(encoding="utf-8"))
+    if payload.get("schema") != "pto-agent/vat-operation-codes@1":
+        raise ValueError(f"коды видов операций: схема {payload.get('schema')!r} не та")
+    return payload
+
+
+def operation_code_for(kind: str, *, direction: str = "", agency: bool = False,
+                       agent: bool = False, codes: dict | None = None) -> dict:
+    """Код вида операции для документа: код, правило и источник.
+
+    `kind`: `shipped` (отгрузка), `advance` (аванс), `purchase` (приобретение),
+    `correction` (корректировочный). Возвращает словарь с кодом, коротким названием,
+    правилом и источником — либо `code=None` и причину, если правила нет. Выдумывать код,
+    которого нет в приказе, контур не будет.
+    """
+    codes = codes or load_operation_codes()
+    by_code = {row["code"]: row for row in codes.get("codes") or []}
+
+    def answer(code: str, why: str) -> dict:
+        row = by_code.get(code) or {}
+        return {"code": code, "short": row.get("short") or "", "why": why,
+                "source": codes.get("source"), "resolved": True}
+
+    if agent:
+        return answer("06", "операция налогового агента по ст. 161 НК РФ")
+    if kind == "correction":
+        if direction == "decrease":
+            return answer("18", "корректировочный СФ на уменьшение стоимости")
+        return answer("01", "увеличение стоимости идёт по коду 01: отдельного кода в приказе нет")
+    if kind == "shipped":
+        if agency:
+            return answer("01", "отгрузка по агентскому/комиссионному договору — входит в код 01")
+        return answer("01", "отгрузка товаров (работ, услуг) покупателю")
+    if kind == "advance":
+        return answer("02", "счёт-фактура на полученный аванс")
+    if kind == "purchase":
+        if agency:
+            return answer("01", "приобретение по агентскому/комиссионному договору")
+        return answer("01", "приобретение товаров (работ, услуг) у поставщика")
+    return {"code": None, "why": f"для вида {kind!r} правила вывода кода нет",
+            "resolved": False}
 
 
 # ─────────────────────────── состояние ───────────────────────────
@@ -137,6 +191,7 @@ def _days_between(start: str, end: str) -> int | None:
 def register(state: dict, *, kind: str, date: str, base_date: str, base_number: str,
              counterparty: str, contract: str = "", net=None, vat=None, rate=None,
              number: str | None = None, object_name: str = "", source: str = "",
+             agency: bool = False, agent: bool = False, operation_code: str | None = None,
              rules: dict | None = None) -> dict:
     """Зарегистрировать выставленный счёт-фактуру.
 
@@ -227,13 +282,24 @@ def register(state: dict, *, kind: str, date: str, base_date: str, base_number: 
                                         "переиспользуется даже для аннулированного документа"})
         return result
 
+    # код вида операции: у документа может быть свой (его ввёл человек), иначе — по правилу
+    # из справочника; правило и источник сохраняем рядом с кодом, чтобы это можно было проверить
+    derived = operation_code_for("advance" if kind == "advance" else "shipped", agency=agency,
+                                agent=agent)
+    if operation_code:
+        derived = dict(derived, code=str(operation_code), why="код указан человеком",
+                       source="введён при регистрации документа", resolved=True)
+
     invoice = {"number": str(number_value), "date": date, "kind": kind,
                "base_number": base_number, "base_date": base_date,
                "counterparty": str(counterparty), "contract": str(contract or ""),
                "object": object_name or str(state.get("object") or ""),
                "net": num(net_value), "rate": float(rate_value), "vat": num(vat_value),
                "gross": num(gross), "late_days": lag, "late": bool(late),
-               "source": source, "key": key,
+               "source": source, "key": key, "agency": bool(agency),
+               "operation_code": derived.get("code"),
+               "operation_code_why": derived.get("why"),
+               "operation_code_source": derived.get("source"),
                "period": str(date)[:7]}
     state.setdefault("issued", []).append(invoice)
     state.setdefault("keys", []).append(key)
@@ -357,7 +423,8 @@ def register_purchase(state: dict, *, number: str, date: str, base_number: str,
                       counterparty: str, net=None, rate=None, vat=None,
                       base_date: str = "", received_date: str = "", inn: str = "",
                       kpp: str = "", contract: str = "", object_name: str = "",
-                      agency: bool = False, source: str = "",
+                      agency: bool = False, agent: bool = False, source: str = "",
+                      operation_code: str | None = None,
                       rules: dict | None = None) -> dict:
     """Зарегистрировать **полученный** счёт-фактуру поставщика.
 
@@ -432,6 +499,10 @@ def register_purchase(state: dict, *, number: str, date: str, base_number: str,
             f"СФ {number}: получен через {lag} дн. после документа-основания — вычет "
             f"заявляется в квартале получения, а не задним числом")
 
+    derived = operation_code_for("purchase", agency=agency, agent=agent)
+    if operation_code:
+        derived = dict(derived, code=str(operation_code), why="код указан человеком",
+                       source="введён при регистрации документа", resolved=True)
     invoice = {"number": number, "date": date, "base_number": str(base_number or ""),
                "base_date": base_date, "counterparty": str(counterparty),
                "inn": str(inn or ""), "kpp": str(kpp or ""), "contract": str(contract or ""),
@@ -439,6 +510,9 @@ def register_purchase(state: dict, *, number: str, date: str, base_number: str,
                "net": num(net_value), "rate": float(rate_value), "vat": num(vat_value),
                "gross": num(net_value + vat_value), "received_date": str(received_date or date),
                "agency": bool(agency), "source": source, "kind": "received",
+               "operation_code": derived.get("code"),
+               "operation_code_why": derived.get("why"),
+               "operation_code_source": derived.get("source"),
                "period": date[:7], "key": key}
     state.setdefault("received", []).append(invoice)
     state.setdefault("keys", []).append(key)
@@ -526,11 +600,19 @@ def purchase_book(state: dict, ledger_state: dict, period: str, *, rates: dict |
         base = str(invoice.get("base_number") or "")
         vat = dec(invoice.get("vat"))
         row = {"number": invoice.get("number"), "date": invoice.get("date"),
+               "fix_number": invoice.get("fix_number") or "",
+               "fix_date": invoice.get("fix_date") or "",
+               "fix_note": _fix_note(invoice),
                "received_date": invoice.get("received_date"),
                "counterparty": invoice.get("counterparty"), "inn": invoice.get("inn"),
                "base_number": base, "net": invoice.get("net"), "rate": invoice.get("rate"),
                "vat": invoice.get("vat"), "gross": invoice.get("gross"),
-               "kind": "received", "kind_title": "полученный"}
+               "kind": "received", "kind_title": "полученный",
+               "operation_code": invoice.get("operation_code") or "",
+               "operation_code_why": invoice.get("operation_code_why") or "",
+               "fix_number": invoice.get("fix_number") or "",
+               "fix_date": invoice.get("fix_date") or "",
+               "fix_note": _fix_note(invoice)}
         if base and base not in booked:
             problems.append({
                 "code": "PURCHASE_NO_BASE_DOC", "what": f"СФ {invoice.get('number')}",
@@ -635,6 +717,7 @@ def register_correction(state: dict, *, for_kind: str, base_number: str, base_da
                         number: str | None = None, date: str = "",
                         delta_net=None, delta_vat=None, rate=None, direction: str = "decrease",
                         reason: str = "", counterparty: str = "", contract: str = "",
+                        operation_code: str | None = None,
                         rules: dict | None = None) -> dict:
     """Корректировочный счёт-фактура (приложение № 2 к постановлению № 1137).
 
@@ -704,6 +787,10 @@ def register_correction(state: dict, *, for_kind: str, base_number: str, base_da
                 "ask": "номер и дата корректировочного СФ от поставщика"})
             return result
         number = next_number(state, date, kind="correction", rules=rules)
+    derived = operation_code_for("correction", direction=direction)
+    if operation_code:
+        derived = dict(derived, code=str(operation_code), why="код указан человеком",
+                       source="введён при регистрации документа", resolved=True)
     correction = {"number": str(number), "date": date, "for_kind": for_kind,
                   "base_number": str(base_number), "base_date": str(base_date),
                   "counterparty": str(counterparty or original.get("counterparty") or ""),
@@ -713,11 +800,98 @@ def register_correction(state: dict, *, for_kind: str, base_number: str, base_da
                   "vat": num(sign * vat_value),
                   "gross": num(sign * (net_value + vat_value)),
                   "kind": "correction", "kind_title": f"корректировочный ({direction})",
+                  "operation_code": derived.get("code"),
+                  "operation_code_why": derived.get("why"),
+                  "operation_code_source": derived.get("source"),
                   "period": date[:7], "key": key}
     state.setdefault("corrections", []).append(correction)
     state.setdefault("keys", []).append(key)
     result.update({"status": STATUS_OK, "correction": correction})
     return result
+
+
+def fix_invoice(state: dict, *, for_kind: str, number: str, date: str,
+                fix_number: str | None = None, fix_date: str = "",
+                reason: str = "", rules: dict | None = None) -> dict:
+    """Отметить исправление счёта-фактуры: номер и дата **исправления**, а не новый документ.
+
+    Исправление (п. 2 Правил, приложение № 1 к постановлению № 1137; п. 7 разд. II и п. 6
+    разд. III там же) не создаёт новый счёт-фактуру: номер и дата документа остаются
+    прежними, добавляются номер и дата исправления. Поэтому документ не перевыставляется,
+    а получает отметку, которую видно и в книге, и в выгрузке.
+
+    Номер исправления своего документа налогоплательщик присваивает сам (по порядку), номер
+    исправления входящего счёта-фактуры — поставщик: контур его не выдумывает.
+    """
+    rules = rules or load_rules()
+    result = {"status": STATUS_REJECTED, "invoice": None, "errors": [], "gaps": [],
+              "warnings": []}
+    if for_kind not in ("issued", "received"):
+        result["errors"].append({"code": "FIX_KIND", "what": for_kind,
+                                 "why": "исправление бывает у выставленного (issued) или "
+                                        "полученного (received) счёта-фактуры"})
+        return result
+    pool = state.get("issued" if for_kind == "issued" else "received") or []
+    document = next((row for row in pool if str(row.get("number")) == str(number)
+                     and str(row.get("date")) == str(date)), None)
+    if not document:
+        result["errors"].append({
+            "code": "FIX_NO_ORIGINAL", "what": f"{number} от {date}",
+            "why": "исправлять нечего: счёта-фактуры с таким номером и датой нет в реестре"})
+        return result
+    if document.get("agency") and not document.get("operation_code"):
+        result["warnings"].append("документ посреднический: код вида операции у него не выведен")
+    fix_date = str(fix_date or "")
+    if not fix_date:
+        result["gaps"].append({"what": f"дата исправления счёта-фактуры {number}",
+                               "why": "без даты исправление невозможно датировать",
+                               "ask": "дата исправления из документа поставщика/нашего"})
+        return result
+    if fix_date < str(document.get("date") or ""):
+        result["errors"].append({
+            "code": "FIX_DATE_BEFORE_DOC", "what": number,
+            "why": f"дата исправления {fix_date} раньше даты счёта-фактуры "
+                   f"{document.get('date')}: так не бывает"})
+        return result
+    if not str(reason or "").strip():
+        result["gaps"].append({"what": f"причина исправления СФ {number}",
+                               "why": "без причины исправление неотличимо от правки цифр задним "
+                                      "числом",
+                               "ask": "основание: неверные реквизиты, сумма, ставка, адрес"})
+        return result
+    if not fix_number or not str(fix_number).strip():
+        if for_kind == "received":
+            result["gaps"].append({
+                "what": f"номер исправления полученного СФ {number}",
+                "why": "номер исправления присваивает поставщик: контур его не выдумывает",
+                "ask": "номер и дата исправления из документа поставщика"})
+            return result
+        # свой документ: номер исправления — по порядку в пределах документа
+        fix_number = str(len(document.get("fixes") or []) + 1)
+
+    fix = {"number": str(fix_number), "date": fix_date, "reason": str(reason),
+           "period": fix_date[:7]}
+    document.setdefault("fixes", []).append(fix)
+    document["fix_number"] = fix["number"]
+    document["fix_date"] = fix["date"]
+    document["fix_reason"] = fix["reason"]
+    if fix_date[:7] != str(document.get("period") or ""):
+        result["warnings"].append(
+            f"исправление {fix['number']} от {fix_date} относится к другому периоду, чем сам "
+            f"документ {document.get('period')}: в книгу оно войдёт строкой текущего периода, "
+            f"а дополнительный лист (КНД 1115105/1115106) контур не формирует — это запрос к "
+            f"бухгалтеру")
+    # отдаём копию: иначе следующее исправление перепишет уже возвращённый результат,
+    # и вызывающий увидит не то состояние, которое получил
+    result.update({"status": STATUS_OK,
+                   "invoice": dict(document, fixes=list(document.get("fixes") or []))})
+    return result
+
+
+def _fix_note(row: dict) -> str:
+    if not row.get("fix_number"):
+        return ""
+    return f"исправление № {row['fix_number']} от {row['fix_date']}"
 
 
 def _corrections_for(state: dict, period: str, for_kind: str) -> list[dict]:
@@ -751,6 +925,9 @@ def intermediary_journal(state: dict, period: str, *, rules: dict | None = None)
                      "why": "журнал пуст: посреднических операций в контуре нет",
                      "ask": "отметить документ как посреднический (agency) или не сдавать журнал"})
     missing_code = [row for row in part1 + part2 if not row.get("operation_code")]
+    agency_codes = {str(row.get("number")): (row.get("operation_code"),
+                                             row.get("operation_code_why") or "")
+                    for row in part1 + part2}
     if missing_code:
         gaps.append({"what": "код вида операции в журнале",
                      "why": "перечень кодов по приказу ФНС от 14.03.2016 № ММВ-7-3/136@ в "
@@ -764,12 +941,16 @@ def intermediary_journal(state: dict, period: str, *, rules: dict | None = None)
                    "counterparty": row.get("counterparty"),
                    "net": row.get("net"), "vat": row.get("vat"),
                    "gross": num(dec(row.get("net")) + dec(row.get("vat"))),
-                   "operation_code": row.get("operation_code") or ""} for row in part1],
+                   "operation_code": agency_codes.get(str(row.get("number")), ("",))[0] or "",
+                   "operation_code_why": agency_codes.get(str(row.get("number")),
+                                                          ("", ""))[1]} for row in part1],
         "part2": [{"number": row.get("number"), "date": row.get("date"),
                    "counterparty": row.get("counterparty"),
                    "net": row.get("net"), "vat": row.get("vat"),
                    "gross": num(dec(row.get("net")) + dec(row.get("vat"))),
-                   "operation_code": row.get("operation_code") or ""} for row in part2],
+                   "operation_code": agency_codes.get(str(row.get("number")), ("",))[0] or "",
+                   "operation_code_why": agency_codes.get(str(row.get("number")),
+                                                          ("", ""))[1]} for row in part2],
         "totals": {"part1": len(part1), "part2": len(part2), "vat1": num(vat1),
                    "vat2": num(vat2)},
         "gaps": gaps, "ready": not missing_code, "rules": rules,
@@ -804,6 +985,11 @@ def sales_book(state: dict, ledger_state: dict, period: str, *, rates: dict | No
         rows.append({"number": invoice.get("number"), "date": invoice.get("date"),
                      "kind": invoice.get("kind"),
                      "kind_title": KINDS.get(str(invoice.get("kind")), ""),
+                     "operation_code": invoice.get("operation_code") or "",
+                     "operation_code_why": invoice.get("operation_code_why") or "",
+                     "fix_number": invoice.get("fix_number") or "",
+                     "fix_date": invoice.get("fix_date") or "",
+                     "fix_note": _fix_note(invoice),
                      "base_number": invoice.get("base_number"),
                      "counterparty": invoice.get("counterparty"),
                      "contract": invoice.get("contract"),
@@ -933,6 +1119,8 @@ def to_fns_xml(report: dict, *, organisation: dict | None = None,
             node = ET.SubElement(document, part)
             for index, row in enumerate(rows, 1):
                 item = ET.SubElement(node, "СвСчФакт", {"НомПП": str(index)})
+                if row.get("operation_code"):
+                    ET.SubElement(item, "КодВидОпер").text = str(row["operation_code"])
                 ET.SubElement(item, "НомерСчФ").text = str(row.get("number") or "")
                 ET.SubElement(item, "ДатаСчФ").text = _dmy(row.get("date"))
                 counterparty = str(row.get("counterparty") or "")
@@ -949,8 +1137,15 @@ def to_fns_xml(report: dict, *, organisation: dict | None = None,
         for index, row in enumerate(report.get("rows") or [], 1):
             item = ET.SubElement(document, str(spec.get("row") or "СвПродаж"),
                                  {"НомПП": str(index)})
-            ET.SubElement(item, "НомДатаСчФ", {"НомерСчФ": str(row.get("number") or ""),
-                                               "ДатаСчФ": _dmy(row.get("date"))})
+            if row.get("operation_code"):
+                ET.SubElement(item, "КодВидОпер").text = str(row["operation_code"])
+            attrs = {"НомерСчФ": str(row.get("number") or ""),
+                     "ДатаСчФ": _dmy(row.get("date"))}
+            if row.get("fix_number"):
+                # исправление — реквизит документа, а не новая строка (ИспрСчФ в формате)
+                attrs["НомерИспр"] = str(row["fix_number"])
+                attrs["ДатаИспр"] = _dmy(row.get("fix_date"))
+            ET.SubElement(item, "НомДатаСчФ", attrs)
             ET.SubElement(item, "НаимКонтрагент").text = str(row.get("counterparty") or "")
             ET.SubElement(item, "СтТовУчНалВсего").text = _money(row.get("gross"))
             ET.SubElement(item, "ВтчСумНДС").text = _money(row.get("vat"))
@@ -963,6 +1158,14 @@ def to_fns_xml(report: dict, *, organisation: dict | None = None,
     if not (rules.get("operation_codes") or {}).get("loaded"):
         problems.append("КодВидОпер не заполнен: перечень кодов (приказ ФНС от 14.03.2016 "
                         "№ ММВ-7-3/136@) в контуре не заведён")
+    # код вида операции выводится по правилу из справочника, а не вводится человеком:
+    # это допустимо (правило есть в приказе), но должно быть названо
+    without_code = [str(row.get("number")) for row in report.get("rows") or []
+                    if not row.get("operation_code")]
+    without_code += [str(row.get("number")) for row in (report.get("part1") or []) +
+                     (report.get("part2") or []) if not row.get("operation_code")]
+    if without_code:
+        problems.append("КодВидОпер не определён для документов: " + ", ".join(without_code))
     problems.append("файл не сверялся со схемой XSD: format.nalog.ru недоступен из песочницы")
     problems.append("Подписант не заполнен: УКЭП не подключена")
     checks = ET.SubElement(root, "ПроверкаФайла")
@@ -995,13 +1198,13 @@ def to_markdown(report: dict) -> str:
     if kind == "purchase_book":
         spec = rules.get("purchases_book") or {}
         title = "Книга покупок"
-        head = ("| № СФ поставщика | дата | вид | основание | поставщик | без НДС | ставка "
-                "| НДС | с НДС |", "|---|---|---|---|---|---:|---:|---:|---:|")
+        head = ("| № СФ поставщика | дата | код | вид | основание | поставщик | без НДС "
+                "| ставка | НДС | с НДС |", "|---|---|---|---|---|---|---:|---:|---:|---:|")
     else:
         spec = rules.get("sales_book") or {}
         title = spec.get("title") or "Книга продаж"
-        head = ("| № СФ | дата | вид | основание | покупатель | без НДС | ставка | НДС | с НДС |",
-                "|---|---|---|---|---|---:|---:|---:|---:|")
+        head = ("| № СФ | дата | код | вид | основание | покупатель | без НДС | ставка "
+                "| НДС | с НДС |", "|---|---|---|---|---|---|---:|---:|---:|---:|")
     lines = [f"# {title} за {period}", ""]
     if spec.get("verify"):
         lines.append("> Графы и их порядок помечены «на проверку»: " + str(spec.get("verify_why")))
@@ -1011,7 +1214,9 @@ def to_markdown(report: dict) -> str:
         mark = " ⏰" if row.get("late") else ""
         kind_title = row.get("kind_title") or ("корректировочный" if row["kind"] == "correction"
                                                else "")
-        lines.append(f"| {row.get('number')}{mark} | {row.get('date')} | {kind_title} | "
+        fix = f" · {row['fix_note']}" if row.get("fix_note") else ""
+        lines.append(f"| {row.get('number')}{mark}{fix} | {row.get('date')} | "
+                     f"{row.get('operation_code') or '—'} | {kind_title} | "
                      f"{row.get('base_number')} | {row.get('counterparty')} | "
                      f"{rub(row.get('net'))} | {dec(row.get('rate')):g} % | "
                      f"{rub(row.get('vat'))} | {rub(row.get('gross'))} |")
@@ -1068,7 +1273,7 @@ def _journal_markdown(report: dict, rules: dict, period) -> str:
         lines.append(f"| № п/п | № СФ | дата | {party} | с НДС | НДС | код вида операции |")
         lines.append("|---|---|---|---|---:|---:|---|")
         for index, row in enumerate(rows, 1):
-            code = row.get("operation_code") or "— не заведён"
+            code = row.get("operation_code") or "— не определён"
             lines.append(f"| {index} | {row.get('number')} | {row.get('date')} | "
                          f"{row.get('counterparty')} | {rub(row.get('gross'))} | "
                          f"{rub(row.get('vat'))} | {code} |")

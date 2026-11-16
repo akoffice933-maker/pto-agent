@@ -271,8 +271,9 @@ if ledger.verify(demo_state)["ok"]:
     check(vat_step.get("status") == closing.PARTIAL,
           f"зачёт НДС без полного реестра СФ: статус {vat_step.get('status')}")
     vat_left = sum(ledger.balance_as_of(demo_state, "19.03", "2026-10-31").values())
-    check(Decimal(str(vat_left)) == Decimal("299200"),
-          f"остаток 19.03 без СФ = {vat_left}, ожидалось 299 200")
+    # с круга 35 демо-первичка выписана по действующей ставке 22 %: 1 496 000 × 22 % = 329 120
+    check(Decimal(str(vat_left)) == Decimal("329120"),
+          f"остаток 19.03 без СФ = {vat_left}, ожидалось 329 120")
     check(any("УПД №119" in item.get("what", "") for item in demo_close["requests"]),
           "отсутствие СФ к УПД №119 не попало в запросы")
     check(steps_by_id.get("shortages", {}).get("status") == closing.NEEDS_DECISION,
@@ -540,7 +541,7 @@ treasury.post_to_ledger(advance_state, advance_ledger)
 check(sum(ledger.balance_as_of(advance_ledger, "60.02", "2026-10-31").values())
       == Decimal("200000.00"), "помеченный аванс не попал на 60.02")
 check(sum(ledger.balance_as_of(advance_ledger, "60.01", "2026-10-31").values())
-      == Decimal("-3624000.00"),
+      == Decimal("-3684400.00"),  # приходы по УПД с НДС 22 % (круг 35)
       "аванс уменьшил долг поставщикам: 60.02 и 60.01 перепутаны")
 advance_report = treasury.advances(advance_state, advance_ledger, as_of="2026-10-31")
 check(advance_report["given_total"] == 200000, "авансы выданные не показаны")

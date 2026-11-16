@@ -497,7 +497,8 @@ def test_tagged_advance_goes_to_60_02_entirely():
     six_two = sum(ledger.balance_as_of(accounting, "60.02", "2026-10-31").values())
     six_one = sum(ledger.balance_as_of(accounting, "60.01", "2026-10-31").values())
     assert six_two == Decimal("200000.00"), "аванс обязан жить на 60.02, а не растворятся в долге"
-    assert six_one == Decimal("-3864000.00"), "аванс не должен уменьшать долг поставщикам"
+    # долг поставщикам = приходы по УПД с НДС 22 % (круг 35: было 20 %)
+    assert six_one == Decimal("-3924400.00"), "аванс не должен уменьшать долг поставщикам"
 
 
 def test_advance_keeps_payment_valid_even_without_debt():

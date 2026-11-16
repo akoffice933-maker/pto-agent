@@ -218,7 +218,7 @@ def test_vat_not_offset_without_invoices_and_does_not_block_closing():
     result = closing.close_month(state, "2026-10")
     step = steps(result)["vat"]
     assert step["status"] == closing.PENDING
-    assert balance(state, "19.03") == pytest.approx(604000.0)
+    assert balance(state, "19.03") == pytest.approx(664400.0)
     assert result["closed"] is True, "отсутствие СФ — не повод не закрывать месяц"
 
 
@@ -227,8 +227,8 @@ def test_vat_offset_is_partial_when_invoices_are_incomplete():
     result = closing.close_month(state, "2026-10", invoices=invoices())
     step = steps(result)["vat"]
     assert step["status"] == closing.PARTIAL
-    assert step["amount"] == pytest.approx(304800.0)
-    assert balance(state, "19.03") == pytest.approx(299200.0)
+    assert step["amount"] == pytest.approx(335280.0)
+    assert balance(state, "19.03") == pytest.approx(329120.0)
     assert any("УПД №119" in gap["what"] for gap in step["requests"])
 
 
@@ -242,16 +242,18 @@ def test_vat_offset_posts_to_68_02_by_counterparty():
 
 
 def test_invoice_with_bigger_vat_is_not_offset():
+    # НДС в счёте-фактуре больше, чем налог в первичке (УПД №118: 1 426 000 × 22 % =
+    # 313 720), поэтому вычет по такому документу не заявляется
     invoices_bad = {"invoices": [{"number": "СФ №1", "date": "2026-10-01",
                                   "document": "УПД №118", "counterparty": "ООО «БетонТранс»",
-                                  "net": 2000000, "vat": 400000}]}
+                                  "net": 2000000, "vat": 440000}]}
     state = book()
     result = closing.close_month(state, "2026-10", invoices=invoices_bad)
     step = steps(result)["vat"]
     assert step["amount"] in (0.0, None)
     assert any("расходится" in gap["why"] or "больше" in gap["why"]
                for gap in step["requests"]) or step["detail"]
-    assert balance(state, "19.03") == pytest.approx(604000.0)
+    assert balance(state, "19.03") == pytest.approx(664400.0)
 
 
 def test_invoice_for_unknown_document_is_reported():
