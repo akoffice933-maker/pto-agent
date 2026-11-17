@@ -1162,6 +1162,24 @@ def cmd_treasury(args) -> int:
             print(f"  файл: {path}")
         return 0 if not report["gaps"] else 1
 
+    if action == "weeks":
+        report = cash.weeks(state, args.period)
+        funding = None
+        if getattr(args, "funding", None) and Path(args.funding).exists():
+            funding = json.loads(Path(args.funding).read_text(encoding="utf-8"))
+            report = cash.weeks(state, args.period, funding=funding)
+        print(cash.weeks_text(report))
+        if getattr(args, "out", None):
+            path = Path(args.out)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(cash.weeks_markdown(report), encoding="utf-8")
+            print(f"  файл: {path}")
+        problems = [item for week in report["weeks"] for item in week["problems"]
+                    if item["code"] == "WEEK_LIMIT_EXCEEDED"]
+        for item in problems:
+            print(f"  ✗ [{item['code']}] {item['what']}: {item['why']}", file=sys.stderr)
+        return 0
+
     if action == "bdds":
         report = cash.bdds(state, args.period)
         print(f"БДДС за {args.period}: факт — поступило {report['in_fact']:,.2f}, оплачено "
@@ -3666,6 +3684,13 @@ def main(argv=None):
     tr_cal.add_argument("--funding", default=None, help="график финансирования (поступления)")
     tr_cal.add_argument("--out", default=None)
     tr_cal.set_defaults(func=cmd_treasury)
+
+    tr_wk = trss.add_parser("weeks", help="платёжный календарь по неделям и лимиты объектов")
+    tr_wk.add_argument("--state", default="out/treasury/state.json")
+    tr_wk.add_argument("--period", required=True)
+    tr_wk.add_argument("--funding", default=None, help="график финансирования (план поступлений)")
+    tr_wk.add_argument("--out", default=None)
+    tr_wk.set_defaults(func=cmd_treasury)
 
     tr_bd = trss.add_parser("bdds", help="БДДС: факт и план по статьям отдельно")
     tr_bd.add_argument("--state", default="out/treasury/state.json")

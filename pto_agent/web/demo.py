@@ -56,8 +56,23 @@ def build(root: str | Path, *, demo_dir: str | Path | None = None,
                                     limits=cash_payload.get("limits") or {},
                                     contract=cash_payload.get("contract") or "")
     cash_state["object_limits"] = cash_payload.get("object_limits") or {}
+    # недельные лимиты — решение организации: в законе их нет, поэтому они в файле данных
+    cash_state["week_limits"] = cash_payload.get("week_limits") or {}
     for row in cash_payload.get("requests") or []:
         treasury.add_request(cash_state, dict(row))
+    # несколько заявок доводим до «согласована»: иначе платёжный календарь пуст и недельный
+    # разрез показывать не на чем. Подписи — те же ступени, что в демо пользователей
+    for number, steps in (("З-001", [("снабжение", "Орлова М.С."), ("ПТО", "Кузнецов А.П."),
+                                    ("финдиректор", "Белова И.К.")]),
+                          ("З-003", [("снабжение", "Орлова М.С."), ("ПТО", "Кузнецов А.П."),
+                                     ("финдиректор", "Белова И.К.")]),
+                          ("З-005", [("снабжение", "Орлова М.С."), ("ПТО", "Кузнецов А.П."),
+                                     ("финансовый директор", "Белова И.К.")])):
+        for role, person in steps:
+            result = treasury.approve(cash_state, number, role=role, person=person,
+                                      date="2026-10-20")
+            if result.get("errors"):
+                break
     treasury.save(cash_state, root / "treasury" / "state.json")
 
     # ── зарплата: табель → начисление → проводки (те же функции, что в CLI) ──

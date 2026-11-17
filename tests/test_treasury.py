@@ -296,8 +296,14 @@ def test_own_funding_schedule_is_taken_into_account():
         {"act_id": "КС-2 №38", "payment_date": "2026-10-15", "amount_rub": 1000000}]}
     report = treasury.calendar(state, "2026-10", funding=plan)
     assert report["closing"] == Decimal("288800.00"), \
-        "поступление по своему договору обязано закрывать разрыв"
-    assert not report["gaps"]
+        "прогнозный остаток обязан учитывать поступление по своему договору"
+    # Круг 40: поступление из графика — план, а не деньги. Подтверждённый остаток от него не
+    # меняется, значит разрыв остаётся, и он назван отдельно от прогнозного.
+    assert report["closing_confirmed"] == Decimal("-711200.00"), \
+        "план поступления не может делать остаток подтверждённым"
+    assert report["gaps"], "разрыв по фактическим деньгам не должен исчезать от плана"
+    assert report["gaps"][0]["scope"] == "подтверждённый"
+    assert not report["gaps_forecast"], "с учётом плана разрыва нет — это и есть разница"
     assert report["funding_rows"]
 
 
@@ -746,3 +752,122 @@ def test_ledger_verifies_after_treasury_posting():
     debit = sum(row["debit"] for row in trial["rows"])
     credit = sum(row["credit"] for row in trial["rows"])
     assert round(debit, 2) == round(credit, 2)
+
+
+# ─────────────────── недельный разрез (круг 40) ───────────────────
+def demo_state_with_weeks(drop_week_limits: bool = False) -> dict:
+    payload = read(DEMO_STATE)
+    state = treasury.new_state(object_name=payload["object"], opening=payload["opening"],
+                               limits=payload["limits"], contract=payload.get("contract") or "")
+    state["object_limits"] = payload.get("object_limits") or {}
+    state["week_limits"] = {} if drop_week_limits else (payload.get("week_limits") or {})
+    for request in payload["requests"]:
+        treasury.add_request(state, request)
+    return state
+
+
+def test_week_bounds_cuts_month_by_mondays_not_by_1_7():
+    bounds = treasury.week_bounds("2026-10")
+    assert [row["start"] for row in bounds] == ["2026-10-01", "2026-10-05", "2026-10-12",
+                                               "2026-10-19", "2026-10-26"]
+    assert [row["end"] for row in bounds] == ["2026-10-04", "2026-10-11", "2026-10-18",
+                                             "2026-10-25", "2026-10-31"]
+    assert [row["full"] for row in bounds] == [False, True, True, True, False]
+    assert bounds[0]["iso"] == "2026-W40" and bounds[4]["iso"] == "2026-W44"
+
+
+def test_week_bounds_first_week_is_full_when_month_starts_on_monday():
+    bounds = treasury.week_bounds("2026-06")          # 1 июня 2026 — понедельник
+    assert bounds[0] == {"index": 1, "start": "2026-06-01", "end": "2026-06-07",
+                         "iso": "2026-W23", "full": True}
+    assert len(bounds) == 5 and bounds[-1]["end"] == "2026-06-30"
+    assert bounds[-1]["full"] is False
+
+
+def test_week_report_keeps_balance_in_a_week_without_movements():
+    state = demo_state_with_weeks()
+    approve_all(state, "З-001")                      # срок 15.10 — неделя W42
+    report = treasury.weeks(state, "2026-10")
+    by_index = {week["index"]: week for week in report["weeks"]}
+    assert by_index[3]["balance_confirmed"] == pytest.approx(-711_200.0)   # обязательство в W42
+    assert by_index[4]["balance_confirmed"] == pytest.approx(-711_200.0)   # движений нет
+    assert by_index[4]["due_total"] == 0 and by_index[4]["out_fact"] == 0
+
+
+def test_week_report_does_not_turn_plan_into_money():
+    state = demo_state_with_weeks()
+    report = treasury.weeks(state, "2026-10")
+    assert report["closing_confirmed"] == pytest.approx(1_000_000.0)
+    assert report["closing"] == pytest.approx(1_000_000.0)
+    calendar_report = treasury.calendar(state, "2026-10")
+    assert report["closing_confirmed"] == pytest.approx(calendar_report["closing_confirmed"])
+    assert report["gaps"] == calendar_report["gaps"]
+
+
+def test_week_limit_exceeded_is_named_with_exact_overrun():
+    state = demo_state_with_weeks()
+    approve_all(state, "З-001")
+    report = treasury.weeks(state, "2026-10")
+    problems = [item for week in report["weeks"] for item in week["problems"]
+                if item["code"] == "WEEK_LIMIT_EXCEEDED"]
+    assert len(problems) == 1
+    assert "превышение 511 200,00" in problems[0]["why"]
+    assert "1 711 200,00" in problems[0]["why"] and "1 200 000,00" in problems[0]["why"]
+
+
+def test_without_week_limits_report_says_so_and_invents_nothing():
+    state = demo_state_with_weeks(drop_week_limits=True)
+    approve_all(state, "З-001")
+    report = treasury.weeks(state, "2026-10")
+    assert report["week_limits"] == {}
+    assert any("недельные лимиты" in text for text in report["warnings"])
+    problems = [item for week in report["weeks"] for item in week["problems"]]
+    assert not [item for item in problems if item["code"] == "WEEK_LIMIT_EXCEEDED"]
+    # месячный лимит при этом всё равно показан нарастающим итогом
+    week = report["weeks"][2]
+    table = week["objects"]["ЖК «Северный», корпус 2"]
+    assert table["limit"]["материалы"] == pytest.approx(3_624_000.0)
+    assert table["fact"]["материалы"] == pytest.approx(1_711_200.0)
+
+
+def test_object_limit_is_cumulative_to_end_of_week_not_per_week():
+    state = demo_state_with_weeks()
+    approve_all(state, "З-001")
+    report = treasury.weeks(state, "2026-10")
+    facts = [week["objects"]["ЖК «Северный», корпус 2"]["fact"]["материалы"]
+             for week in report["weeks"]]
+    # 0 → 0 → 1 711 200 (срок 15.10) → +117 600 (срок 20.10) → без изменений
+    assert facts[:2] == [0, 0]
+    assert facts[2] == pytest.approx(1_711_200.0)
+    assert facts[3] == pytest.approx(1_828_800.0) == facts[4]
+
+
+def test_overdue_lands_in_first_week_and_is_not_lost():
+    state = demo_state_with_weeks(drop_week_limits=True)
+    treasury.add_request(state, {
+        "number": "З-900", "date": "2026-09-20", "counterparty": "ООО «Сентябрь»",
+        "article": "прочее", "purpose": "аренда бытовки за сентябрь", "amount": 10_000,
+        "due_date": "2026-09-25", "basis": {"kind": "УПД", "number": "УПД №90", "date": "2026-09-01"}})
+    approve_all(state, "З-900", date="2026-09-25")
+    report = treasury.weeks(state, "2026-10")
+    first = report["weeks"][0]
+    assert "З-900" in first["overdue"]
+    assert first["overdue_total"] == pytest.approx(10_000.0)
+    assert first["due_total"] == pytest.approx(10_000.0)
+
+
+def test_partial_week_is_marked_as_not_comparable():
+    report = treasury.weeks(demo_state_with_weeks(), "2026-10")
+    partial = [item for week in report["weeks"] for item in week["problems"]
+               if item["code"] == "PARTIAL_WEEK"]
+    assert len(partial) == 2          # W40 1–4 октября и W44 26–31 октября
+
+
+def test_screen_and_markdown_both_carry_the_week_disclaimer():
+    state = demo_state_with_weeks(drop_week_limits=True)
+    report = treasury.screen(state, "2026-10")
+    text = treasury.screen_text(report)
+    assert "неделя 1" in text and "недельные лимиты" in text
+    markdown = treasury.weeks_markdown(treasury.weeks(state, "2026-10"))
+    assert "2026-W42" in markdown and "Неполная неделя" in markdown
+    assert "недельные лимиты" in markdown     # оговорка, а не придуманные цифры

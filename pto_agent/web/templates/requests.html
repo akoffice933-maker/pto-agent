@@ -1,5 +1,95 @@
 {% extends "base.html" %}
-{% block title %}Заявки{% endblock %}
+{% block title %}Заявки
+{% if week_report %}
+<section class="card">
+  <h2>Платёжный календарь по неделям: {{ week_period }}</h2>
+  <p class="muted small">Остаток на начало месяца {{ week_report.opening|rub }}. На конец месяца
+    по <b>подтверждённым деньгам</b> {{ week_report.closing_confirmed|rub }}, с планом
+    поступлений {{ week_report.closing|rub }}. План поступлений деньги не заменяет: разрыв по
+    факту и прогнозный разрыв считаются отдельно.</p>
+  <table class="table compact">
+    <thead>
+      <tr><th>неделя</th><th>даты</th><th class="num">к оплате</th>
+          <th class="num">на согласовании</th><th class="num">просрочено</th>
+          <th class="num">остаток (факт)</th><th class="num">остаток (с планом)</th>
+          <th class="num">поступлений план</th></tr>
+    </thead>
+    <tbody>
+      {% for week in week_report.weeks %}
+      <tr>
+        <td>{{ week.index }}{% if not week.full %}<div class="muted small">неполная</div>{% endif %}</td>
+        <td class="small">{{ week.start }}…{{ week.end }}<div class="muted small">{{ week.iso }}</div></td>
+        <td class="num">{{ week.due_total|rub }}</td>
+        <td class="num">{{ week.pending_total|rub }}</td>
+        <td class="num">{{ week.overdue_total|rub }}</td>
+        <td class="num">{{ week.balance_confirmed|rub }}</td>
+        <td class="num">{{ week.balance_forecast|rub }}</td>
+        <td class="num">{{ week.in_plan|rub }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <h3>Лимиты объектов нарастающим итогом</h3>
+  {% if week_report.week_limits %}
+  <p class="muted small">Недельные лимиты заданы организацией (в законе их нет) — сравнение идёт
+    с ними и с месячным лимитом объекта.</p>
+  {% else %}
+  <p class="muted small">Недельные лимиты по объектам не заданы: показан разрез по неделям и
+    использование месячного лимита нарастающим итогом. Придумывать недельные лимиты контур не
+    будет — это решение организации.</p>
+  {% endif %}
+  <table class="table compact">
+    <thead><tr><th>неделя</th><th>объект</th><th>статья</th><th class="num">лимит месяца</th>
+               <th class="num">израсходовано к концу недели</th><th class="num">остаток</th>
+               <th class="num">недельный лимит</th></tr></thead>
+    <tbody>
+      {% for week in week_report.weeks %}
+        {% for object_name, table in week.objects.items() %}
+          {% for article, limit in table.limit.items() %}
+          <tr>
+            <td>{{ week.index }}</td>
+            <td class="small">{{ object_name or 'без объекта' }}</td>
+            <td>{{ article }}</td>
+            <td class="num">{{ limit|rub }}</td>
+            <td class="num">{{ (table.fact.get(article) or 0)|rub }}</td>
+            <td class="num">{{ (limit - (table.fact.get(article) or 0))|rub }}</td>
+            <td class="num">{{ (table.week_limit or {}).get(article)|rub if (table.week_limit or {}).get(article) else '—' }}</td>
+          </tr>
+          {% endfor %}
+        {% endfor %}
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% if week_problems %}
+  <div class="flash flash-err">
+    {% for item in week_problems %}
+    <div><b>{{ item.code }}</b> · {{ item.what }}: {{ item.why }}</div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if week_report.gaps or week_report.gaps_forecast %}
+  <h3>Разрывы</h3>
+  <ul class="small">
+    {% for row in week_report.gaps %}
+    <li><b>{{ row.date }}</b> — {{ row.amount|rub }}: {{ row.why }}</li>
+    {% endfor %}
+    {% for row in week_report.gaps_forecast %}
+    <li><b>прогноз {{ row.date }}</b> — {{ row.amount|rub }}: {{ row.why }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+
+  {% if week_report.warnings %}
+  <div class="flash flash-warn">
+    {% for text in week_report.warnings %}<div>· {{ text }}</div>{% endfor %}
+  </div>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}
 {% block content %}
 <div class="page-head">
   <h1>Заявки на оплату</h1>

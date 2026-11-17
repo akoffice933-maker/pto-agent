@@ -599,3 +599,27 @@ def test_invoices_can_be_issued_from_screen(client, root):
     assert len(registry["issued"]) == 1, "повторное нажатие не должно выдавать второй номер"
     page = client.get("/taxes?period=2026-10").text
     assert "КС-2 №77" in page
+
+
+# ─────────────── недельный календарь на экране заявок (круг 40) ───────────────
+def test_requests_screen_shows_week_calendar_with_disclaimer(client, root):
+    login(client, "buh")
+    response = client.get("/requests")
+    assert response.status_code == 200
+    text = response.text
+    assert "Платёжный календарь по неделям" in text
+    assert "2026-W42" in text                       # неделя с пометкой ISO, а не «1–7»
+    assert "остаток (факт)" in text.lower()
+    assert "Лимиты объектов нарастающим итогом" in text
+    # без недельных лимитов экран обязан сказать об этом, а не показать придуманные
+    assert ("недельные лимиты по объектам не заданы" in text
+            or "Недельные лимиты заданы организацией" in text)
+    assert "неполная" in text                      # границы месяца видны, а не замазаны
+
+
+def test_week_calendar_is_the_same_money_as_the_api(client, root):
+    login(client, "buh")
+    text = client.get("/requests").text
+    report = treasury.weeks(state(root, "treasury"), "2026-10")
+    assert treasury.rub(report["closing_confirmed"]) in text
+    assert treasury.rub(report["closing"]) in text
