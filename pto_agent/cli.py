@@ -708,6 +708,63 @@ def cmd_year(args) -> int:
     return 0 if report.get("closed") or dry_run else 1
 
 
+def cmd_statements(args) -> int:
+    """Годовая отчётность: баланс и ОФР по ФСБУ 4/2023 из закрытого журнала."""
+    from . import statements as reporting
+
+    action = getattr(args, "statements_action", "screen")
+    state = accounting.load(args.ledger)
+    chart = accounting.load_chart(args.chart) if getattr(args, "chart", None) else accounting.load_chart()
+    rules = reporting.load_rules(args.rules) if getattr(args, "rules", None) else None
+
+    if action == "screen":
+        report = reporting.check(state, args.year, chart=chart, rules=rules)
+        print(reporting.screen_text(report))
+        return 0 if report["ok"] else 2
+
+    if action == "balance":
+        sheet = reporting.balance(state, args.year, chart=chart, rules=rules)
+        print(f"Бухгалтерский баланс на {sheet['date']} · {sheet['form']}")
+        print(f"  {'строка':>6}  {'наименование':<52} {'счета':<18} {'сумма, ₽':>16}")
+        for section in sheet["sections"]:
+            print(f"  {section['title']}")
+            for line in sheet["lines"]:
+                if line["section"] != section["id"]:
+                    continue
+                accounts = ", ".join(f"{p['account']}{'−' if p['minus'] else ''}"
+                                     for p in line["accounts"]) or "—"
+                mark = " !" if line["amount"] < -0.01 else ""
+                print(f"  {line['code']:>6}  {line['title'][:52]:<52} {accounts:<18} "
+                      f"{line['amount']:>16,.2f}{mark}")
+            print(f"  {section['total']:>6}  итого раздела{'':<38} "
+                  f"{sheet['totals'][section['total']]:>16,.2f}")
+        print(f"  1600 актив {sheet['totals']['1600']:,.2f} ₽ · "
+              f"1700 пассив {sheet['totals']['1700']:,.2f} ₽")
+        if sheet["unmapped"]:
+            print("  вне строк: " + ", ".join(f"{i['account']} {i['saldo']:,.2f}"
+                                              for i in sheet["unmapped"]))
+        return 0
+
+    if action == "pnl":
+        profit = reporting.pnl(state, args.year, rules=rules)
+        print(f"Отчёт о финансовых результатах за {profit['year']} · {profit['form']}")
+        for line in profit["lines"]:
+            mark = " (не считается)" if line.get("not_calculated") else ""
+            amount = -abs(line["amount"]) if line.get("negative") and line["amount"] else line["amount"]
+            print(f"  {line['code']:>6}  {line['title'][:60]:<60} {amount:>16,.2f}{mark}")
+        return 0
+
+    # check / report
+    report = reporting.check(state, args.year, chart=chart, rules=rules)
+    print(reporting.screen_text(report))
+    if getattr(args, "out", None):
+        path = Path(args.out)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(reporting.to_markdown(report), encoding="utf-8")
+        print(f"\nmarkdown: {path}")
+    return 0 if report["ok"] else 2
+
+
 def cmd_ledger(args) -> int:
     action = args.ledger_action
     state = accounting.load(args.state) if getattr(args, "state", None) else accounting.new_state()
@@ -3816,6 +3873,22 @@ def main(argv=None):
     yr_screen.add_argument("--rules", default=None)
     yr_screen.add_argument("--out", default=None)
     yr_screen.set_defaults(func=cmd_year)
+
+    st = sub.add_parser("statements",
+                        help="годовая отчётность: баланс и ОФР по ФСБУ 4/2023")
+    sts = st.add_subparsers(dest="statements_action", required=True)
+    for name, text in (("screen", "сводка: баланс сходится, проверки, что не сделано"),
+                       ("balance", "бухгалтерский баланс построчно"),
+                       ("pnl", "отчёт о финансовых результатах"),
+                       ("check", "проверки увязок отчётности")):
+        st_sub = sts.add_parser(name, help=text)      # не sub: sub — это общий парсер
+        st_sub.add_argument("--year", required=True)
+        st_sub.add_argument("--ledger", default="out/year_close/ledger_2026.json")
+        st_sub.add_argument("--chart", default=None)
+        st_sub.add_argument("--rules", default=None)
+        if name in ("check", "screen"):
+            st_sub.add_argument("--out", default=None, help="markdown-отчёт")
+        st_sub.set_defaults(func=cmd_statements)
 
     led = sub.add_parser("ledger", help="ядро учёта: план счетов 94н, проводки, ОСВ")
     leds = led.add_subparsers(dest="ledger_action", required=True)

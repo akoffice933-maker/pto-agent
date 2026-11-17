@@ -2360,6 +2360,42 @@ def t_hourly_payroll(args, ctx):
             "note": "способ расчёта часовой ставки закон не задаёт — в строке hourly_verify"}
 
 
+@tool("financial_statements",
+      "Годовая бухгалтерская отчётность по ФСБУ 4/2023: бухгалтерский баланс и отчёт о "
+      "финансовых результатах из журнала. Каждая строка собрана из конкретных счетов; строка, "
+      "которую нечем заполнить, пустая с причиной. Проверяются увязки: актив = пассив, цепочка "
+      "ОФР, отчёт против оборотов, прибыль в капитале. Только чтение: ничего не проводится.",
+      {"type": "object", "properties": {
+          "year": {"type": "string", "description": "отчётный год, например 2026"},
+          "ledger_path": {"type": "string",
+                          "description": "журнал; по умолчанию out/year_close/ledger_2026.json"},
+          "base_dir": {"type": "string"},
+          "format": {"type": "string", "enum": ["json", "markdown"], "default": "json"}},
+       "required": ["year"]})
+def t_financial_statements(args, ctx):
+    from .. import ledger
+    from .. import statements as reporting
+    base = Path(args.get("base_dir") or ctx.get("base_dir") or ".")
+    year = str(_p(args, "year"))
+    path = Path(args.get("ledger_path") or base / "out" / "year_close" / f"ledger_{year}.json")
+    if not path.exists():
+        return {"ok": False, "error": f"{path}: журнала нет — отчётность не из чего собирать"}
+    state = ledger.load(path)
+    report = reporting.check(state, year)
+    payload = {"ok": report["ok"], "year": year,
+               "form": (reporting.load_rules().get("standard") or {}).get("name"),
+               "balance": {"totals": report["balance"]["totals"],
+                           "lines": report["balance"]["lines"],
+                           "unmapped": report["balance"]["unmapped"]},
+               "pnl": {"values": report["pnl"]["values"], "lines": report["pnl"]["lines"]},
+               "checks": report["checks"], "problems": report["problems"],
+               "gaps": report["gaps"],
+               "not_implemented": report["not_implemented"]}
+    if (args.get("format") or "json") == "markdown":
+        payload["markdown"] = reporting.to_markdown(report)
+    return payload
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="pto_agent.cad.mcp_server",
                                  description="MCP-сервер CAD-модуля ИИ-агента ПТО")

@@ -68,6 +68,20 @@ def build(scenario_path: Path = SCENARIO) -> tuple[dict, dict]:
     if posted["errors"]:
         raise SystemExit(f"акты: {posted['errors']}")
 
+    receipt = payload.get("materials_receipt")
+    if receipt:
+        # без поступления материалов недостача по ИНВ-3 уводила 10.01 в минус:
+        # баланс сходился, но показывал отрицательный актив
+        _post(state, event="demo.receipt", date=receipt["date"],
+              number=receipt["document"]["number"],
+              lines=[{"account": "10.01", "side": ledger.DEBIT, "amount": receipt["amount"],
+                      "analytics": {"склад": receipt["warehouse"],
+                                    "номенклатура": receipt["item"]}},
+                     {"account": "60.01", "side": ledger.CREDIT, "amount": receipt["amount"],
+                      "analytics": {"контрагент": receipt["counterparty"]}}],
+              memo=f"поступление материалов без оплаты: {receipt['quantity_note']}",
+              key=f"demo.receipt|{receipt['date']}")
+
     shortage = payload["shortage"]
     _post(state, event="demo.shortage", date=shortage["date"],
           number=shortage["document"]["number"],

@@ -663,3 +663,17 @@ def test_hourly_timesheet_is_shown_in_hours_not_days(tmp_path, demo_root):
     assert "часовая ставка — на проверку" in text
     assert "из них ночных" in text              # табель в часах
     assert "уход до 1,5 лет" in text            # СФР справочно
+
+
+def test_statements_screen_shows_balance_and_honest_gaps(client, root):
+    """Экран отчётности: те же цифры, что в CLI, и «не сделано» — на экране, а не только в отчёте."""
+    login(client, "buh")
+    response = client.get("/statements?year=2026")
+    assert response.status_code == 200
+    text = response.text
+    assert "ФСБУ 4/2023" in text and "157н" in text
+    assert "1600 баланс (актив)" in text and "1700 баланс (пассив)" in text
+    assert "Отчёт о финансовых результатах" in text
+    assert "не заполняется" in text                    # пустая строка с причиной
+    assert "Не сделано (и почему)" in text
+    assert "ПБУ 18/02" in text
