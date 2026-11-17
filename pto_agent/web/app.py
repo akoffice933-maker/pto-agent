@@ -244,6 +244,7 @@ def create_app(*, root: str | Path | None = None, data_dir: str | Path | None = 
             ("payroll.view", "/payroll", "Зарплата"),
             ("closing.view", "/closing", "Закрытие месяца"),
             ("taxes.view", "/taxes", "Налоги"),
+            ("taxes.view", "/statements", "Отчётность"),
             ("audit.view", "/audit", "Аудит"),
             ("admin.rbac", "/roles", "Роли"),
         ]
@@ -970,6 +971,26 @@ def create_app(*, root: str | Path | None = None, data_dir: str | Path | None = 
                f"{period}: выставлено {result['posted']}, уже было "
                f"{result['duplicates']}, отклонено {result['rejected']}")
         return RedirectResponse(f"/taxes?period={quote(period)}", status_code=303)
+
+    @app.get("/statements", response_class=HTMLResponse)
+    def statements_page(request: Request):
+        """Годовая отчётность: баланс и ОФР по ФСБУ 4/2023, собранные из журнала.
+
+        Экран показывает то же, что CLI: строки с кодами, из каких счетов собраны, пустые
+        строки с причиной, проверки увязок и честный список «не сделано».
+        """
+        from .. import statements as reporting
+
+        user = _require(request, "taxes.view")
+        state = store.ledger_state()
+        years = sorted({str(entry.get("period") or "")[:4]
+                        for entry in state.get("entries") or []
+                        if str(entry.get("period") or "")[:4].isdigit()})
+        year = request.query_params.get("year") or (years[-1] if years else "2026")
+        report = reporting.check(state, year) if years else None
+        return render(request, "statements.html", user, year=year, years=years,
+                      report=report, fmt=reporting.fmt,
+                      not_implemented=(report or {}).get("not_implemented") or [])
 
     @app.get("/closing", response_class=HTMLResponse)
     def closing_page(request: Request):

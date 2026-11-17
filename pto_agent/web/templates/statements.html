@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block title %}Годовая отчётность{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Годовая отчётность за {{ year }}</h1>
+  <div class="muted">ФСБУ 4/2023 (приказ Минфина от 04.10.2023 № 157н, коды строк — приложение № 10).
+    Формы собраны из журнала: каждая строка показывает счета, из которых она получена.</div>
+</div>
+
+<form method="get" action="/statements" class="row">
+  <label class="inline">год
+    <select name="year">
+      {% for item in years %}<option value="{{ item }}" {{ 'selected' if item == year else '' }}>{{ item }}</option>{% endfor %}
+    </select>
+  </label>
+  <button type="submit">Показать</button>
+</form>
+
+{% if not report %}
+<section class="card"><p class="muted">В журнале пока нет проводок: отчётность не из чего собирать.</p></section>
+{% else %}
+
+{% if report.problems %}
+<div class="flash flash-err">
+  {% for item in report.problems %}
+  <div><b>{{ item.code }}</b> · {{ item.what }}: {{ item.why }}</div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="flash flash-ok">
+  Проверок {{ report.checks|length }}: нарушений нет. Баланс сходится,
+  увязки отчётности выполнены.
+</div>
+{% endif %}
+
+<section class="card">
+  <h2>Бухгалтерский баланс на {{ report.balance.date }}</h2>
+  <table class="table compact">
+    <thead><tr><th>строка</th><th>наименование</th><th>счета</th>
+      <th class="num">сумма, ₽</th><th class="num">тыс. ₽</th></tr></thead>
+    <tbody>
+      {% for section in report.balance.sections %}
+      <tr><th colspan="5">{{ section.title }}</th></tr>
+      {% for line in report.balance.lines if line.section == section.id %}
+      <tr>
+        <td>{{ line.code }}</td>
+        <td>{{ line.title }}{% if line.amount < 0 %}<div class="muted small">отрицательная строка — ошибка учёта, а не «минус в балансе»</div>{% endif %}
+          {% if not line.accounts and line.why_empty %}<div class="muted small">не заполняется: {{ line.why_empty }}</div>{% endif %}</td>
+        <td class="muted small">{% for part in line.accounts %}{{ part.account }}{{ '−' if part.minus else '' }}{% if not loop.last %}, {% endif %}{% else %}—{% endfor %}</td>
+        <td class="num">{{ fmt(line.amount) }}</td>
+        <td class="num">{{ fmt(line.thousand) }}</td>
+      </tr>
+      {% endfor %}
+      <tr><th colspan="3">итого по разделу</th>
+        <th class="num">{{ fmt(report.balance.totals[section.total]) }}</th><th></th></tr>
+      {% endfor %}
+    </tbody>
+    <tfoot>
+      <tr><th colspan="3">1600 баланс (актив)</th>
+        <th class="num">{{ fmt(report.balance.totals['1600']) }}</th><th></th></tr>
+      <tr><th colspan="3">1700 баланс (пассив)</th>
+        <th class="num">{{ fmt(report.balance.totals['1700']) }}</th><th></th></tr>
+    </tfoot>
+  </table>
+  {% if report.balance.service_account %}
+  <p class="muted small">Служебный счёт 000: {{ fmt(report.balance.service_account) }} ₽ —
+    входящий остаток без капитала. В балансе этой суммы нет, потому что притворяться
+    уставным капиталом она не может.</p>
+  {% endif %}
+  {% if report.balance.unmapped %}
+  <p class="muted small">Вне строк баланса:
+    {% for item in report.balance.unmapped %}{{ item.account }} ({{ fmt(item.saldo) }} ₽){% if not loop.last %}, {% endif %}{% endfor %}</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Отчёт о финансовых результатах за {{ year }}</h2>
+  <table class="table compact">
+    <thead><tr><th>строка</th><th>наименование</th><th class="num">сумма, ₽</th>
+      <th class="num">тыс. ₽</th></tr></thead>
+    <tbody>
+      {% for line in report.pnl.lines %}
+      <tr>
+        <td>{{ line.code }}</td>
+        <td>{{ line.title }}
+          {% if line.not_calculated %}<div class="muted small">не считается: {{ line.why_empty }}</div>
+          {% elif line.note %}<div class="muted small">{{ line.note }}</div>{% endif %}</td>
+        <td class="num">{% if line.negative and line.amount %}({{ fmt(line.amount|abs) }}){% else %}{{ fmt(line.amount) }}{% endif %}</td>
+        <td class="num">{% if line.negative and line.amount %}({{ fmt((line.amount|abs) / 1000) }}){% else %}{{ fmt(line.amount / 1000) }}{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% for gap in report.gaps %}
+  <p class="muted small">Разрыв: {{ gap.what }} — <b>{{ fmt(gap.amount) }} ₽</b>. {{ gap.why }}</p>
+  {% endfor %}
+</section>
+
+<section class="card">
+  <h2>Проверки увязок</h2>
+  <table class="table compact">
+    <thead><tr><th>код</th><th>что проверено</th><th>результат</th></tr></thead>
+    <tbody>
+      {% for item in report.checks %}
+      <tr><td>{{ item.code }}</td><td>{{ item.what }}</td>
+        <td>{% if item.ok %}<span class="ok">ок</span>{% else %}<span class="err">✗ {{ item.why }}</span>{% endif %}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="card">
+  <h2>Не сделано (и почему)</h2>
+  <ul class="muted small">
+    {% for item in not_implemented %}
+    <li><b>{{ item.what }}</b>: {{ item.why }}</li>
+    {% endfor %}
+  </ul>
+  <p class="muted small">Отчётность — черновик: подписи УКЭП нет, в ФНС и Росстат контур её не
+    отправляет. Цифры считает код из журнала; строки, которые нечем заполнить, названы причиной,
+    а не нулём.</p>
+</section>
+{% endif %}
+{% endblock %}
