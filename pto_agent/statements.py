@@ -90,6 +90,34 @@ def _year(value) -> str:
     return str(value).strip()[:4]
 
 
+def prior_year(year) -> str:
+    """Предыдущий отчётный год: для графы «на 31 декабря предыдущего года»."""
+    return str(int(_year(year)) - 1)
+
+
+def years_in(state: dict) -> list[str]:
+    """Годы, за которые в журнале есть проводки (по возрастанию)."""
+    years = {str(entry.get("period") or "")[:4] for entry in state.get("entries") or []}
+    return sorted(year for year in years if year.isdigit())
+
+
+def prior_closed(state: dict, year) -> bool:
+    """Закрыт ли предыдущий год: реформация есть, сальдо 99 нулевое."""
+    prior = prior_year(year)
+    if not any(str(item.get("year")) == prior and item.get("closed")
+               for item in state.get("years") or []):
+        return False
+    rows = closings(state, prior)
+    return abs(_signed(rows.get("99"))) <= EPS
+
+
+def prior_entries(state: dict, year) -> int:
+    """Сколько проводок в журнале за предыдущий год. Ноль — сравнивать не с чем."""
+    prefix = f"{prior_year(year)}-"
+    return sum(1 for entry in state.get("entries") or []
+               if str(entry.get("period") or "").startswith(prefix))
+
+
 def turnovers(state: dict, year: str) -> dict:
     """Обороты за весь год по каждому счёту: Дт и Кт отдельно.
 
@@ -193,31 +221,23 @@ def _one(code: str, minus: bool, rows: dict, index: dict, side: str):
 
 
 # ─────────────────────────── баланс ───────────────────────────
-def balance(state: dict, year: str, *, chart: dict | None = None,
-            rules: dict | None = None) -> dict:
-    """Бухгалтерский баланс на 31 декабря года: строки, итоги, что осталось вне строк."""
-    year = _year(year)
-    chart = chart or ledger.load_chart()
-    rules = rules or load_rules()
-    index = _chart_index(chart)
-    rows = closings(state, year, chart=chart)
-    form = rules["balance"]
-
+def _balance_lines(form: dict, rows: dict, index: dict) -> tuple[list[dict], set[str]]:
+    """Строки баланса из сальдо: так одну и ту же формулу можно посчитать за два года."""
     lines: list[dict] = []
     used: set[str] = set()
     for item in form["lines"]:
         amount, parts = line_amount(item.get("accounts") or [], rows, index,
                                     side=item["side"])
         used.update(part["account"] for part in parts)
-        for spec_code, _ in _parse_accounts(item.get("accounts") or []):
+        specs = [code for code, _ in _parse_accounts(item.get("accounts") or [])]
+        for spec_code in specs:
             used.update(expand(spec_code, index))
         # пустая строка обязана называть причину: «ноль, потому что счёта нет» — это тоже
         # причина, и она отличается от «ноль, потому что остатка нет»
         reason = item.get("why_empty") or ""
         if not parts and not reason:
-            specs = ", ".join(_parse_accounts(item.get("accounts") or []) and
-                              [code for code, _ in _parse_accounts(item.get("accounts") or [])] or [])
-            reason = (f"сальдо по счетам {specs} нулевое: счёт в рабочем плане есть, остатка за год нет"
+            reason = (f"сальдо по счетам {', '.join(specs)} нулевое: счёт в рабочем плане есть, "
+                      f"остатка за год нет"
                       if specs else "строка не заполняется: в форме ей нечего соответствовать")
         line = {"code": item["code"], "title": item["title"], "section": item["section"],
                 "side": item["side"], "amount": num(amount), "thousand": thousand(amount),
@@ -226,17 +246,62 @@ def balance(state: dict, year: str, *, chart: dict | None = None,
         if amount < 0:
             line["negative"] = True
         lines.append(line)
+    return lines, used
 
+
+def _section_totals(form: dict, lines: list[dict]) -> dict:
     totals = {}
     for section in form["sections"]:
         section_total = sum((kopeck(line["amount"]) for line in lines
                              if line["section"] == section["id"]), Decimal("0"))
         totals[section["total"]] = num(section_total)
-    totals["1100"] = totals["1100"]
     totals["1600"] = num(kopeck(totals["1100"]) + kopeck(totals["1200"]))
-    totals["1300"] = totals["1300"]
     totals["1700"] = num(kopeck(totals["1300"]) + kopeck(totals["1400"])
                          + kopeck(totals["1500"]))
+    return totals
+
+
+def balance(state: dict, year: str, *, chart: dict | None = None,
+            rules: dict | None = None) -> dict:
+    """Бухгалтерский баланс на 31 декабря: строки, итоги и графа прошлого года.
+
+    Сравнительные показатели считаются **той же формулой** по сальдо прошлого года, а не
+    берутся из прошлогоднего файла: иначе «прошлый год» мог бы разойтись с тем, что этот же
+    контур показал год назад. Если за прошлый год в журнале нет проводок, графа не
+    заполняется, и это сказано причиной (`prior.reason`), а не пустой клеткой.
+    """
+    year = _year(year)
+    chart = chart or ledger.load_chart()
+    rules = rules or load_rules()
+    index = _chart_index(chart)
+    form = rules["balance"]
+
+    rows = closings(state, year, chart=chart)
+    lines, used = _balance_lines(form, rows, index)
+    totals = _section_totals(form, lines)
+
+    prior_rows = closings(state, prior_year(year), chart=chart)
+    prior_lines, _ = _balance_lines(form, prior_rows, index)
+    prior_totals = _section_totals(form, prior_lines)
+    has_prior = prior_entries(state, year) > 0
+    for line, prior in zip(lines, prior_lines):
+        line["prior"] = prior["amount"] if has_prior else None
+        line["prior_thousand"] = prior["thousand"] if has_prior else None
+    first_year = not years_in(state) or min(years_in(state)) == year
+    prior = {"year": prior_year(year), "date": f"{prior_year(year)}-12-31",
+             "available": has_prior, "closed": prior_closed(state, year) if has_prior else None,
+             "first_year": first_year and not has_prior,
+             "totals": prior_totals if has_prior else {},
+             "lines": ({item["code"]: item["amount"] for item in prior_lines}
+                       if has_prior else {}),
+             "reason": "" if has_prior else
+             (f"графа «на 31 декабря {prior_year(year)} года» не заполняется: это первый "
+              f"отчётный год — в журнале нет проводок за {prior_year(year)}. Первый год "
+              f"показывается без сравнительных данных, и это сказано здесь, а не пустой клеткой"
+              if first_year else
+              f"графа «на 31 декабря {prior_year(year)} года» не заполняется: за "
+              f"{prior_year(year)} год проводок нет, хотя журнал ведётся с "
+              f"{min(years_in(state))}-го — данные прошлого года потеряны")}
 
     # счета с сальдо, которых нет ни в одной строке: это не «мелочь», а выпавшие суммы
     unmapped = []
@@ -251,7 +316,7 @@ def balance(state: dict, year: str, *, chart: dict | None = None,
                              "saldo": num(value)})
     service = num(_signed(rows.get(SERVICE_ACCOUNT))) if SERVICE_ACCOUNT in rows else 0.0
 
-    return {"year": year, "date": f"{year}-12-31",
+    return {"year": year, "date": f"{year}-12-31", "prior": prior,
             "form": "бухгалтерский баланс (образец приложения № 3 к ФСБУ 4/2023)",
             "unit": "руб. (в форме — тыс. руб., обе величины в строке)",
             "sections": form["sections"], "lines": lines, "totals": totals,
@@ -271,11 +336,26 @@ def _turnover_value(rule: str, moves: dict) -> tuple[float, str]:
 
 
 def pnl(state: dict, year: str, *, rules: dict | None = None) -> dict:
-    """Отчёт о финансовых результатах за год: цепочка от выручки к чистой прибыли."""
+    """Отчёт о финансовых результатах за год: цепочка от выручки к чистой прибыли.
+
+    Рядом считается тот же отчёт за предыдущий год — для графы сравнительных показателей.
+    """
     year = _year(year)
     rules = rules or load_rules()
-    moves = turnovers(state, year)
     form = rules["pnl"]
+    values, lines = _pnl_values(turnovers(state, year), form)
+    has_prior = prior_entries(state, year) > 0
+    prior_values, prior_lines = _pnl_values(turnovers(state, prior_year(year)), form)
+    for line, prior in zip(lines, prior_lines):
+        line["prior"] = prior["amount"] if has_prior else None
+    return {"year": year, "prior_year": prior_year(year), "prior_available": has_prior,
+            "form": "отчёт о финансовых результатах (образец приложения № 4 к ФСБУ 4/2023)",
+            "unit": "руб.", "lines": lines, "values": values,
+            "prior_values": prior_values if has_prior else {}}
+
+
+def _pnl_values(moves: dict, form: dict) -> tuple[dict, list[dict]]:
+    """Строки ОФР из оборотов: одна и та же формула для любого года."""
     values: dict[str, float] = {}
     lines: list[dict] = []
 
@@ -310,9 +390,7 @@ def pnl(state: dict, year: str, *, rules: dict | None = None) -> dict:
                 entry["why_empty"] = item.get("why_empty") or "оборотов нет: считать нечего"
         values[code] = entry["amount"]
         lines.append(entry)
-
-    return {"year": year, "form": "отчёт о финансовых результатах (образец приложения № 4 к ФСБУ 4/2023)",
-            "unit": "руб.", "lines": lines, "values": values}
+    return values, lines
 
 
 def profit_tax(state: dict, year: str, *, rules: dict | None = None) -> dict:
@@ -566,6 +644,73 @@ def check(state: dict, year: str, *, chart: dict | None = None,
                          f"(прошлый остаток {rub(prior)} + чистая прибыль {rub(net)})",
                          retained=retained, expected=num(expected), net_profit=num(net)))
 
+    # 8б. сравнительные показатели: сопоставимость с прошлым годом
+    prior = sheet["prior"]
+    # сравнительные показатели: их отсутствие — не ошибка только в первом отчётном году
+    checks.append(_check(
+        "PRIOR_COMPARATIVES",
+        f"есть графа «на 31 декабря {prior['year']} года» — сравнивать есть с чем",
+        prior["available"] or prior["first_year"], prior["reason"],
+        available=prior["available"], first_year=prior["first_year"],
+        prior_year=prior["year"]))
+    if prior["available"]:
+        checks.append(_check(
+            "PRIOR_CLOSED",
+            f"{prior['year']} год закрыт: сравнительные показатели — из закрытого года",
+            bool(prior["closed"]),
+            f"за {prior['year']} есть проводки, но год не закрыт (нет реформации 99 → 84): "
+            f"сравнительные показатели показывают не результат года, а незакрытый журнал"))
+    if prior["available"]:
+        p_assets = prior["totals"]["1600"]
+        p_liab = prior["totals"]["1700"]
+        checks.append(_check("PRIOR_BALANCE_TIES",
+                             f"баланс за {prior['year']} сходится: 1600 = 1700",
+                             abs(p_assets - p_liab) <= 0.01,
+                             f"актив {rub(p_assets)} ≠ пассив {rub(p_liab)}: прошлый год "
+                             f"показан в отчёте кривым"))
+        # непрерывность: прошлогоднее сальдо и входящее сальдо этого года — одна и та же сумма
+        opening = closings(state, prior["year"], chart=chart)
+        mismatch = []
+        for code, row in sorted(opening.items()):
+            if (index.get(code) or {}).get("off_balance"):
+                continue
+            value = _signed(row)
+            if abs(value) <= EPS:
+                continue
+            # сальдо «на 01.01» — это сальдо до первой проводки года: сумма по счёту
+            # на конец предыдущего дня, то есть ровно прошлогоднее закрытие
+            start = ledger.balance_as_of(state, code, f"{year}-01-01")
+            start_value = sum((kopeck(item) for item in start.values()), Decimal("0"))
+            if abs(start_value - value) > 0.01:
+                mismatch.append(f"{code}: на 31.12.{prior['year']} {rub(value)}, "
+                                f"на 01.01.{year} {rub(start_value)}")
+        checks.append(_check("OPENING_MATCHES_PRIOR",
+                             "входящие остатки года равны сальдо прошлого года",
+                             not mismatch, "; ".join(mismatch)))
+        # прибыль прошлого года + прибыль этого = остаток 84 на конец этого года
+        prior_retained = float(prior["lines"].get("1370") or 0.0)
+        checks.append(_check(
+            "RETAINED_CONTINUITY",
+            "1370 этого года = 1370 прошлого года + чистая прибыль этого года",
+            abs(retained - (prior_retained + net)) <= 0.01,
+            f"в 1370 {rub(retained)}, а прошлый остаток {rub(prior_retained)} + чистая "
+            f"прибыль {rub(net)} = {rub(prior_retained + net)}: прибыль прошлых лет "
+            f"потерялась или посчитана дважды",
+            prior_retained=num(prior_retained)))
+        # цепочка прошлого года тоже обязана пересчитываться
+        prior_values = profit["prior_values"]
+        broken_prior = []
+        for code, formula in chain:
+            total = 0.0
+            for part in formula:
+                sign = -1 if part.startswith("-") else 1
+                total += sign * float(prior_values.get(part.lstrip("+-")) or 0.0)
+            if abs(total - float(prior_values.get(code) or 0.0)) > 0.01:
+                broken_prior.append(f"{code}: {rub(prior_values.get(code) or 0)} вместо {rub(total)}")
+        checks.append(_check("PNL_PRIOR_CHAIN",
+                             f"цепочка ОФР за {prior['year']} пересчитывается",
+                             not broken_prior, "; ".join(broken_prior)))
+
     # 9. налог на прибыль проведён и совпадает с расчётом
     info = profit_tax(state, year)
     tax_ok = abs(float(info["difference"])) <= 0.01
@@ -626,9 +771,12 @@ def to_markdown(report: dict) -> str:
            f"Стандарт: ФСБУ 4/2023 (приказ Минфина от 04.10.2023 № 157н). "
            f"Единица: {sheet['unit']}.", ""]
 
+    prior = sheet.get("prior") or {}
+    prior_head = (f"на 31.12.{prior['year']}" if prior.get("available") else "прошлый год")
     out += ["## Бухгалтерский баланс", "",
-            "| строка | наименование | счета | сумма, ₽ | тыс. ₽ |",
-            "|---|---|---|---:|---:|"]
+            f"| строка | наименование | счета | {prior_head}, ₽ | на 31.12.{report['year']}, ₽ "
+            f"| тыс. ₽ |",
+            "|---|---|---|---:|---:|---:|"]
     for section in sheet["sections"]:
         out.append(f"| | **{section['title']}** | | | |")
         for line in sheet["lines"]:
@@ -637,13 +785,21 @@ def to_markdown(report: dict) -> str:
             accounts = ", ".join(f"{part['account']}{'−' if part['minus'] else ''}"
                                  for part in line["accounts"]) or "—"
             mark = " ⚠" if line.get("negative") else ""
+            prior_cell = (fmt(line["prior"]) if line.get("prior") is not None else "—")
             out.append(f"| {line['code']} | {line['title']}{mark} | {accounts} | "
-                       f"{fmt(line['amount'])} | {fmt(line['thousand'])} |")
+                       f"{prior_cell} | {fmt(line['amount'])} | {fmt(line['thousand'])} |")
+        prior_total = (fmt(prior["totals"][section["total"]])
+                       if prior.get("available") else "—")
         out.append(f"| **{section['total']}** | **итого {section['title'].split('. ')[-1].lower()}** "
-                   f"| | **{fmt(sheet['totals'][section['total']])}** | |")
+                   f"| | {prior_total} | **{fmt(sheet['totals'][section['total']])}** | |")
         out.append("")
     out.append(f"**1600 баланс (актив) = {fmt(sheet['totals']['1600'])} ₽**, "
-               f"**1700 баланс (пассив) = {fmt(sheet['totals']['1700'])} ₽**.")
+               f"**1700 баланс (пассив) = {fmt(sheet['totals']['1700'])} ₽**."
+               + (f" Годом ранее: 1600 = {fmt(prior['totals']['1600'])}, "
+                  f"1700 = {fmt(prior['totals']['1700'])}."
+                  if prior.get("available") else ""))
+    if prior.get("reason"):
+        out += ["", f"> {prior['reason']}"]
 
     empty = [line for line in sheet["lines"] if not line["accounts"] and line["why_empty"]]
     if empty:
@@ -652,11 +808,13 @@ def to_markdown(report: dict) -> str:
             out.append(f"- **{line['code']} {line['title']}** — {line['why_empty']}")
 
     out += ["", "## Отчёт о финансовых результатах", "",
-            "| строка | наименование | сумма, ₽ | тыс. ₽ |", "|---|---|---:|---:|"]
+            f"| строка | наименование | {prior_head}, ₽ | за {report['year']}, ₽ | тыс. ₽ |",
+            "|---|---|---:|---:|---:|"]
     for line in profit["lines"]:
         amount = -abs(line["amount"]) if line.get("negative") and line["amount"] else line["amount"]
         mark = " (не считается)" if line.get("not_calculated") else ""
-        out.append(f"| {line['code']} | {line['title']}{mark} | {fmt(amount)} | "
+        prior_cell = fmt(line["prior"]) if line.get("prior") is not None else "—"
+        out.append(f"| {line['code']} | {line['title']}{mark} | {prior_cell} | {fmt(amount)} | "
                    f"{fmt(thousand(amount))} |")
     empty_pnl = [line for line in profit["lines"] if line.get("not_calculated")]
     if empty_pnl:
@@ -715,6 +873,17 @@ def screen_text(report: dict) -> str:
              f"прибыль от продаж {rub(values.get('2200'))} · до налогообложения "
              f"{rub(values.get('2300'))} · чистая {rub(values.get('2400'))}",
              f"  проверок {len(report['checks'])}, нарушений {len(report['problems'])}"]
+    prior = sheet.get("prior") or {}
+    if prior.get("available"):
+        growth = float(sheet["totals"]["1600"]) - float(prior["totals"]["1600"])
+        lines.append(f"  сравнительно: на 31.12.{prior['year']} актив "
+                     f"{rub(prior['totals']['1600'])}, изменение {rub(growth)}")
+        net_prior = (profit.get("prior_values") or {}).get("2400")
+        if net_prior is not None:
+            lines.append(f"  чистая прибыль: {rub(net_prior)} за {prior['year']} → "
+                         f"{rub(values.get('2400'))} за {report['year']}")
+    else:
+        lines.append(f"  прошлый год: графа не заполняется — {prior.get('reason', '')}")
     tax = report.get("tax") or {}
     if tax:
         tail = (f"разрыв {rub(tax['difference'])} — проведено {rub(tax['posted'])}, "

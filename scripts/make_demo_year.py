@@ -39,10 +39,13 @@ def _post(state: dict, *, event: str, date: str, number: str, lines: list[dict],
     return result
 
 
-def build(scenario_path: Path = SCENARIO) -> tuple[dict, dict]:
+def build(scenario_path: Path = SCENARIO,
+          state: dict | None = None) -> tuple[dict, dict]:
+    """Собрать год по сценарию. `state` — продолжить существующий журнал (второй год)."""
     payload = json.loads(scenario_path.read_text(encoding="utf-8"))
-    state = ledger.new_state(object_name=payload["object"], organization="ООО «ПТО-Строй»",
-                             contract=payload["contract"])
+    if state is None:
+        state = ledger.new_state(object_name=payload["object"], organization="ООО «ПТО-Строй»",
+                                 contract=payload["contract"])
     acts = []
     for row in payload["months"]:
         period, net = row["period"], float(row["net"])
@@ -124,12 +127,51 @@ def build(scenario_path: Path = SCENARIO) -> tuple[dict, dict]:
                    "entries": len(state.get("entries") or [])}
 
 
+def build_chain(prior_scenario: Path, prior_decisions: Path, scenario: Path,
+                decisions: Path) -> tuple[dict, dict]:
+    """Два года подряд: закрытый 2025 и закрытый 2026 в одном журнале.
+
+    Нужно для сравнительных показателей отчётности: графа «на 31 декабря предыдущего года»
+    берётся не из отдельного файла, а из того же журнала — иначе прошлый год мог бы
+    разойтись с тем, что контур показал год назад.
+    """
+    from pto_agent import year_close
+
+    state, first = build(prior_scenario)
+    closed_prior = year_close.close_year(
+        state, json.loads(prior_scenario.read_text(encoding="utf-8"))["months"][0]["period"][:4],
+        decisions=json.loads(prior_decisions.read_text(encoding="utf-8")))
+    if not closed_prior["closed"]:
+        raise SystemExit(f"2025 не закрылся: {closed_prior['problems']}")
+    state, second = build(scenario, state=state)
+    closed = year_close.close_year(
+        state, str(int(closed_prior["year"]) + 1),
+        decisions=json.loads(decisions.read_text(encoding="utf-8")))
+    if not closed["closed"]:
+        raise SystemExit(f"2026 не закрылся: {closed['problems']}")
+    return state, {"prior": first, "current": second,
+                   "closed": [closed_prior["year"], closed["year"]],
+                   "result": closed["result"], "entries": len(state.get("entries") or [])}
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="демо-журнал за 2026 год для закрытия года")
     parser.add_argument("--out", default="out/year_close/ledger_2026.json")
     parser.add_argument("--scenario", default=str(SCENARIO))
+    parser.add_argument("--chain", action="store_true",
+                        help="собрать два года: закрытый 2025 + закрытый 2026 (для сравнений)")
+    parser.add_argument("--prior-scenario",
+                        default=str(ROOT / "data" / "demo" / "year_close" / "scenario_2025.json"))
+    parser.add_argument("--prior-decisions",
+                        default=str(ROOT / "data" / "demo" / "year_close" / "decisions_2025.json"))
+    parser.add_argument("--decisions",
+                        default=str(ROOT / "data" / "demo" / "year_close" / "decisions_2026.json"))
     args = parser.parse_args(argv)
-    state, summary = build(Path(args.scenario))
+    if args.chain:
+        state, summary = build_chain(Path(args.prior_scenario), Path(args.prior_decisions),
+                                     Path(args.scenario), Path(args.decisions))
+    else:
+        state, summary = build(Path(args.scenario))
     path = (ROOT / args.out) if not Path(args.out).is_absolute() else Path(args.out)
     ledger.save(state, path)
     print(json.dumps({**summary, "saved": str(path)}, ensure_ascii=False, indent=1))

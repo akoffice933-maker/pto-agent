@@ -15,7 +15,12 @@
    15 000 000, 2410 заполнена из журнала, чистая прибыль 11 250 000, и она же в 1370;
 9. расхождение «проведено против посчитано» равно нулю, а не «объявлено нулём»;
 10. в отчёте и в CLI написано, чего нет: ОДДС, изменения капитала, пояснения, ПБУ 18/02,
-    и названы данные, которых не хватает для ОДК/ОДДС.
+    и названы данные, которых не хватает для ОДК/ОДДС;
+11. сравнительные показатели (круг 45): в журнале два закрытых года, графа «на 31 декабря
+    предыдущего года» заполняется из того же журнала, входящее сальдо 2026 равно исходящему
+    2025, 1370 прошлого года + чистая прибыль года = 1370 текущего, цепочка ОФР прошлого
+    года пересчитывается; отсутствие прошлого года ловится как нарушение, а самый первый
+    отчётный год — нет (там сравнивать не с чем, и это сказано словами).
 
     python3 scripts/check_statements.py
 """
@@ -29,7 +34,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from pto_agent import ledger, statements, year_close                  # noqa: E402
-from scripts.make_demo_year import build                              # noqa: E402
+from scripts.make_demo_year import build, build_chain                 # noqa: E402
 
 SCENARIO = ROOT / "data" / "demo" / "year_close" / "scenario_2026.json"
 DECISIONS = ROOT / "data" / "demo" / "year_close" / "decisions_2026.json"
@@ -50,6 +55,11 @@ def line(report: dict, code: str) -> dict:
 
 def check_of(report: dict, code: str) -> dict:
     return next(item for item in report["checks"] if item["code"] == code)
+
+
+def _load(path: Path) -> dict:
+    import json
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _post(state: dict, *, event: str, lines: list[dict], memo: str, key: str) -> None:
@@ -218,7 +228,59 @@ check("изменениях капитала" in text and "ПБУ 18/02" in text
 check("## Налог на прибыль" in text and "## Чего не хватает" in text,
       "в отчёте нет блока налога или блока «чего не хватает»")
 
+# ── два года: сравнительные показатели (круг 45) ──────────────────────────────
+PRIOR = ROOT / "data" / "demo" / "year_close"
+state2, chain = build_chain(PRIOR / "scenario_2025.json", PRIOR / "decisions_2025.json",
+                            SCENARIO, DECISIONS)
+check(chain["closed"] == ["2025", "2026"], f"закрыты не оба года: {chain['closed']}")
+report2 = statements.check(state2, 2026)
+check(report2["ok"], f"два года подряд дают нарушения: {[c['code'] for c in report2['problems']]}")
+prior = report2["balance"]["prior"]
+check(prior["available"] and prior["closed"] and prior["year"] == "2025",
+      f"графа прошлого года не заполнена: {prior}")
+check(prior["totals"]["1600"] == 54_100_000.0 and prior["totals"]["1700"] == 54_100_000.0,
+      f"прошлый год в балансе {prior['totals']}, ожидали 54 100 000")
+row = line(report2["balance"], "1370")
+check(row["prior"] == 8_790_000.0 and row["amount"] == 20_040_000.0,
+      f"1370: прошлый {row['prior']}, текущий {row['amount']}")
+row = line(report2["balance"], "1210")
+check(row["prior"] == 360_000.0 and row["amount"] == 711_500.0,
+      f"1210: прошлый {row['prior']}, текущий {row['amount']}")
+check(report2["pnl"]["prior_values"]["2400"] == 8_790_000.0,
+      f"чистая прибыль 2025 в ОФР {report2['pnl']['prior_values'].get('2400')}")
+check(report2["pnl"]["prior_values"]["2110"] == 44_000_000.0,
+      f"выручка 2025 в ОФР {report2['pnl']['prior_values'].get('2110')}")
+check(report2["pnl"]["values"]["2400"] == 11_250_000.0,
+      f"чистая прибыль 2026 в ОФР {report2['pnl']['values'].get('2400')}")
+check(check_of(report2, "OPENING_MATCHES_PRIOR")["ok"],
+      "входящее сальдо 2026 не равно исходящему 2025")
+check(check_of(report2, "RETAINED_CONTINUITY")["ok"], "1370 не сходится с прошлым годом")
+check(check_of(report2, "PNL_PRIOR_CHAIN")["ok"], "цепочка ОФР прошлого года не пересчитывается")
+text2 = statements.to_markdown(report2)
+check("на 31.12.2025" in text2 and "8 790 000,00" in text2,
+      "в markdown нет графы прошлого года с суммой 8 790 000")
+check("Годом ранее" in text2, "в markdown не сказано, каким был баланс годом ранее")
+
+# прошлый год есть в журнале, но не закрыт — это нарушение, а не «нет данных»
+state3, _ = build(PRIOR / "scenario_2025.json")
+state3, _ = build(SCENARIO, state=state3)
+year_close.close_year(state3, 2026, decisions=_load(DECISIONS))
+probe = statements.check(state3, 2026)
+closed_check = check_of(probe, "PRIOR_CLOSED")
+check(not closed_check["ok"], "незакрытый прошлый год не поймали: сравнительные повисли в воздухе")
+
+# первый отчётный год: графа пустая, но с причиной — и это не нарушение
+first = statements.check(state, 2026)
+check(first["ok"], "первый отчётный год теперь ругается на отсутствие сравнений")
+check(not check_of(first, "PRIOR_COMPARATIVES")["first_year"] is False,
+      "не отмечено, что это первый отчётный год")
+check(first["balance"]["prior"]["reason"] and "первый отчётный год" in
+      first["balance"]["prior"]["reason"], "причина пустой графы не сказана словами")
+
 fmt = statements.fmt
+print(f"два года: 2025 чистая {fmt(report2['pnl']['prior_values']['2400'])} ₽, "
+      f"2026 чистая {fmt(report2['pnl']['values']['2400'])} ₽ · баланс годом ранее "
+      f"{fmt(prior['totals']['1600'])} ₽ → сейчас {fmt(report2['balance']['totals']['1600'])} ₽")
 print(f"отчётность 2026: актив {fmt(sheet['totals']['1600'])} ₽ = пассив "
       f"{fmt(sheet['totals']['1700'])} ₽ · выручка {fmt(values['2110'])} ₽ · "
       f"налог {fmt(tax['posted'])} ₽ · чистая прибыль {fmt(values['2400'])} ₽ · "
