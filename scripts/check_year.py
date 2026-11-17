@@ -74,8 +74,13 @@ check(year_close.precheck(partial, "2026")["open_months"] == ["2026-11"],
 state = fresh()
 report = year_close.close_year(state, "2026", decisions=read(DECISIONS))
 check(report["closed"], f"год не закрыт: {report['problems']}")
-check(report["result"]["profit"] == 15_000_000,
-      f"результат года {report['result']['profit']}, ожидалось 15 000 000")
+check(report["result"]["profit_before_tax"] == 15_000_000,
+      f"прибыль до налога {report['result']['profit_before_tax']}, ожидалось 15 000 000")
+check(report["result"]["profit_tax"] == 3_750_000,
+      f"налог на прибыль {report['result']['profit_tax']}, ожидалось 3 750 000 (25 %)")
+check(report["result"]["profit"] == 11_250_000,
+      f"чистая прибыль {report['result']['profit']}, ожидалось 11 250 000 "
+      f"(15 000 000 − 3 750 000 налога)")
 check(report["result"]["revenue"] == 67_100_000,
       f"выручка {report['result']['revenue']}, ожидалось 67 100 000 (с НДС)")
 check(report["result"]["vat_out"] == 12_100_000,
@@ -86,9 +91,9 @@ check(report["result"]["cost"] == 40_000_000,
 check(year_close.account_balance(state, "99", "2026-12-31", chart=chart) == Decimal("0.00"),
       "сальдо 99 после реформации не нулевое")
 check(year_close.account_balance(state, "84", "2026-12-31", chart=chart)
-      == Decimal("-15000000.00"),
+      == Decimal("-11250000.00"),
       f"на 84 {year_close.account_balance(state, '84', '2026-12-31', chart=chart)}, "
-      f"ожидалось −15 000 000 (кредитовое сальдо)")
+      f"ожидалось −11 250 000 (прибыль за вычетом налога, кредитовое сальдо)")
 check(year_close.account_balance(state, "84.02", "2026-12-31", chart=chart)
       == Decimal("0.00"), "при прибыли открылся 84.02 (убыток)")
 reform = [row for row in state["entries"] if row["event"] == "year.reformation"]
@@ -101,7 +106,7 @@ second = year_close.close_year(state, "2026", decisions=read(DECISIONS))
 check(len(state["entries"]) == entries_before,
       f"повторное закрытие добавило {len(state['entries']) - entries_before} проводок")
 check(year_close.account_balance(state, "84", "2026-12-31", chart=chart)
-      == Decimal("-15000000.00"), "повторное закрытие удвоило 84")
+      == Decimal("-11250000.00"), "повторное закрытие удвоило 84")
 
 # ── 4. убыток ─────────────────────────────────────────────────────────────
 loss_payload = read(SCENARIO)
@@ -199,8 +204,46 @@ no_rbp = fresh()
 decisions_no_rbp = read(DECISIONS)
 decisions_no_rbp["future_costs"] = [{"вид": "страхование СМР", "amount": 0}]
 no_rbp_report = year_close.close_year(no_rbp, "2026", decisions=decisions_no_rbp)
-check(no_rbp_report["result"]["profit"] - report["result"]["profit"] == 160_000,
-      "списание РБП не дошло до результата года")
+check(no_rbp_report["result"]["profit_before_tax"]
+      - report["result"]["profit_before_tax"] == 160_000,
+      "списание РБП не дошло до прибыли до налога")
+check(no_rbp_report["result"]["profit"] - report["result"]["profit"] == 120_000,
+      "списание РБП не дошло до чистой прибыли: 160 000 расхода − 40 000 налога = 120 000")
+check(no_rbp_report["result"]["profit_tax"] != report["result"]["profit_tax"],
+      "налог не изменился после того, как изменилась база: значит шаг налога стоит не там")
+
+# ── 8б. налог на прибыль: Дт 99 Кт 68.04 ──────────────────────────────────
+tax_step = next((row for row in report["steps"] if row["id"] == "profit_tax"), None)
+check(tax_step is not None, "в закрытии года нет шага налога на прибыль")
+check(tax_step["status"] == year_close.DONE,
+      f"шаг налога не выполнен: {tax_step['status']} {tax_step['why']}")
+check(tax_step["amount"] == 3_750_000, f"налог {tax_step['amount']}, ожидали 3 750 000")
+postings = [row for row in state["entries"] if row.get("event") == "year.profit_tax"]
+check(len(postings) == 1, f"проводок налога {len(postings)}, ожидалась одна")
+check(all(line["side"] == ledger.DEBIT for line in postings[0]["lines"]
+          if line["account"] == "99"), "налог провели не по дебету 99")
+check(year_close.account_balance(state, "68.04", "2026-12-31", chart=chart)
+      == Decimal("-3750000.00"),
+      f"на 68.04 {year_close.account_balance(state, '68.04', '2026-12-31', chart=chart)}, "
+      f"ожидалось −3 750 000 (кредитовое сальдо)")
+tax_index = next((i for i, row in enumerate(report["steps"]) if row["id"] == "profit_tax"), -1)
+reform_index = next((i for i, row in enumerate(report["steps"]) if row["id"] == "reformation"), -1)
+check(0 < tax_index < reform_index, "налог стоит после реформации: сальдо 99 станет ненулевым")
+
+# убыток: налог не начисляется, и это сказано
+loss_tax = year_close.step_profit_tax(loss_state, "2026", mode=ledger.MODE_POST,
+                                      chart=chart, rules=year_close.load_rules())
+check(loss_tax["status"] == year_close.NOT_NEEDED and "прибыли" in loss_tax["why"].lower(),
+      f"при убытке шаг налога: {loss_tax['status']} — {loss_tax['why']}")
+
+# год числом и год строкой — один и тот же год (круг 44, TypeError в year_close.py:736)
+numeric = fresh()
+numeric_report = year_close.close_year(numeric, 2026, decisions=read(DECISIONS))
+check(numeric_report["closed"], f"год числом не закрывается: {numeric_report['problems']}")
+check(year_close.account_balance(numeric, "84", "2026-12-31", chart=chart)
+      == Decimal("-11250000.00"), "год числом дал другой результат")
+check(year_close.close_year(fresh(), 26)["problems"][0]["code"] == "BAD_YEAR",
+      "неверный год (26) не отвергнут")
 
 # ── 9. проводки в закрытом декабре ────────────────────────────────────────
 late = [row for row in state["entries"] if row.get("late")]
@@ -222,13 +265,15 @@ check(ledger.verify(state)["ok"] and ledger.trial_balance(state, "2026-12")["bal
 # ── 10. суммы ─────────────────────────────────────────────────────────────
 moved = sum(ledger.kopeck(line["amount"]) for line in reform[0]["lines"]
             if line["account"] == "99")
-check(moved == Decimal("15000000.00"),
-      f"на 84 перенесено {moved}, а результат года 15 000 000")
+check(moved == Decimal("11250000.00"),
+      f"на 84 перенесено {moved}, а чистая прибыль года 11 250 000")
 check(year_close.account_balance(state, "84", "2026-12-31", chart=chart) == -moved,
       "перенос на 84 не равен результату года")
 text = year_close.screen_text(report)
-check("не сделано" in text.lower() and "годовая бухгалтерская отчётность" in text,
+check("не сделано" in text.lower(),
       "на экране закрытия года нет списка «чего нет»")
+check("налог на прибыль" in text.lower(),
+      "на экране закрытия года нет шага налога на прибыль")
 markdown = year_close.to_markdown(report)
 check("| Шаг | Статус |" in markdown and "Реформация баланса" in markdown,
       "markdown закрытия года не содержит шагов")

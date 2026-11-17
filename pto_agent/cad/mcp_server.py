@@ -2389,7 +2389,8 @@ def t_financial_statements(args, ctx):
                            "unmapped": report["balance"]["unmapped"]},
                "pnl": {"values": report["pnl"]["values"], "lines": report["pnl"]["lines"]},
                "checks": report["checks"], "problems": report["problems"],
-               "gaps": report["gaps"],
+               "gaps": report["gaps"], "tax": report["tax"],
+               "readiness": report["readiness"],
                "not_implemented": report["not_implemented"]}
     if (args.get("format") or "json") == "markdown":
         payload["markdown"] = reporting.to_markdown(report)

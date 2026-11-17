@@ -677,3 +677,6 @@ def test_statements_screen_shows_balance_and_honest_gaps(client, root):
     assert "не заполняется" in text                    # пустая строка с причиной
     assert "Не сделано (и почему)" in text
     assert "ПБУ 18/02" in text
+    # круг 44: налог виден на экране, и ОДК/ОДДС названы «не строятся» с причиной
+    assert "Налог на прибыль" in text and "расхождение" in text
+    assert "Чего не хватает" in text and "ОДДС" in text

@@ -115,8 +115,10 @@ def test_lines_show_which_accounts_they_are_built_from(closed):
     assert [part["account"] for part in line(sheet, "1210")["accounts"]] == ["10.01"]
     assert line(sheet, "1230")["amount"] == pytest.approx(67_248_500.0)   # 62.01 + 73.02
     assert line(sheet, "1260")["amount"] == pytest.approx(800_000.0)      # РБП 97
-    assert line(sheet, "1370")["amount"] == pytest.approx(15_000_000.0)   # 84.01
-    assert line(sheet, "1520")["amount"] == pytest.approx(52_160_000.0)   # 60.01 + 68.02
+    # 84.01 = чистая прибыль: 15 000 000 до налога минус 3 750 000 налога
+    assert line(sheet, "1370")["amount"] == pytest.approx(11_250_000.0)
+    # 60.01 + 68.02 + 68.04 (налог на прибыль проведён шагом закрытия года)
+    assert line(sheet, "1520")["amount"] == pytest.approx(55_910_000.0)
     assert line(sheet, "1540")["amount"] == pytest.approx(1_240_000.0)    # оценочное 96
 
 
@@ -137,9 +139,17 @@ def test_profit_and_loss_are_netting_in_1370(closed):
           memo="реформация убытка прошлого периода: Дт 84.02 Кт 99",
           key="demo.loss|2026")
     sheet = statements.balance(state, "2026")
-    # 84.01 = 15 000 000 прибыли, 84.02 = 2 000 000 убытка → в строке сальдо 13 000 000,
-    # а не «две суммы рядом» и не 17 000 000
-    assert line(sheet, "1370")["amount"] == pytest.approx(13_000_000.0)
+    # 84.01 = 11 250 000 прибыли, 84.02 = 2 000 000 убытка → в строке сальдо 9 250 000,
+    # а не «две суммы рядом» и не 13 250 000
+    assert line(sheet, "1370")["amount"] == pytest.approx(9_250_000.0)
+
+
+def test_year_as_number_and_as_string_is_one_year(closed):
+    """Круг 44: `close_year(state, 2026)` падал TypeError — год числом должен работать."""
+    as_number = statements.check(closed, 2026)
+    as_string = statements.check(closed, "2026")
+    assert as_number["balance"]["totals"]["1600"] == as_string["balance"]["totals"]["1600"]
+    assert as_number["pnl"]["values"]["2400"] == as_string["pnl"]["values"]["2400"]
 
 
 def test_thousands_are_shown_next_to_rubles(closed):
@@ -167,7 +177,7 @@ def test_debit_and_credit_of_one_account_are_not_netted(closed):
     assert line(sheet, "1230")["amount"] == pytest.approx(63_248_500.0)
     assert line(sheet, "1250")["amount"] == pytest.approx(4_000_000.0)
     # а кредиторка 60.01 не уменьшилась на выданный аванс — иначе задолженность была бы свёрнута
-    assert line(sheet, "1520")["amount"] == pytest.approx(52_160_000.0)
+    assert line(sheet, "1520")["amount"] == pytest.approx(55_910_000.0)
 
 
 # ─────────────────────────── отчёт о финансовых результатах ───────────────────────────
@@ -179,15 +189,21 @@ def test_pnl_chain_from_revenue_to_net_profit(closed):
     assert values["2100"] == pytest.approx(15_000_000.0)
     assert values["2200"] == pytest.approx(15_000_000.0)
     assert values["2300"] == pytest.approx(15_000_000.0)
-    assert values["2400"] == pytest.approx(15_000_000.0)
+    assert values["2410"] == pytest.approx(3_750_000.0)        # 68.04: 25 % от 15 000 000
+    assert values["2411"] == pytest.approx(3_750_000.0)        # текущий = весь: отложенного нет
+    assert values["2400"] == pytest.approx(11_250_000.0)       # чистая прибыль
     assert check_of(report, "PNL_CHAIN")["ok"]
 
 
 def test_pnl_lines_that_cannot_be_filled_say_why(closed):
     report = statements.check(closed, "2026")
+    # 2410 теперь заполняется из 68.04, а вот отложенный налог (2412) считать нечем
     tax_line = next(item for item in report["pnl"]["lines"] if item["code"] == "2410")
-    assert tax_line.get("not_calculated") is True
-    assert "68.04" in tax_line["why_empty"]
+    assert tax_line.get("not_calculated") is None
+    assert tax_line["amount"] == pytest.approx(3_750_000.0)
+    deferred = next(item for item in report["pnl"]["lines"] if item["code"] == "2412")
+    assert deferred.get("not_calculated") is True
+    assert "09" in deferred["why_empty"] and "ПБУ 18/02" in deferred["why_empty"]
     for code in ("2210", "2220", "2310", "2320", "2420", "2460"):
         item = next(line for line in report["pnl"]["lines"] if line["code"] == code)
         assert item.get("why_empty"), f"{code}: пустая строка без причины"
@@ -205,12 +221,27 @@ def test_profit_from_pnl_lands_in_capital(closed):
         report["pnl"]["values"]["2400"])
 
 
-def test_unposted_profit_tax_is_named_as_a_number(closed):
+def test_posted_profit_tax_leaves_no_gap_but_is_named(closed):
+    """Налог проведён: разрыва нет, но цифра всё равно названа — и в отчёте, и в сводке."""
     report = statements.check(closed, "2026")
-    gap = report["gaps"][0]
-    assert gap["amount"] == pytest.approx(3_750_000.0)          # 25 % от 15 000 000
-    assert "68.04" in gap["why"]
+    assert report["gaps"] == []
+    tax = report["tax"]
+    assert tax["posted"] == pytest.approx(3_750_000.0)          # 25 % от 15 000 000
+    assert tax["computed"] == pytest.approx(3_750_000.0)
+    assert tax["difference"] == pytest.approx(0.0)
     assert "3 750 000,00" in statements.screen_text(report)
+    assert check_of(report, "TAX_POSTED")["ok"]
+
+
+def test_missing_tax_posting_becomes_a_gap_again(closed):
+    """Убрали проводку налога — цифра не исчезает, а становится разрывом."""
+    state = fresh(closed)
+    state["entries"] = [entry for entry in state["entries"]
+                        if entry.get("event") != "year.profit_tax"]
+    report = statements.check(state, "2026")
+    assert not check_of(report, "TAX_POSTED")["ok"]
+    assert report["gaps"] and report["gaps"][0]["amount"] == pytest.approx(3_750_000.0)
+    assert "68.04" in report["gaps"][0]["why"]
 
 
 # ─────────────────────────── проверки ловят ошибки ───────────────────────────
@@ -275,7 +306,10 @@ def test_markdown_has_both_forms_and_honest_gaps(closed):
     assert "## Не сделано (и почему)" in text
     assert "отчёт об изменениях капитала" in text.lower() or "изменениях капитала" in text.lower()
     assert "ПБУ 18/02" in text
-    assert "## Разрывы, названные числом" in text
+    # разрыва по налогу больше нет (налог проведён), поэтому проверяем блок налога
+    # и блок «чего не хватает» для ОДК/ОДДС — оба обязаны быть на экране и в отчёте
+    assert "## Налог на прибыль" in text and "3 750 000,00" in text
+    assert "## Чего не хватает" in text and "4000–4500" in text
 
 
 def test_cli_reports_and_saves_markdown(closed, tmp_path):
@@ -313,6 +347,8 @@ def test_mcp_tool_returns_same_numbers(closed, tmp_path):
     payload = json.loads(out["result"]["content"][0]["text"])
     assert payload["ok"] is True
     assert payload["balance"]["totals"]["1600"] == 68_400_000
-    assert payload["pnl"]["values"]["2400"] == 15_000_000
-    assert payload["gaps"][0]["amount"] == 3_750_000
+    assert payload["pnl"]["values"]["2400"] == 11_250_000
+    assert payload["tax"]["posted"] == 3_750_000
+    assert payload["gaps"] == []                     # налог проведён — разрыва нет
+    assert payload["readiness"] and payload["readiness"][0]["built"] is False
     assert payload["not_implemented"]

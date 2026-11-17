@@ -85,12 +85,18 @@ def closings(state: dict, year: str, *, chart: dict | None = None) -> dict:
     return rows
 
 
+def _year(value) -> str:
+    """Год — строкой: `2026` и `"2026"` должны значить одно и то же."""
+    return str(value).strip()[:4]
+
+
 def turnovers(state: dict, year: str) -> dict:
     """Обороты за весь год по каждому счёту: Дт и Кт отдельно.
 
     Считается по записям журнала за все 12 месяцев, а не по одному декабрю: иначе в отчёт
     попал бы декабрь вместо года.
     """
+    year = _year(year)
     prefix = f"{year}-"
     out: dict[str, dict] = {}
     for entry in state.get("entries") or []:
@@ -190,6 +196,7 @@ def _one(code: str, minus: bool, rows: dict, index: dict, side: str):
 def balance(state: dict, year: str, *, chart: dict | None = None,
             rules: dict | None = None) -> dict:
     """Бухгалтерский баланс на 31 декабря года: строки, итоги, что осталось вне строк."""
+    year = _year(year)
     chart = chart or ledger.load_chart()
     rules = rules or load_rules()
     index = _chart_index(chart)
@@ -204,10 +211,18 @@ def balance(state: dict, year: str, *, chart: dict | None = None,
         used.update(part["account"] for part in parts)
         for spec_code, _ in _parse_accounts(item.get("accounts") or []):
             used.update(expand(spec_code, index))
+        # пустая строка обязана называть причину: «ноль, потому что счёта нет» — это тоже
+        # причина, и она отличается от «ноль, потому что остатка нет»
+        reason = item.get("why_empty") or ""
+        if not parts and not reason:
+            specs = ", ".join(_parse_accounts(item.get("accounts") or []) and
+                              [code for code, _ in _parse_accounts(item.get("accounts") or [])] or [])
+            reason = (f"сальдо по счетам {specs} нулевое: счёт в рабочем плане есть, остатка за год нет"
+                      if specs else "строка не заполняется: в форме ей нечего соответствовать")
         line = {"code": item["code"], "title": item["title"], "section": item["section"],
                 "side": item["side"], "amount": num(amount), "thousand": thousand(amount),
                 "accounts": parts, "note": item.get("note") or "",
-                "why_empty": item.get("why_empty") or "" if not parts else ""}
+                "why_empty": reason if not parts else ""}
         if amount < 0:
             line["negative"] = True
         lines.append(line)
@@ -257,6 +272,7 @@ def _turnover_value(rule: str, moves: dict) -> tuple[float, str]:
 
 def pnl(state: dict, year: str, *, rules: dict | None = None) -> dict:
     """Отчёт о финансовых результатах за год: цепочка от выручки к чистой прибыли."""
+    year = _year(year)
     rules = rules or load_rules()
     moves = turnovers(state, year)
     form = rules["pnl"]
@@ -299,31 +315,128 @@ def pnl(state: dict, year: str, *, rules: dict | None = None) -> dict:
             "unit": "руб.", "lines": lines, "values": values}
 
 
-def profit_tax_gap(state: dict, year: str) -> dict:
-    """Сколько налога на прибыль контур посчитал и почему он не попал в отчётность.
+def profit_tax(state: dict, year: str, *, rules: dict | None = None) -> dict:
+    """Налог на прибыль: сколько начислено в журнале и сколько насчитал налоговый модуль.
 
-    Налог считается налоговым модулем по месяцам, но в журнал не проводится: счёта 68.04
-    в рабочем плане нет. Поэтому строка 2410 пустая, а разрыв называется цифрой — иначе
-    «чистая прибыль» в отчёте тихо равна прибыли до налога.
+    Круг 44: счёт 68.04 в рабочем плане есть, и закрытие года проводит `Дт 99 Кт 68.04`
+    (шаг `profit_tax`). Поэтому строка 2410 теперь заполняется из журнала, а не остаётся
+    пустой. Но «проведено» и «посчитано» — две разные цифры, и обе показываются:
+
+    * `posted` — кредитовый оборот 68.04 за год (то, что реально легло в учёт и в 2410);
+    * `computed` — налог за год по налоговому модулю (8 % + 17 % от прибыли от реализации);
+    * `months_sum` — сумма помесячных расчётов: она **не обязана** совпадать с годом
+      (ст. 286 НК РФ — период считается нарастающим итогом, плюс помесячные округления),
+      и расхождение называется, а не прячется;
+    * `difference` — расхождение «проведено против посчитано». Ноль — хорошо; не ноль —
+      это разрыв, который видно в отчёте.
     """
     from . import tax
 
-    total = 0.0
+    year = _year(year)
+    moves = turnovers(state, year)
+    posted = float((moves.get("68.04") or {}).get("credit") or 0.0)
+    report = tax.profit_return(state, year)
+    computed = float((report.get("totals") or {}).get("tax") or 0.0)
     months = []
     for month in range(1, 13):
         period = f"{year}-{month:02d}"
-        try:
-            report = tax.profit_return(state, period)
-        except Exception:                      # демо может не покрывать все месяцы
-            continue
-        amount = float((report.get("totals") or {}).get("tax") or 0.0)
+        amount = float((tax.profit_return(state, period).get("totals") or {}).get("tax") or 0.0)
         if amount:
-            months.append({"period": period, "tax": amount})
-            total += amount
-    return {"amount": num(total), "months": months,
-            "what": "налог на прибыль за год посчитан, но не проведён в журнал",
-            "why": ("в рабочем плане счетов нет счёта 68.04, поэтому строка 2410 пустая, "
-                    "а 2400 показана до налога. Разрыв назван числом, а не скрыт нулём")}
+            months.append({"period": period, "tax": num(amount)})
+    months_sum = float(sum(item["tax"] for item in months))
+    return {"posted": num(posted), "computed": num(computed),
+            "months_sum": num(months_sum), "difference": num(posted - computed),
+            "months": months,
+            "base": (report.get("totals") or {}).get("profit"),
+            "rates": {"federal": (report.get("totals") or {}).get("federal_rate"),
+                      "regional": (report.get("totals") or {}).get("regional_rate")},
+            "problems": list(report.get("problems") or []),
+            "not_included": list(report.get("not_included") or []),
+            "why_diff": ("сумма помесячных расчётов и налог за год расходятся законно: "
+                         "период считается нарастающим итогом (ст. 286 НК РФ), а каждый месяц "
+                         "округляется отдельно. В отчётность идёт год, а не сумма месяцев"
+                         if abs(months_sum - computed) > 0.01 else "")}
+
+
+def profit_tax_gap(state: dict, year: str) -> dict:
+    """Разрыв по налогу — только если он есть: проведённое ≠ посчитанному.
+
+    Раньше (круг 43) разрыв был «по определению»: счёта 68.04 не было, и налог не проводился.
+    Теперь он есть и проводится шагом закрытия года, поэтому разрыв вычисляется, а не
+    предполагается. Если разрыва нет — возвращается пустая сумма и объяснение, почему ноль
+    здесь означает «сходится», а не «не считали».
+    """
+    info = profit_tax(state, year)
+    difference = float(info["difference"])
+    return {"amount": num(abs(difference)), "code": "PROFIT_TAX_GAP",
+            "what": "налог на прибыль: проведено против посчитанного",
+            "posted": info["posted"], "computed": info["computed"],
+            "months_sum": info["months_sum"], "why_diff": info["why_diff"],
+            "why": ("в журнале 68.04 {posted}, налоговый модуль насчитал {computed}: "
+                    "налог не проведён или проведён другой суммой — строка 2410 и 2400 "
+                    "в отчётности будут неверными".format(
+                        posted=rub(info["posted"]), computed=rub(info["computed"]))
+                    if abs(difference) > 0.01 else
+                    "налог проведён и совпадает с расчётом: 2410 в отчёте — из журнала, "
+                    "а не «по памяти налогового модуля»")}
+
+
+def readiness(state: dict, year: str, *, chart: dict | None = None) -> list[dict]:
+    """Чего не хватает, чтобы ОДК и ОДДС считались, а не рисовались.
+
+    Обе формы входят в годовую отчётность, но их нельзя «собрать из ничего»:
+
+    * **ОДДС** (4000–4500) требует движения денег: касса 50, расчётные счета 51, валюта 52,
+      специальные счета 55, переводы в пути 57 — и у каждого платежа назначение (какой вид
+      деятельности: текущая, инвестиционная, финансовая);
+    * **ОДК** (3000–3300) требует капитала: уставный (80), добавочный (83), резервный (82),
+      собственные акции (81) и движений по 84, кроме одной реформации: дивиденды, пополнения,
+      переоценка.
+
+    Функция не «оценивает готовность» на глаз: она смотрит рабочий план и журнал и называет,
+    что именно отсутствует. Пока данных нет — формы не строятся, и это сказано на экране.
+    Когда данные появятся, здесь же станет видно, что́ уже есть, а чего ещё нет.
+    """
+    year = _year(year)
+    chart = chart or ledger.load_chart()
+    index = _chart_index(chart)
+    moves = turnovers(state, year)
+
+    cash = ("50", "51", "52", "55", "57")
+    cash_absent = [code for code in cash if code not in index]
+    cash_silent = [code for code in cash if code in index and not moves.get(code)]
+    odds = {
+        "form": "отчёт о движении денежных средств (4000–4500)",
+        "short": "ОДДС",
+        "built": False,
+        "missing": ([f"счетов нет в рабочем плане: {', '.join(cash_absent)}"] if cash_absent else [])
+                   + ([f"счета есть, но оборотов за {year} нет: {', '.join(cash_silent)}"]
+                      if cash_silent else []),
+        "need": ("банковские выписки и касса: дата, сумма, контрагент, назначение платежа "
+                 "(вид деятельности по п. 8–11 ПБУ 23/2011)"),
+        "why": ("форма не строится: без движения денег и назначения платежей строки 4110–4500 "
+                "можно только выдумать"),
+    }
+
+    capital = ("80", "81", "82", "83", "84")
+    capital_absent = [code for code in capital if code not in index]
+    capital_moves = {code: moves.get(code) for code in capital if moves.get(code)}
+    only_close = [code for code, row in capital_moves.items()
+                  if code.startswith("84")
+                  and not float((row or {}).get("debit") or 0.0) - float((row or {}).get("credit") or 0.0)]
+    odk = {
+        "form": "отчёт об изменениях капитала (3000–3300)",
+        "short": "ОДК",
+        "built": False,
+        "missing": ([f"счетов нет в рабочем плане: {', '.join(capital_absent)}"] if capital_absent else [])
+                   + ([f"по 84 только реформация: {len(only_close)}/1 проводка"] if capital_moves else
+                      [f"движений по капиталу за {year} нет вовсе"]),
+        "need": ("движения капитала: вклад/выкуп долей, дивиденды, переоценка, резервный фонд — "
+                 "каждое с документом и датой"),
+        "why": ("форма не строится: одна реформация 99 → 84 — это перенос результата, а не "
+                "изменение капитала за счёт операций с собственниками"),
+    }
+    return [odk, odds]
 
 
 # ─────────────────────────── проверки ───────────────────────────
@@ -336,6 +449,7 @@ def _check(code: str, what: str, ok: bool, why: str = "", **extra) -> dict:
 def check(state: dict, year: str, *, chart: dict | None = None,
           rules: dict | None = None) -> dict:
     """Увязки, без которых отчётность не отчётность."""
+    year = _year(year)
     chart = chart or ledger.load_chart()
     rules = rules or load_rules()
     index = _chart_index(chart)
@@ -432,11 +546,13 @@ def check(state: dict, year: str, *, chart: dict | None = None,
         diffs.append(f"2110 {rub(sales)} ≠ 90.01−90.03 {rub(from_90)}")
     if abs(cost - cost_90) > 0.01:
         diffs.append(f"2120 {rub(cost)} ≠ 90.02 {rub(cost_90)}")
-    if abs(float(values.get("2300") or 0.0) - profit_90) > 0.01:
-        diffs.append(f"2300 {rub(values.get('2300') or 0)} ≠ реформация 84 {rub(profit_90)}")
+    # на 84 ложится чистая прибыль (после налога), поэтому сверяется 2400, а не 2300
+    net = float(values.get("2400") or 0.0)
+    if abs(net - profit_90) > 0.01:
+        diffs.append(f"2400 {rub(net)} ≠ реформация 84 {rub(profit_90)}")
     checks.append(_check("PNL_VS_TURNOVER", "ОФР совпадает с журналом: выручка и себестоимость — "
-                                            "с 90-ми, результат — с реформацией 84", not diffs,
-                         "; ".join(diffs)))
+                                            "с 90-ми, чистая прибыль — с реформацией 84",
+                         not diffs, "; ".join(diffs)))
 
     # 8. прибыль из ОФР должна оказаться в капитале
     retained = next((line["amount"] for line in sheet["lines"] if line["code"] == "1370"), 0.0)
@@ -450,16 +566,45 @@ def check(state: dict, year: str, *, chart: dict | None = None,
                          f"(прошлый остаток {rub(prior)} + чистая прибыль {rub(net)})",
                          retained=retained, expected=num(expected), net_profit=num(net)))
 
+    # 9. налог на прибыль проведён и совпадает с расчётом
+    info = profit_tax(state, year)
+    tax_ok = abs(float(info["difference"])) <= 0.01
+    tax_line = float(values.get("2410") or 0.0)
+    checks.append(_check("TAX_POSTED",
+                         "налог на прибыль проведён (68.04) и равен расчёту налогового модуля",
+                         tax_ok,
+                         f"в журнале 68.04 {rub(info['posted'])}, расчёт "
+                         f"{rub(info['computed'])}: разница {rub(info['difference'])}. "
+                         f"Строка 2410 в ОФР = {rub(abs(tax_line))}",
+                         posted=info["posted"], computed=info["computed"],
+                         months_sum=info["months_sum"]))
+    checks.append(_check("TAX_BASE_MATCHES",
+                         "база налога совпадает с прибылью до налога в ОФР",
+                         abs(float(info["base"] or 0.0) - float(values.get("2300") or 0.0)) <= 0.01,
+                         f"налоговый модуль считает от {rub(info['base'])}, а 2300 ОФР = "
+                         f"{rub(values.get('2300'))}: базы разные, значит и налог не тот"))
+
+    # 10. в отчёте нет «тихих нулей»: у каждой пустой строки есть причина
+    silent = [line["code"] for line in sheet["lines"] if not line["accounts"]
+              and not line["why_empty"]]
+    silent += [line["code"] for line in profit["lines"] if line.get("not_calculated")
+               and not line.get("why_empty")]
+    checks.append(_check("NO_SILENT_ZEROS", "у каждой незаполненной строки названа причина",
+                         not silent, "строки без причины: " + ", ".join(silent)))
+
+    forms = readiness(state, year, chart=chart)
     problems = [item for item in checks if not item["ok"]]
-    gaps = [profit_tax_gap(state, year)]
+    gap = profit_tax_gap(state, year)
+    gaps = [gap] if float(gap["amount"]) > 0.01 else []
     return {"year": year, "checks": checks, "problems": problems, "gaps": gaps,
-            "ok": not problems,
+            "ok": not problems, "tax": info, "readiness": forms,
             "balance": sheet, "pnl": profit,
             "not_implemented": list(rules.get("not_implemented") or [])}
 
 
 def _prior_retained(state: dict, year: str) -> float:
     """Остаток 84 на начало года: из проводок до января отчётного года."""
+    year = _year(year)
     total = Decimal("0")
     for entry in state.get("entries") or []:
         if str(entry.get("period") or "") >= f"{year}-01":
@@ -519,6 +664,22 @@ def to_markdown(report: dict) -> str:
         for line in empty_pnl:
             out.append(f"- **{line['code']} {line['title']}** — {line['why_empty']}")
 
+    tax = report.get("tax") or {}
+    if tax:
+        out += ["", "## Налог на прибыль", "",
+                f"- проведено в журнале (Дт 99 Кт 68.04): **{rub(tax.get('posted'))}**",
+                f"- насчитал налоговый модуль за {report['year']}: {rub(tax.get('computed'))} "
+                f"(база {rub(tax.get('base'))}, ставки "
+                f"{(tax.get('rates') or {}).get('federal')}% + "
+                f"{(tax.get('rates') or {}).get('regional')}%)",
+                f"- сумма помесячных расчётов: {rub(tax.get('months_sum'))}"
+                + (f" — {tax['why_diff']}" if tax.get("why_diff") else
+                   " — совпадает с годом"),
+                f"- расхождение «проведено против посчитано»: "
+                f"**{rub(tax.get('difference'))}**"
+                + (" — это разрыв, а не ноль" if abs(float(tax.get("difference") or 0)) > 0.01
+                   else " (сходится)")]
+
     out += ["", "## Проверки", "", "| код | что проверено | результат |", "|---|---|---|"]
     for item in report["checks"]:
         out.append(f"| {item['code']} | {item['what']} | "
@@ -528,8 +689,15 @@ def to_markdown(report: dict) -> str:
         out += ["## Разрывы, названные числом", ""]
         for gap in report["gaps"]:
             out.append(f"- **{gap['what']}: {rub(gap['amount'])}** — {gap['why']}")
+    if report.get("readiness"):
+        out += ["", "## Чего не хватает, чтобы считались ОДК и ОДДС", ""]
+        for item in report["readiness"]:
+            out.append(f"- **{item['short']} (не строится)** — {item['why']}")
+            for miss in item.get("missing") or []:
+                out.append(f"  - нет данных: {miss}")
+            out.append(f"  - нужно: {item['need']}")
     if report.get("not_implemented"):
-        out += ["## Не сделано (и почему)", ""]
+        out += ["", "## Не сделано (и почему)", ""]
         for item in report["not_implemented"]:
             out.append(f"- **{item.get('what')}**: {item.get('why')}")
     return "\n".join(out) + "\n"
@@ -547,9 +715,17 @@ def screen_text(report: dict) -> str:
              f"прибыль от продаж {rub(values.get('2200'))} · до налогообложения "
              f"{rub(values.get('2300'))} · чистая {rub(values.get('2400'))}",
              f"  проверок {len(report['checks'])}, нарушений {len(report['problems'])}"]
+    tax = report.get("tax") or {}
+    if tax:
+        tail = (f"разрыв {rub(tax['difference'])} — проведено {rub(tax['posted'])}, "
+                f"посчитано {rub(tax['computed'])}"
+                if abs(float(tax.get("difference") or 0)) > 0.01 else
+                f"проведён и совпадает с расчётом ({rub(tax['posted'])})")
+        lines.append(f"  налог на прибыль: {tail}")
     for gap in report.get("gaps") or []:
-        lines.append(f"  разрыв: {gap['what']} — {rub(gap['amount'])} "
-                     f"(строка 2410 пустая, 2400 без налога)")
+        lines.append(f"  разрыв: {gap['what']} — {rub(gap['amount'])}; {gap['why']}")
+    for item in report.get("readiness") or []:
+        lines.append(f"  {item['short']}: не строится — {'; '.join(item['missing']) or item['why']}")
     for item in report["problems"]:
         lines.append(f"  ✗ [{item['code']}] {item['what']}: {item['why']}")
     if report.get("not_implemented"):
