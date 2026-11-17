@@ -2265,6 +2265,101 @@ def t_monthly_plan(args, ctx):
     return payload
 
 
+@tool("childcare_benefit",
+      "Пособие по уходу за ребёнком до 1,5 лет: 40 % среднего заработка × 30,4 в пределах "
+      "минимума и максимума. Платит СФР — сумма справочная, не расход организации, НДФЛ и "
+      "взносов нет. Неполный месяц отпуска считается пропорционально календарным дням; "
+      "способ и пределы берутся из справочника payroll_rules.json, а не из головы.",
+      {"type": "object", "properties": {
+          "earnings_2y": {"type": "number",
+                          "description": "заработок за два календарных года, ₽"},
+          "excluded_days": {"type": "integer", "default": 0,
+                            "description": "исключённые дни: болезнь, декрет, уход"},
+          "days_in_month": {"type": "integer", "default": 30},
+          "days_of_leave": {"type": "integer",
+                            "description": "календарных дней отпуска в месяце; нет — весь месяц"},
+          "employee": {"type": "object", "description": "карточка сотрудника (coefficient и др.)"}},
+       "required": ["earnings_2y"]})
+def t_childcare_benefit(args, ctx):
+    from .. import orders as orders_mod
+    from .. import payroll as wage
+    order = {"number": args.get("number") or "MCP", "kind": "childcare",
+             "earnings_2y": args.get("earnings_2y"),
+             "excluded_days": args.get("excluded_days") or 0,
+             "days_in_month": args.get("days_in_month") or 30}
+    if args.get("days_of_leave"):
+        order["days_of_leave"] = args["days_of_leave"]
+    row = orders_mod.childcare(order, args.get("employee") or {}, wage.load_rules(),
+                              period=args.get("period") or "2026-11")
+    return {"ok": not row["errors"], "kind": "childcare", "row": row,
+            "note": "платит СФР: в расходы организации и в базу по взносам не входит"}
+
+
+@tool("retention_pay",
+      "Средний заработок на период трудоустройства (ст. 178 ТК РФ): 2-й месяц — обязательный "
+      "зачёт выходного пособия, 3-й — только с решением службы занятости и обращением в две "
+      "недели. Необлагаемый предел три средних месячных заработка общий на все месяцы.",
+      {"type": "object", "properties": {
+          "month": {"type": "integer", "enum": [2, 3]},
+          "base_12m": {"type": "number", "description": "выплаты за 12 месяцев, ₽"},
+          "worked_days_12m": {"type": "number"},
+          "severance_paid": {"type": "number", "default": 0,
+                             "description": "выходное пособие к зачёту, ₽"},
+          "employment_service_decision": {"type": "boolean", "default": False},
+          "applied_within_2_weeks": {"type": "boolean", "default": False},
+          "tax_free_used": {"type": "number", "default": 0},
+          "employee": {"type": "object"}},
+       "required": ["month", "base_12m", "worked_days_12m"]})
+def t_retention_pay(args, ctx):
+    from .. import orders as orders_mod
+    from .. import payroll as wage
+    order = {"number": args.get("number") or "MCP", "kind": "retention",
+             "month": args["month"], "base_12m": args["base_12m"],
+             "worked_days_12m": args["worked_days_12m"],
+             "severance_paid": args.get("severance_paid") or 0,
+             "employment_service_decision": bool(args.get("employment_service_decision")),
+             "applied_within_2_weeks": bool(args.get("applied_within_2_weeks")),
+             "tax_free_used": args.get("tax_free_used") or 0}
+    row = orders_mod.retention(order, args.get("employee") or {}, wage.load_rules(),
+                               period=args.get("period") or "2026-12")
+    return {"ok": not row["errors"], "kind": "retention", "row": row,
+            "note": "без решения службы занятости третий месяц не считается (RETENTION_NO_DECISION)"}
+
+
+@tool("hourly_payroll",
+      "Суммированный учёт рабочего времени: часовая ставка = оклад / норма часов месяца, "
+      "сверхурочные (первые 2 часа — 1,5, дальше — 2), ночные 20 %, праздничные в двойном "
+      "размере без третьей оплаты того же часа. Табель проверяется: часы, двойной счёт, "
+      "сверхурочные от нормы, предел 120 ч в год.",
+      {"type": "object", "properties": {
+          "timesheet": {"type": "object",
+                        "description": "табель: {period, regime: «суммированный», norm: {days, hours}, "
+                                       "rows: [{tab, worked_hours, night_hours, holiday_hours}]}"},
+          "timesheet_path": {"type": "string"},
+          "staff": {"type": "object", "description": "{employees: [...]}; нет — демо-картотека"},
+          "staff_path": {"type": "string"}},
+       "required": []})
+def t_hourly_payroll(args, ctx):
+    from .. import payroll as wage
+    base = Path(args.get("base_dir") or ctx.get("base_dir") or ".")
+    sheet = args.get("timesheet") or {}
+    if not sheet and args.get("timesheet_path"):
+        sheet = json.loads(Path(args["timesheet_path"]).read_text(encoding="utf-8"))
+    if not sheet:
+        return {"ok": False, "error": "нужен табель: timesheet или timesheet_path"}
+    staff = args.get("staff") or {}
+    if not staff and args.get("staff_path"):
+        staff = json.loads(Path(args["staff_path"]).read_text(encoding="utf-8"))
+    if not staff:
+        demo = base / "data" / "demo" / "payroll" / "staff.json"
+        staff = json.loads(demo.read_text(encoding="utf-8")) if demo.exists() else {"employees": []}
+    report = wage.accrue(wage.new_state(), sheet, staff, wage.load_rules())
+    return {"ok": not report["errors"], "period": report.get("period"),
+            "rows": report["rows"], "totals": report["totals"],
+            "errors": report["errors"], "gaps": report.get("gaps"),
+            "note": "способ расчёта часовой ставки закон не задаёт — в строке hourly_verify"}
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="pto_agent.cad.mcp_server",
                                  description="MCP-сервер CAD-модуля ИИ-агента ПТО")

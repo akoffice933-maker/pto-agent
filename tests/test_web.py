@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from pto_agent import ledger, stock, treasury
+from pto_agent import ledger, payroll, stock, treasury
 from pto_agent.web import build_demo, create_app
 
 REPO = Path(__file__).resolve().parents[1]
@@ -623,3 +623,43 @@ def test_week_calendar_is_the_same_money_as_the_api(client, root):
     report = treasury.weeks(state(root, "treasury"), "2026-10")
     assert treasury.rub(report["closing_confirmed"]) in text
     assert treasury.rub(report["closing"]) in text
+
+
+def test_hourly_timesheet_is_shown_in_hours_not_days(tmp_path, demo_root):
+    """Суммированный учёт на экране: часы, сверхурочные, ночные и праздничные видны.
+
+    Без этого экран показывал бы «дни» для режима, где дней в табеле нет, — и ведомость
+    выглядела бы без переработки, хотя она посчитана.
+    """
+    target = tmp_path / "out"
+    shutil.copytree(demo_root, target)
+    hours_demo = tmp_path / "demo-hours"
+    shutil.copytree(REPO / "data" / "demo", hours_demo, dirs_exist_ok=True)
+    shutil.copy(REPO / "data" / "demo" / "payroll" / "timesheet_hours_2026_11.json",
+                hours_demo / "payroll" / "timesheet_2026_11.json")
+    state_path = target / "payroll" / "state.json"
+    assert state_path.exists(), "демо-состояние зарплаты не собрано"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    rules = payroll.load_rules()
+    staff = json.loads((hours_demo / "payroll" / "staff.json").read_text(encoding="utf-8"))
+    hours_sheet = json.loads((hours_demo / "payroll" / "timesheet_2026_11.json")
+                             .read_text(encoding="utf-8"))
+    # демо уже начислило ноябрь по дням; повтор не создаёт начислений — снимаем старый месяц
+    state["periods"] = [item for item in state["periods"] if item["period"] != "2026-11"]
+    lifecycle = json.loads((hours_demo / "payroll" / "orders_lifecycle_2026.json")
+                           .read_text(encoding="utf-8"))["orders"]
+    report = payroll.accrue(state, hours_sheet, staff, rules, period="2026-11",
+                            orders=lifecycle)
+    assert not report["errors"], report["errors"]
+    payroll.remember(state, report, rules=rules)
+    payroll.save_state(state, state_path)
+    row = next(item for item in state["periods"] if item["period"] == "2026-11")
+    assert any(line.get("hourly_rate") for line in row["rows"]), "в ведомости нет часового расчёта"
+    client = TestClient(create_app(root=target, demo_dir=hours_demo))
+    login(client, "buh")
+    text = client.get("/payroll?period=2026-11").text
+    assert "168.0 / 160.0 ч." in text          # часы вместо дней
+    assert "сверхурочные" in text and "ночные" in text and "праздничные" in text
+    assert "часовая ставка — на проверку" in text
+    assert "из них ночных" in text              # табель в часах
+    assert "уход до 1,5 лет" in text            # СФР справочно

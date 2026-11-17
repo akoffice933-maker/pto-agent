@@ -326,6 +326,88 @@ dis_line = next(row for row in nov["orders"]["lines"] if row["kind"] == "dismiss
 check(dis_line["months"] == 21 and dis_line["days"] == 35.0,
       f"стаж {dis_line['months']} мес. / дни {dis_line['days']}, ожидали 21 мес. и 35 дн.")
 
+# ── круг 42: пособие до 1,5 лет, средний заработок на период трудоустройства ──
+from pto_agent import orders as orders_mod                                       # noqa: E402
+
+lifecycle = orders_mod.load_orders(ROOT / "data" / "demo" / "payroll"
+                                  / "orders_lifecycle_2026.json")
+staff_payload = json.loads(STAFF.read_text(encoding="utf-8"))
+care_report = orders_mod.report(lifecycle, staff_payload, rules, period="2026-11")
+check(not care_report["errors"], f"приказы по уходу: {care_report['errors']}")
+care = next(row for row in care_report["lines"] if row["kind"] == "childcare")
+check(abs(care["monthly_raw"] - 1980000 / 730 * 30.4 * 0.4) < 0.05,
+      f"месячное пособие {care['monthly_raw']} ≠ 40 % × СДЗ × 30,4")
+check(care["monthly"] == 32981.93, f"месячное пособие с пределами {care['monthly']}")
+check(care["fund_amount"] == 28584.34,
+      f"пособие за неполный месяц {care['fund_amount']}: 26 из 30 к.д.")
+check(care["amount"] == 0 and care["taxable"] == 0 and care["contrib_base"] == 0,
+      "пособие по уходу попало в расходы организации или в базу по взносам: платит СФР")
+check(care_report["totals"]["childcare_fund"] == 28584.34,
+      "пособие по уходу не вынесено в итоги отдельной строкой СФР")
+high = orders_mod.childcare({"number": "проба", "kind": "childcare", "earnings_2y": 5600000,
+                             "days_in_month": 30, "days_of_leave": 30},
+                            staff_payload["employees"][1], rules, period="2026-11")
+check(high["monthly"] == 83021.18 and high["capped_by_max"],
+      f"потолок пособия {high['monthly']}: ожидали 83 021,18 (предельный СДЗ × 30,4 × 40 %)")
+low = orders_mod.childcare({"number": "проба", "kind": "childcare", "earnings_2y": 600000,
+                            "days_in_month": 30, "days_of_leave": 30},
+                           staff_payload["employees"][1], rules, period="2026-11")
+check(low["monthly"] == 10837.2 and low["raised_to_min"],
+      f"минимум пособия {low['monthly']}: ожидали 10 837,20 (40 % МРОТ)")
+
+dec_report = orders_mod.report(lifecycle, staff_payload, rules, period="2026-12")
+second = next(row for row in dec_report["lines"] if row["kind"] == "retention")
+check(second["month"] == 2 and second["offset"] == 104975 and second["amount"] == 0,
+      f"второй месяц не зачёл выходное пособие: {second['offset']} / {second['amount']}")
+jan_report = orders_mod.report(lifecycle, staff_payload, rules, period="2027-01")
+third = next(row for row in jan_report["lines"] if row["kind"] == "retention")
+check(third["month"] == 3 and third["amount"] == 104975, "третий месяц не посчитан")
+check(third["tax_free_remaining"] == 209950 and third["taxable"] == 0,
+      f"необлагаемый лимит по третьему месяцу {third['tax_free_remaining']}")
+check(jan_report["totals"]["taxable"] == 0,
+      "средний заработок на период трудоустройства обложен НДФЛ в пределах трёхкратного")
+no_decision = orders_mod.retention({"number": "проба", "kind": "retention", "month": 3,
+                                    "base_12m": 1020000, "worked_days_12m": 200,
+                                    "applied_within_2_weeks": True},
+                                   staff_payload["employees"][2], rules, period="2027-01")
+check("RETENTION_NO_DECISION" in [item["code"] for item in no_decision["errors"]]
+      and no_decision["amount"] == 0,
+      "третий месяц выплачен без решения службы занятости")
+
+# ── круг 42: суммированный учёт рабочего времени ──
+hour_state = payroll.new_state(object_name="ЖК «Северный», корпус 2")
+hours_sheet = json.loads((ROOT / "data" / "demo" / "payroll"
+                          / "timesheet_hours_2026_11.json").read_text(encoding="utf-8"))
+hours_report = payroll.accrue(hour_state, hours_sheet, staff_payload, rules)
+check(not hours_report["errors"], f"часовой табель: {hours_report['errors']}")
+hour_rows = {row["tab"]: row for row in hours_report["rows"]}
+check(hour_rows["001"]["accrued"] == 145000.0,
+      f"полная норма часов дала {hour_rows['001']['accrued']} вместо оклада 145 000")
+check(abs(hour_rows["002"]["overtime_pay"] - 5250) < 0.01,
+      f"сверхурочные {hour_rows['002']['overtime_pay']}: 2 ч. × 1,5 + 6 ч. × 2 = 5 250")
+check(abs(hour_rows["002"]["night_pay"] - 3600) < 0.01,
+      f"ночные {hour_rows['002']['night_pay']}: 24 × 750 × 20 % = 3 600")
+check(abs(hour_rows["004"]["holiday_pay"] - 4400) < 0.01,
+      f"праздничные {hour_rows['004']['holiday_pay']}: 8 × 550 = 4 400 (доплата до двойного)")
+check(hour_rows["004"]["accrued"] == 112970.0,
+      f"комбинированный случай {hour_rows['004']['accrued']}, ожидали 112 970")
+check(hour_rows["004"]["hourly_verify"] is True,
+      "часовая ставка помечена как норма, хотя закон способа расчёта не задаёт")
+bad_day_sheet = {"period": "2026-11", "regime": "суммированный",
+                 "norm": {"days": 20, "hours": 160},
+                 "rows": [{"tab": "001", "worked_days": 20}]}
+check("BAD_HOURS" in [item["code"] for item in
+                      payroll.accrue(payroll.new_state(), bad_day_sheet, staff_payload,
+                                     rules)["errors"]],
+      "суммированный учёт принял табель по дням")
+over_sheet = {"period": "2026-11", "regime": "суммированный",
+              "norm": {"days": 20, "hours": 160},
+              "rows": [{"tab": "001", "worked_hours": 400}]}
+check("OVERTIME_OVER_LIMIT" in [item["code"] for item in
+                                payroll.accrue(payroll.new_state(), over_sheet, staff_payload,
+                                               rules)["errors"]],
+      "сверхурочные сверх 120 часов в год приняты молча")
+
 fund = payroll.fund_report(state, rules=rules)
 print(f"зарплата: месяцев {stats['months']} · строк {stats['rows']} · проводок "
       f"{stats['entries']} · проверок {stats['checks']}")

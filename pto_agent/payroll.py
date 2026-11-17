@@ -280,6 +280,12 @@ def check_timesheet(timesheet: dict, staff: dict, rules: dict) -> tuple[dict, li
                        "why": f"в табеле норма {norm_claim.get('days')} дн., по календарю "
                               f"{norm['days']} дн. — расхождение меняет оклад пропорционально"})
     employees = {str(row["tab"]): row for row in staff.get("employees") or []}
+    # режим задаётся в табеле: суммированный учёт считается часами, обычный — днями
+    hourly = str(timesheet.get("regime") or "").strip().lower() in ("суммированный", "hourly")
+    if hourly and not (timesheet.get("norm") or {}).get("hours"):
+        errors.append({"code": "NO_HOURS_NORM", "what": period,
+                       "why": "суммированный учёт без нормы часов месяца: сверхурочные считать "
+                              "не от чего"})
     seen: set[str] = set()
     for row in timesheet.get("rows") or []:
         tab = str(row.get("tab") or "")
@@ -291,6 +297,44 @@ def check_timesheet(timesheet: dict, staff: dict, rules: dict) -> tuple[dict, li
             errors.append({"code": "DUPLICATE_ROW", "what": tab, "why": "сотрудник в табеле дважды"})
             continue
         seen.add(tab)
+        if hourly:
+            hours = dec(row.get("worked_hours"))
+            if hours is None:
+                errors.append({"code": "BAD_HOURS", "what": tab,
+                               "why": f"суммированный учёт, а часов нет: {row.get('worked_hours')!r} — "
+                                      f"табель по дням здесь не годится"})
+                continue
+            if hours < 0:
+                errors.append({"code": "NEGATIVE_HOURS", "what": tab, "why": "отрицательные часы"})
+                continue
+            night = dec(row.get("night_hours") or 0) or Decimal("0")
+            holiday = dec(row.get("holiday_hours") or 0) or Decimal("0")
+            if night < 0 or holiday < 0:
+                errors.append({"code": "NEGATIVE_HOURS", "what": tab,
+                               "why": "отрицательные ночные или праздничные часы"})
+            if night + holiday > hours:
+                errors.append({"code": "HOURS_OVERLAP", "what": tab,
+                               "why": f"ночные {night} + праздничные {holiday} больше "
+                                      f"отработанных {hours}: часы посчитаны дважды"})
+                continue
+            overtime = hours - Decimal(norm["hours"])
+            declared = row.get("overtime_hours")
+            if declared not in (None, ""):
+                if dec(declared) != overtime:
+                    errors.append({"code": "OVERTIME_MISMATCH", "what": tab,
+                                   "why": f"в табеле сверхурочных {declared} ч., а по норме "
+                                          f"{norm['hours']} ч. их {overtime}: переработка не "
+                                          f"списывается со слов — она считается от нормы"})
+                    continue
+            if overtime > 0:
+                limit = int(((rules.get("hourly") or {}).get("overtime") or {})
+                            .get("limit_per_year") or 120)
+                if overtime > limit:
+                    errors.append({"code": "OVERTIME_OVER_LIMIT", "what": tab,
+                                   "why": f"сверхурочных {overtime} ч. при пределе {limit} ч. "
+                                          f"в год (ч. 6 ст. 99 ТК РФ)"})
+                    continue
+            continue
         worked = dec(row.get("worked_days"))
         if worked is None:
             errors.append({"code": "BAD_DAYS", "what": tab,
@@ -308,6 +352,61 @@ def check_timesheet(timesheet: dict, staff: dict, rules: dict) -> tuple[dict, li
                          "why": "сотрудник работает, а строки в табеле нет",
                          "ask": f"отметить отработанные дни или причину отсутствия ({tab})"})
     return norm, errors, gaps
+
+
+def hourly_pay(row: dict, employee: dict, rules: dict, *, salary: Decimal,
+               coefficient: Decimal, norm: dict, coefficient_used: bool = True) -> tuple:
+    """Суммированный учёт: часы × часовая ставка + сверхурочные + ночные + праздничные.
+
+    Часовая ставка = оклад / норма часов месяца. Закон способ расчёта часовой ставки из оклада
+    не устанавливает (это решение организации), поэтому ставка и все доплаты, которые от неё
+    зависят, помечаются «на проверку» — но не выдумываются: база — оклад из карточки и норма
+    часов из производственного календаря.
+
+    Сверхурочные при суммированном учёте: часы сверх нормы учётного периода оплачиваются
+    в полуторном размере, остальное — в двойном (ст. 99, 152 ТК РФ). Порядок с 01.09.2024
+    изменён, поэтому цифра помечена «на проверку» в правилах.
+
+    Праздничные: работа в праздник оплачивается не менее чем в двойном размере (ст. 153 ТК РФ).
+    Часы праздника входят в отработанные, поэтому доплата — одинарная ставка сверх обычной
+    оплаты: иначе один час был бы оплачен трижды.
+
+    Ночные: не менее 20 % часовой ставки за каждый час (ст. 154 ТК РФ, ПП РФ № 554).
+    """
+    rules_h = (rules.get("hourly") or {})
+    overtime_rates = rules_h.get("overtime") or {}
+    first_rate = Decimal(str(overtime_rates.get("first_two") or "1.5"))
+    rest_rate = Decimal(str(overtime_rates.get("rest") or "2"))
+    night_percent = Decimal(str((rules_h.get("night") or {}).get("percent") or 20))
+    holiday_mult = Decimal(str((rules_h.get("holiday") or {}).get("multiplier") or 2))
+
+    hours = dec(row.get("worked_hours")) or Decimal("0")
+    night = dec(row.get("night_hours") or 0) or Decimal("0")
+    holiday = dec(row.get("holiday_hours") or 0) or Decimal("0")
+    norm_hours = Decimal(str(norm.get("hours") or 0))
+    rate = (salary / norm_hours).quantize(EPS, rounding=ROUND_HALF_UP) if norm_hours else Decimal("0")
+    rate = kopeck(rate * coefficient)
+    base_pay = kopeck(rate * hours)
+    overtime = hours - norm_hours if hours > norm_hours else Decimal("0")
+    first = min(overtime, Decimal("2"))
+    rest = overtime - first
+    overtime_pay = kopeck(rate * (first * (first_rate - 1) + rest * (rest_rate - 1)))
+    night_pay = kopeck(rate * night * night_percent / Decimal("100"))
+    holiday_pay = kopeck(rate * holiday * (holiday_mult - 1))
+    total = kopeck(base_pay + overtime_pay + night_pay + holiday_pay)
+    return total, {
+        "worked_hours": num(hours), "norm_hours": num(norm_hours),
+        "hourly_rate": num(rate), "hours_base_pay": num(base_pay),
+        "overtime_hours": num(overtime), "overtime_pay": num(overtime_pay),
+        "night_hours": num(night), "night_pay": num(night_pay),
+        "holiday_hours": num(holiday), "holiday_pay": num(holiday_pay),
+        "hourly_verify": bool((rules_h.get("hourly_rate_verify")) or
+                              ((rules_h.get("overtime") or {}).get("verify"))),
+        "hourly_basis": (f"{num(hours)} ч. × {num(rate)} ₽/ч"
+                         + (f" + сверхурочные {num(overtime)} ч." if overtime else "")
+                         + (f" + ночные {num(night)} ч." if night else "")
+                         + (f" + праздничные {num(holiday)} ч." if holiday else "")),
+    }
 
 
 # ─────────────────────────── начисление ───────────────────────────
@@ -359,8 +458,18 @@ def accrue(state: dict, timesheet: dict, staff: dict, rules: dict,
         worked = dec(row.get("worked_days")) or Decimal("0")
         salary = money_dec(employee.get("salary"))
         coefficient = money_dec(employee.get("coefficient") or 1)
-        base_pay = (salary / Decimal(norm["days"]) * worked).quantize(EPS, rounding=ROUND_HALF_UP)
-        salary_part = kopeck(base_pay * coefficient)
+        hourly_mode = str(timesheet.get("regime") or "").strip().lower() in ("суммированный",
+                                                                            "hourly")
+        if hourly_mode:
+            salary_part, hours_info = hourly_pay(
+                row, employee, rules, salary=salary, coefficient=coefficient, norm=norm,
+                coefficient_used=True)
+            worked = hours_info["worked_hours"]
+        else:
+            hours_info = None
+            base_pay = (salary / Decimal(norm["days"]) * worked).quantize(EPS,
+                                                                         rounding=ROUND_HALF_UP)
+            salary_part = kopeck(base_pay * coefficient)
         extra = (extras or {}).get("by_tab", {}).get(str(row["tab"]), {})
         if extras and (extra.get("sick_employer") or 0) and worked >= Decimal(norm["days"]):
             result["warnings"].append(
@@ -402,6 +511,7 @@ def accrue(state: dict, timesheet: dict, staff: dict, rules: dict,
             "position": employee.get("position"), "object": employee.get("object"),
             "salary": num(salary), "coefficient": num(coefficient),
             "worked_days": num(worked), "norm_days": norm["days"],
+            **(hours_info or {}),
             "accrued": num(pay), "salary_part": num(salary_part),
             "extra": num(extra_taxable), "extra_gross": num(extra_gross),
             "tax_free": num(kopeck(extra_gross - extra_taxable)),
@@ -411,6 +521,8 @@ def accrue(state: dict, timesheet: dict, staff: dict, rules: dict,
             "dismissal": num(extra.get("dismissal") or 0),
             "severance": num(extra.get("severance") or 0),
             "maternity_fund": num(extra.get("maternity_fund") or 0),
+            "childcare_fund": num(extra.get("childcare_fund") or 0),
+            "retention": num(extra.get("retention") or 0),
             "deduction": ndfl["deduction"], "deduction_why": ndfl.get("deduction_why") or "",
             "ndfl_base": ndfl["base_ytd"], "ndfl": num(tax_month),
             "ndfl_ytd": num(ndfl["tax_ytd"]), "ndfl_steps": ndfl["steps"],
@@ -434,13 +546,15 @@ def accrue(state: dict, timesheet: dict, staff: dict, rules: dict,
     totals["cost"] = num(money_dec(totals["accrued"]) + money_dec(totals["contrib"])
                          + money_dec(totals["injury"]))
     for key in ("sick_employer", "sick_fund", "vacation", "bonus", "dismissal",
-                "severance", "maternity_fund", "tax_free"):
+                "severance", "maternity_fund", "childcare_fund", "retention", "tax_free"):
         totals[key] = num(sum((money_dec(row.get(key)) for row in rows), Decimal("0")))
     result["rows"] = rows
     result["totals"] = totals
     result["not_included"].extend([
-        {"what": "надбавки за вредность, ночные и сверхурочные",
-         "why": "нужен приказ и тариф: в контуре только оклад, больничный, отпуск и премия"},
+        {"what": "надбавки за вредность и районный коэффициент",
+         "why": "нужны тариф и карточка рабочего места: в контуре нет полей вредности и "
+                "районного регулирования. Ночные, сверхурочные и праздничные считаются — "
+                "при суммированном учёте, от часовой ставки"},
         {"what": "пособия, которые платит СФР напрямую",
          "why": "с 4-го дня болезни и весь уход за членом семьи фонд платит работнику сам: "
                 "это не наш расход и не наша база по взносам"},

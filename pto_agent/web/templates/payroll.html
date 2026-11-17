@@ -79,11 +79,21 @@
         <td>{{ row.name }}<div class="muted small">{{ row.position }}</div></td>
         <td class="muted small">{{ row.object }}</td>
         <td class="num">{{ row.salary|rub }}</td>
-        <td class="num">{{ row.worked_days }} / {{ row.norm_days }}</td>
+        <td class="num">{% if row.hourly_rate %}{{ row.worked_hours }} / {{ row.norm_hours }} ч.
+          {% else %}{{ row.worked_days }} / {{ row.norm_days }}{% endif %}</td>
         <td class="num">{{ row.accrued|rub }}
-          {% if row.tax_free %}<div class="muted small">в т.ч. не облагается {{ row.tax_free|rub }}</div>{% endif %}</td>
-        <td class="num">{{ ((row.sick_fund or 0) + (row.maternity_fund or 0))|rub }}
-          {% if row.maternity_fund %}<div class="muted small">декрет</div>
+          {% if row.tax_free %}<div class="muted small">в т.ч. не облагается {{ row.tax_free|rub }}</div>{% endif %}
+          {% if row.hourly_rate %}
+          <div class="muted small">{{ row.hourly_basis }}</div>
+          {% if row.overtime_pay %}<div class="muted small">сверхурочные {{ row.overtime_pay|rub }}</div>{% endif %}
+          {% if row.night_pay %}<div class="muted small">ночные {{ row.night_pay|rub }}</div>{% endif %}
+          {% if row.holiday_pay %}<div class="muted small">праздничные {{ row.holiday_pay|rub }}</div>{% endif %}
+          {% if row.hourly_verify %}<div class="muted small">часовая ставка — на проверку</div>{% endif %}
+          {% endif %}</td>
+        <td class="num">{{ ((row.sick_fund or 0) + (row.maternity_fund or 0)
+                            + (row.childcare_fund or 0))|rub }}
+          {% if row.childcare_fund %}<div class="muted small">уход до 1,5 лет</div>
+          {% elif row.maternity_fund %}<div class="muted small">декрет</div>
           {% elif row.sick_fund %}<div class="muted small">больничный</div>{% endif %}</td>
         <td class="num">{{ row.deduction|rub }}{% if row.deduction_why %}<div class="muted small">{{ row.deduction_why }}</div>{% endif %}</td>
         <td class="num">{{ row.ndfl|rub }}<div class="muted small">{{ row.ndfl_steps|length }} ступ.</div></td>
@@ -97,7 +107,8 @@
       <tr>
         <th colspan="5">итого: {{ sheet.rows|length }} чел.</th>
         <th class="num">{{ sheet.totals.accrued|rub }}</th>
-        <th class="num">{{ ((sheet.totals.sick_fund or 0) + (sheet.totals.maternity_fund or 0))|rub }}</th>
+        <th class="num">{{ ((sheet.totals.sick_fund or 0) + (sheet.totals.maternity_fund or 0)
+                            + (sheet.totals.childcare_fund or 0))|rub }}</th>
         <th class="num">{{ sheet.totals.deductions|rub }}</th>
         <th class="num">{{ sheet.totals.ndfl|rub }}</th>
         <th class="num">{{ sheet.totals.contrib|rub }}</th>
@@ -106,12 +117,17 @@
       </tr>
     </tfoot>
   </table>
-  <p class="muted small">Оклад делится на норму дней месяца: {{ sheet.norm.days }} дн. /
-    {{ sheet.norm.hours }} ч. Недоделанные дни уменьшают начисление, переработка не
-    оплачивается молча — она попадает в замечания.</p>
+  <p class="muted small">Обычный режим: оклад делится на норму дней месяца
+    ({{ sheet.norm.days }} дн. / {{ sheet.norm.hours }} ч.), недоделанные дни уменьшают
+    начисление. Суммированный учёт: оклад / норма часов = часовая ставка, дальше часы,
+    сверхурочные (первые 2 часа — в полуторном, остальные — в двойном), ночные 20 % и
+    праздничные в двойном размере. Способ расчёта часовой ставки закон не устанавливает —
+    выбран оклад / норма месяца, на экране стоит «на проверку»; сверхурочные сверх 120 часов
+    в год не принимаются молча.</p>
   <p class="muted small">«СФР, справочно» — деньги фонда, а не расход организации: декретные
-    (140 / 156 / 194 дня, 100 % среднего заработка, НДФЛ и взносов нет) и часть больничного
-    с 4-го дня. Выходное пособие попадает в «начислено» только в облагаемой части: до трёх
+    (140 / 156 / 194 дня, 100 % среднего заработка, НДФЛ и взносов нет), пособие по уходу за
+    ребёнком до 1,5 лет (40 % среднего заработка в пределах 10 837,20 … 83 021,18 ₽,
+    НДФЛ и взносов нет) и часть больничного с 4-го дня. Выходное пособие попадает в «начислено» только в облагаемой части: до трёх
     средних месячных заработков НДФЛ и взносов нет (п. 1 ст. 217, п. 1 ст. 422 НК РФ).</p>
 </section>
 {% endif %}
@@ -195,6 +211,19 @@
   </div>
   {% endif %}
   <table class="table compact">
+    {% if timesheet.regime in ('суммированный', 'hourly') %}
+    <thead><tr><th>таб.</th><th>сотрудник</th><th class="num">часов</th>
+      <th class="num">из них ночных</th><th class="num">из них праздничных</th></tr></thead>
+    <tbody>
+      {% for row in timesheet.rows %}
+      <tr><td>{{ row.tab }}</td>
+          <td>{{ (staff.employees|selectattr('tab','equalto',row.tab)|list|first or {}).get('name','—') }}</td>
+          <td class="num">{{ row.worked_hours }}</td>
+          <td class="num">{{ row.night_hours or 0 }}</td>
+          <td class="num">{{ row.holiday_hours or 0 }}</td></tr>
+      {% endfor %}
+    </tbody>
+    {% else %}
     <thead><tr><th>таб.</th><th>сотрудник</th><th class="num">отработано дней</th></tr></thead>
     <tbody>
       {% for row in timesheet.rows %}
@@ -202,6 +231,8 @@
           <td>{{ (staff.employees|selectattr('tab','equalto',row.tab)|list|first or {}).get('name','—') }}</td>
           <td class="num">{{ row.worked_days }}</td></tr>
       {% endfor %}
+    </tbody>
+    {% endif %}
     </tbody>
   </table>
 </section>
@@ -247,6 +278,10 @@
       (<code>payroll accrue --orders</code>), потому что для больничного нужна справка о заработке
       за два года, для отпускных — заработок за 12 месяцев, а премия — сумма из приказа.
       Без документа эти суммы не рисуются «примерно».</li>
+    <li><b>пособие по уходу до 1,5 лет и средний заработок на период трудоустройства</b>
+      в этом экране не показываются: они считаются по приказам в CLI
+      (<code>python3 -m pto_agent payroll orders</code>) и в ведомость не попадают как расход
+      организации — платит СФР либо это необлагаемая выплата.</li>
     {% for text in not_included %}<li>{{ text }}</li>{% endfor %}
   </ul>
   <p class="muted small">Спорное не досчитывается «примерно»: оно либо помечено «на проверку»
