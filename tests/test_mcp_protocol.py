@@ -53,7 +53,7 @@ def test_stdio_handshake_and_tools():
     assert init["protocolVersion"] == PROTOCOL_VERSION
     assert init["serverInfo"]["name"] == "pto-cad-agent"
     assert init["capabilities"]["tools"]["listChanged"] is False
-    assert len(out[1]["result"]["tools"]) == 36
+    assert len(out[1]["result"]["tools"]) == 39
     assert out[2]["result"] == {}
     # stdout — только JSON-RPC, никаких print
     for line in proc.stdout.splitlines():
@@ -113,7 +113,7 @@ def test_resources_and_prompts_lists_are_empty_not_missing():
 # ── схемы инструментов ──────────────────────────────────────────────────
 def test_tool_schemas_are_valid():
     public = _tools_public()
-    assert len(public) == len(TOOLS) == 36
+    assert len(public) == len(TOOLS) == 39
     for tool in public:
         assert tool["name"] and tool["description"]
         schema = tool["inputSchema"]
@@ -206,11 +206,11 @@ def test_http_refuses_network_bind_without_token():
 def test_http_health_and_tools(http_server):
     with urllib.request.urlopen(f"{http_server}/health", timeout=10) as resp:
         health = json.loads(resp.read())
-    assert health == {"status": "ok", "tools": 36}
+    assert health == {"status": "ok", "tools": 39}
 
     with urllib.request.urlopen(f"{http_server}/tools", timeout=10) as resp:
         tools = json.loads(resp.read())["tools"]
-    assert len(tools) == 36
+    assert len(tools) == 39
 
 
 def test_http_rpc(http_server):
@@ -297,3 +297,40 @@ def test_ci_tool_counter_matches_server():
     counters = {int(m) for m in re.findall(r"n\s*==\s*(\d+)", ci.read_text(encoding="utf-8"))}
     assert counters == {len(TOOLS)}, (
         f"в ci.yml {sorted(counters)}, а сервер отдаёт {len(TOOLS)} инструментов")
+
+
+def test_payroll_tools_are_honest_about_limits():
+    """Круг 42: пособия и суммированный учёт доступны агенту — с границами, а не «на веру»."""
+    from pto_agent.cad.mcp_server import handle_rpc, make_ctx
+
+    ctx = make_ctx(ROOT, "out/cad/audit.jsonl")
+
+    def call(name, arguments):
+        out = handle_rpc({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                          "params": {"name": name, "arguments": arguments}}, ctx)
+        return json.loads(out["result"]["content"][0]["text"])
+
+    care = call("childcare_benefit", {"earnings_2y": 1980000, "days_of_leave": 26,
+                                      "days_in_month": 30})
+    assert care["ok"] and care["row"]["monthly"] == 32981.93
+    assert care["row"]["fund_amount"] == 28584.34          # 26 из 30 к.д.
+    assert care["row"]["amount"] == 0 and care["row"]["taxable"] == 0
+    high = call("childcare_benefit", {"earnings_2y": 5600000})
+    assert high["row"]["monthly"] == 83021.18 and high["row"]["capped_by_max"]
+
+    second = call("retention_pay", {"month": 2, "base_12m": 1020000,
+                                    "worked_days_12m": 200, "severance_paid": 104975})
+    assert second["row"]["monthly"] == 104975 and second["row"]["amount"] == 0
+    third = call("retention_pay", {"month": 3, "base_12m": 1020000, "worked_days_12m": 200})
+    assert not third["ok"] and third["row"]["amount"] == 0
+    assert "RETENTION_NO_DECISION" in [item["code"] for item in third["row"]["errors"]]
+
+    hours = call("hourly_payroll", {
+        "timesheet": {"period": "2026-11", "regime": "суммированный",
+                      "norm": {"days": 20, "hours": 160},
+                      "rows": [{"tab": "002", "worked_hours": 168, "night_hours": 24}]}})
+    assert hours["ok"]
+    row = hours["rows"][0]
+    assert row["hourly_rate"] == 750.0 and row["overtime_pay"] == 5250.0
+    assert row["night_pay"] == 3600.0 and row["accrued"] == 134850.0
+    assert row["hourly_verify"] is True

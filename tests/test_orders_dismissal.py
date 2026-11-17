@@ -151,6 +151,17 @@ def test_demo_order_is_calculated():
 
 
 def test_not_included_no_longer_claims_compensation_is_missing():
-    texts = " ".join(item["what"] for item in orders.NOT_INCLUDED)
-    assert "компенсация за неиспользованный отпуск" not in texts.lower()
-    assert "декретные" in texts.lower()
+    """«Не включено» не должно перечислять то, что уже считается.
+
+    Круг 37 держал здесь «декретные» как незакрытый пункт. В круге 42 добавлено пособие
+    по уходу до 1,5 лет, поэтому список переписан: проверяем обратное — что реализованное
+    больше не выдаётся за отсутствующее (иначе экран врёт про собственные возможности).
+    """
+    texts = " ".join(item["what"] for item in orders.NOT_INCLUDED).lower()
+    assert "компенсация за неиспользованный отпуск" not in texts
+    assert "декретные" not in texts
+    assert "уход" not in texts or "единое пособие" in texts
+    # а то, что действительно не сделано, остаётся в списке с причиной
+    assert "районный коэффициент" in texts
+    kinds = set(orders.KINDS)
+    assert {"childcare", "retention", "maternity", "severance"} <= kinds
