@@ -92,14 +92,15 @@ def test_reformation_moves_profit_to_retained_and_zeroes_99(year_state):
     report = year_close.close_year(state, "2026", decisions=decisions())
     assert report["closed"], report["problems"]
     assert balance(state, "99") == Decimal("0.00")
-    assert balance(state, "84") == Decimal("-15000000.00")   # кредитовое сальдо — прибыль
-    assert balance(state, "84.01") == Decimal("-15000000.00")
+    # на 84 уходит чистая прибыль: 15 000 000 до налога − 3 750 000 налога (круг 44)
+    assert balance(state, "84") == Decimal("-11250000.00")   # кредитовое сальдо — прибыль
+    assert balance(state, "84.01") == Decimal("-11250000.00")
     assert balance(state, "84.02") == Decimal("0.00")
     reform = [row for row in state["entries"] if row["event"] == "year.reformation"]
     assert len(reform) == 1
     lines = {(line["account"], line["side"]): line["amount"] for line in reform[0]["lines"]}
-    assert lines[("99", ledger.DEBIT)] == 15000000.0
-    assert lines[("84.01", ledger.CREDIT)] == 15000000.0
+    assert lines[("99", ledger.DEBIT)] == 11250000.0
+    assert lines[("84.01", ledger.CREDIT)] == 11250000.0
 
 
 def test_reformation_does_not_double_on_second_run(year_state):
@@ -108,7 +109,7 @@ def test_reformation_does_not_double_on_second_run(year_state):
     entries_before = len(state["entries"])
     second = year_close.close_year(state, "2026", decisions=decisions())
     assert len(state["entries"]) == entries_before, "повторный прогон создал проводки"
-    assert balance(state, "84") == Decimal("-15000000.00")
+    assert balance(state, "84") == Decimal("-11250000.00")
     reform_step = next(row for row in second["steps"] if row["id"] == "reformation")
     assert reform_step["status"] == year_close.NOT_NEEDED
 
@@ -248,11 +249,17 @@ def test_year_adjustments_reach_the_result_and_do_not_hang_on_26(year_state):
     year_close.close_year(without_rbp, "2026", decisions=no_future)
     assert balance(with_rbp, "26") == Decimal("0.00"), "26 остался с сальдо"
     assert balance(with_rbp, "20.01") == Decimal("0.00"), "20.01 остался с сальдо"
-    profit_with = Decimal(str(year_close._result_block(with_rbp, "2026",
+    before_with = Decimal(str(year_close._result_block(with_rbp, "2026",
+                                                       ledger.load_chart())["profit_before_tax"]))
+    before_without = Decimal(str(year_close._result_block(without_rbp, "2026",
+                                                          ledger.load_chart())["profit_before_tax"]))
+    assert before_without - before_with == Decimal("160000.00"), "РБП не дошло до прибыли до налога"
+    # а до чистой прибыли доходит 120 000: 160 000 расхода снимают 40 000 налога
+    net_with = Decimal(str(year_close._result_block(with_rbp, "2026",
+                                                    ledger.load_chart())["profit"]))
+    net_without = Decimal(str(year_close._result_block(without_rbp, "2026",
                                                        ledger.load_chart())["profit"]))
-    profit_without = Decimal(str(year_close._result_block(without_rbp, "2026",
-                                                          ledger.load_chart())["profit"]))
-    assert profit_without - profit_with == Decimal("160000.00")
+    assert net_without - net_with == Decimal("120000.00")
 
 
 def test_year_end_entries_are_late_entries_with_reason(year_state):
@@ -285,7 +292,7 @@ def test_screen_and_markdown_say_what_is_not_done(year_state):
     text = year_close.screen_text(report)
     assert "реформация" in text.lower()
     assert "не сделано" in text.lower()
-    assert "годовая бухгалтерская отчётность" in text
+    assert "налог на прибыль" in text.lower()
     markdown = year_close.to_markdown(report)
     assert "| Шаг | Статус |" in markdown
     assert "Реформация баланса" in markdown
@@ -299,4 +306,6 @@ def test_result_block_counts_revenue_vat_and_cost(year_state):
     assert result["revenue"] == pytest.approx(67_100_000.0)
     assert result["vat_out"] == pytest.approx(12_100_000.0)
     assert result["cost"] == pytest.approx(40_000_000.0)
-    assert result["profit"] == pytest.approx(15_000_000.0)
+    assert result["profit_before_tax"] == pytest.approx(15_000_000.0)
+    assert result["profit_tax"] == pytest.approx(3_750_000.0)
+    assert result["profit"] == pytest.approx(11_250_000.0)

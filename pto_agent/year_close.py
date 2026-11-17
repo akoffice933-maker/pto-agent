@@ -611,6 +611,110 @@ def step_reclose(state: dict, year: str, *, policy: dict, mode: str, chart: dict
 
 
 # ─────────────────────────── реформация 99 → 84 ───────────────────────────
+def step_profit_tax(state: dict, year: str, *, mode: str, chart: dict, rules: dict,
+                    decisions: dict | None = None, date: str | None = None) -> dict:
+    """Налог на прибыль по данным бухучёта: Дт 99 Кт 68.04 — до реформации.
+
+    Почему отдельным шагом и почему **до** реформации: если провести налог после, он ляжет
+    на 99 уже после того, как результат ушёл на 84, и сальдо 99 станет ненулевым. Тогда
+    «чистая прибыль» в отчёте (2400) и остаток на 84 разойдутся — то есть отчётность
+    перестанет сходиться с журналом.
+
+    База и ставки
+    -------------
+    * база — **прибыль от реализации** за год: обороты 90.01 − 90.03 (без НДС) − 90.02.
+      Внереализационные (91.01/91.02) не считаются: в контуре нет их разбивки по видам,
+      и это названо в `not_included` налогового расчёта, а не выдано за ноль;
+    * ставки — из `data/reference/tax_rates.json` (8 % федеральный + 17 % региональный);
+    * налог считается **за год целиком**, а не суммой месяцев: сумма помесячных расчётов
+      показывается рядом и расхождение объясняется, а не прячется.
+
+    Когда налог не начисляется
+    --------------------------
+    * убыток — начислять нечего (`NOT_NEEDED`, причина названа);
+    * месяц не закрыт (`PROFIT_NOT_CLOSED`) — сначала закрытие, потом налог: иначе прибыль
+      завышена и налог посчитан от неверной базы. Шаг не блокирует закрытие года, но и не
+      делает вид, что налог проведён: дальше по отчётности снова будет разрыв, названный цифрой.
+    """
+    from . import tax
+
+    year = str(year)
+    date = date or year_end(year)
+    report = tax.profit_return(state, year)
+    totals = report.get("totals") or {}
+    amount = ledger.kopeck(Decimal(str(totals.get("tax") or 0)))
+    monthly = Decimal("0")
+    for month in MONTHS:
+        monthly += ledger.kopeck(Decimal(str(
+            (tax.profit_return(state, f"{year}-{month}").get("totals") or {}).get("tax") or 0)))
+    base = Decimal(str(totals.get("profit") or 0))
+
+    detail = [{"база, прибыль от реализации": ledger.as_float(base),
+               "ставки": f"{(totals.get('federal_rate'))}% + {totals.get('regional_rate')}%",
+               "налог за год": ledger.as_float(amount),
+               "сумма помесячных расчётов": ledger.as_float(monthly),
+               "пояснение": ("налог считается за отчётный период целиком (ст. 286 НК РФ — "
+                             "нарастающим итогом); сумма помесячных авансов совпадает с годом "
+                             "не всегда, и подменять одно другим нельзя")}]
+
+    if base <= 0 or amount <= 0:
+        return _step("profit_tax", "Налог на прибыль: Дт 99 Кт 68.04", NOT_NEEDED,
+                     amount=Decimal("0"), detail=detail,
+                     why=(f"прибыли от реализации за {year} нет ({ledger._rub(base)}) — "
+                          f"начислять налог не с чего"))
+
+    # затраты на 20.01, не списанные в 90.02, — это незакрытый месяц: налог от завышенной
+    # прибыли считать нельзя. Проверяем остаток, а не только флаг налогового модуля:
+    # модуль ловит лишь случай «90.02 пуст целиком», а частично незакрытый месяц — нет.
+    open_costs = ledger.kopeck(_total(_balance(state, "20.01", date)))
+    detail.append({"остаток 20.01 на 31.12": ledger.as_float(open_costs)})
+    if abs(open_costs) > ledger.EPS:
+        return _step("profit_tax", "Налог на прибыль: Дт 99 Кт 68.04", NOT_DONE,
+                     amount=amount, detail=detail, blocking=False,
+                     why=(f"на 20.01 остаток {ledger._rub(open_costs)}: затраты не списаны в "
+                          f"90.02, месяц не закрыт — прибыль завышена на эту сумму, и налог "
+                          f"{ledger._rub(amount)} был бы больше настоящего. Сначала закрытие"),
+                     requests=[{"what": "закрыть месяцы года",
+                                "why": f"остаток 20.01 {ledger._rub(open_costs)}",
+                                "ask": "closing: месяц → закрытие → налог"}])
+
+    problems = [item for item in report.get("problems") or []]
+    if problems:
+        return _step("profit_tax", "Налог на прибыль: Дт 99 Кт 68.04", NOT_DONE,
+                     amount=amount, detail=detail, blocking=False,
+                     why="; ".join(str(item.get("why")) for item in problems),
+                     requests=[{"what": "закрыть месяцы года до расчёта налога",
+                                "why": str(problems[0].get("why")),
+                                "ask": "closing: месяц → закрытие → налог"}])
+
+    result = ledger.post_entry(
+        state, event="year.profit_tax", date=date,
+        doc={"number": f"налог на прибыль за {year}", "date": date, "kind": "closing"},
+        lines=[{"account": "99", "side": ledger.DEBIT, "amount": amount, "analytics": {}},
+               {"account": "68.04", "side": ledger.CREDIT, "amount": amount, "analytics": {}}],
+        memo=(f"налог на прибыль {year}: прибыль от реализации {ledger._rub(base)} × "
+              f"{totals.get('federal_rate')}% + {totals.get('regional_rate')}% = "
+              f"{ledger._rub(amount)}; Дт 99 Кт 68.04"),
+        rule="year.profit_tax", key=f"year.profit_tax|{year}", chart=chart, rules=rules,
+        mode=mode, allow_closed=True,
+        late_reason=(f"налог на прибыль — операция {year} года: проводится 31 декабря после "
+                     f"закрытия декабря, чтобы результат года ушёл на 84 уже за вычетом налога"))
+    if result["status"] == ledger.STATUS_DUPLICATE:
+        # проводка налога за этот год уже есть: дубль не создаётся, и это не «не выполнено»
+        return _step("profit_tax", "Налог на прибыль: Дт 99 Кт 68.04", DONE, amount=amount,
+                     entry=result.get("entry"), detail=detail,
+                     why=(f"проводка за {year} уже проведена (ключ year.profit_tax|{year}): "
+                          f"повтор не создан — иначе налог начислился бы дважды"))
+    status = DONE if result["status"] == ledger.STATUS_OK else (
+        PROPOSED if result["status"] == ledger.STATUS_PROPOSED else NOT_DONE)
+    return _step("profit_tax", "Налог на прибыль: Дт 99 Кт 68.04", status, amount=amount,
+                 entry=result.get("entry"), detail=detail,
+                 why="" if status in (DONE, PROPOSED) else
+                 ("; ".join(item["why"] for item in result.get("errors") or [])
+                  or "; ".join(str(item) for item in result.get("warnings") or [])
+                  or f"журнал не принял проводку: {result['status']}"))
+
+
 def step_reformation(state: dict, year: str, *, mode: str, chart: dict, rules: dict,
                      date: str | None = None) -> dict:
     """Дт 99 Кт 84.01 — прибыль, Дт 84.02 Кт 99 — убыток. Одна проводка на год."""
@@ -686,6 +790,7 @@ def close_year(state: dict, year: str, *, decisions: dict | None = None,
     """Закрыть год шаг за шагом. Каждый шаг отчитывается, а не молчит."""
     from . import closing
 
+    year = str(year).strip()          # 2026 и "2026" — один и тот же год
     chart = chart or ledger.load_chart()
     policy = policy or closing.load_policy()
     rules = rules or load_rules()
@@ -693,7 +798,7 @@ def close_year(state: dict, year: str, *, decisions: dict | None = None,
     result: dict = {"year": year, "closed": False, "mode": mode, "steps": [],
                     "problems": [], "warnings": [], "requests": [],
                     "not_done": [], "not_included": list(rules.get("not_implemented") or [])}
-    if len(str(year)) != 4 or not str(year).isdigit():
+    if len(year) != 4 or not year.isdigit():
         result["problems"].append({"code": "BAD_YEAR", "what": str(year),
                                    "why": "год задаётся как ГГГГ"})
         return result
@@ -722,6 +827,8 @@ def close_year(state: dict, year: str, *, decisions: dict | None = None,
         lambda st: step_future_costs(st, year, decisions=decisions, mode=mode, chart=chart,
                                      rules=rules),
         lambda st: step_reclose(st, year, policy=policy, mode=mode, chart=chart, rules=rules),
+        lambda st: step_profit_tax(st, year, mode=mode, chart=chart, rules=rules,
+                                   decisions=decisions),
         lambda st: step_reformation(st, year, mode=mode, chart=chart, rules=rules),
     ):
         step = run(work)
@@ -779,8 +886,17 @@ def _result_block(state: dict, year: str, chart: dict) -> dict:
                 continue
             amount = ledger.kopeck(line["amount"])
             profit += amount if line["side"] == ledger.CREDIT else -amount
+    profit_tax = Decimal("0")
+    for entry in state.get("entries") or []:
+        if str(entry.get("period") or "")[:4] != year or entry.get("event") != "year.profit_tax":
+            continue
+        for line in entry.get("lines") or []:
+            if line["account"] == "99" and line["side"] == ledger.DEBIT:
+                profit_tax += ledger.kopeck(line["amount"])
     retained = account_balance(state, "84", date, chart=chart)
     return {"profit": ledger.as_float(profit),
+            "profit_before_tax": ledger.as_float(profit + profit_tax),
+            "profit_tax": ledger.as_float(profit_tax),
             "retained": ledger.as_float(retained),
             "revenue": _turnover(state, year, "90.01", ledger.CREDIT),
             "cost": _turnover(state, year, "90.02", ledger.DEBIT),

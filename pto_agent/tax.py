@@ -105,13 +105,27 @@ def kpp_ok(kpp: str) -> bool:
 
 
 # ─────────────────────────── обороты ───────────────────────────
+def in_period(entry_period, period: str) -> bool:
+    """Попадает ли запись журнала в период.
+
+    Период — либо месяц `ГГГГ-ММ`, либо год `ГГГГ`. Год нужен потому, что налог считается
+    за отчётный период целиком (ст. 286 НК РФ — нарастающим итогом), а не суммой месяцев:
+    сумма помесячных расчётов и годовой расчёт совпадают не всегда, и выдавать одно за
+    другое нельзя.
+    """
+    entry_period = str(entry_period or "")
+    period = str(period or "")
+    if len(period) == 4:
+        return entry_period.startswith(period)
+    return entry_period == period
+
+
 def turnover(state: dict, account: str, period: str, *, side: str | None = None,
              prefix: bool = True) -> Decimal:
     total = Decimal("0")
+    period = str(period)
     for entry in state.get("entries") or []:
-        if not str(entry.get("period") or "").startswith(period[:7]):
-            continue
-        if str(entry.get("period") or "") != period:
+        if not in_period(entry.get("period"), period):
             continue
         for line in entry.get("lines") or []:
             code = str(line.get("account") or "")
@@ -126,7 +140,7 @@ def turnover(state: dict, account: str, period: str, *, side: str | None = None,
 
 def _entries(state: dict, period: str, event: str | None = None) -> list[dict]:
     return [entry for entry in state.get("entries") or []
-            if str(entry.get("period") or "") == period
+            if in_period(entry.get("period"), period)
             and (event is None or entry.get("event") == event)]
 
 
@@ -721,6 +735,7 @@ def profit_return(state: dict, period: str, *, rates: dict | None = None,
     Если 90.02 пуст, а затраты на 20.01 есть — значит месяц не закрыт: сумма не берётся
     «на глазок», а показывается расхождением `PROFIT_NOT_CLOSED`.
     """
+    period = str(period)
     rates = rates or load_rates()
     forms = rates.get("forms") or {}
     form = forms.get("profit") or {}

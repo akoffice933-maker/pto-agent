@@ -96,6 +96,48 @@
   {% endfor %}
 </section>
 
+{% if report.tax %}
+<section class="card">
+  <h2>Налог на прибыль</h2>
+  <table class="table compact">
+    <tbody>
+      <tr><td>проведено в журнале (Дт 99 Кт 68.04)</td>
+        <td class="num">{{ fmt(report.tax.posted) }} ₽</td></tr>
+      <tr><td>насчитал налоговый модуль за {{ year }}
+        (база {{ fmt(report.tax.base) }} ₽, ставки {{ report.tax.rates.federal }} % +
+        {{ report.tax.rates.regional }} %)</td>
+        <td class="num">{{ fmt(report.tax.computed) }} ₽</td></tr>
+      <tr><td>сумма помесячных расчётов
+        {% if report.tax.why_diff %}<div class="muted small">{{ report.tax.why_diff }}</div>
+        {% else %}<div class="muted small">совпадает с годом</div>{% endif %}</td>
+        <td class="num">{{ fmt(report.tax.months_sum) }} ₽</td></tr>
+      <tr><td><b>расхождение «проведено против посчитано»</b></td>
+        <td class="num"><b>{{ fmt(report.tax.difference) }} ₽</b>
+          {% if report.tax.difference %}<div class="muted small">это разрыв, а не ноль</div>
+          {% else %}<div class="muted small">сходится</div>{% endif %}</td></tr>
+    </tbody>
+  </table>
+  <p class="muted small">Отложенный налог (ПБУ 18/02) не ведётся: счетов 09 и 77 в рабочем плане
+    нет, поэтому строка 2412 пустая с причиной, а не «ноль, потому что ноль».</p>
+</section>
+{% endif %}
+
+{% if report.readiness %}
+<section class="card">
+  <h2>Чего не хватает, чтобы считались ОДК и ОДДС</h2>
+  <ul class="muted small">
+    {% for item in report.readiness %}
+    <li><b>{{ item.form }}</b> — не строится: {{ item.why }}
+      <ul>
+        {% for miss in item.missing %}<li>нет данных: {{ miss }}</li>{% endfor %}
+        <li>нужно: {{ item.need }}</li>
+      </ul>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
 <section class="card">
   <h2>Проверки увязок</h2>
   <table class="table compact">
