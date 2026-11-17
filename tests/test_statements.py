@@ -352,3 +352,99 @@ def test_mcp_tool_returns_same_numbers(closed, tmp_path):
     assert payload["gaps"] == []                     # налог проведён — разрыва нет
     assert payload["readiness"] and payload["readiness"][0]["built"] is False
     assert payload["not_implemented"]
+
+
+# ── сравнительные показатели: прошлый год (круг 45) ──────────────────────────
+PRIOR_SCENARIO = REPO / "data" / "demo" / "year_close" / "scenario_2025.json"
+PRIOR_DECISIONS = REPO / "data" / "demo" / "year_close" / "decisions_2025.json"
+
+
+@pytest.fixture(scope="module")
+def two_years() -> dict:
+    """Журнал с двумя закрытыми годами: 2025 и 2026 (для графы прошлого года)."""
+    state, _ = build(PRIOR_SCENARIO)
+    year_close.close_year(state, 2025, decisions=read(PRIOR_DECISIONS))
+    state, _ = build(SCENARIO, state=state)
+    year_close.close_year(state, 2026, decisions=read(DECISIONS))
+    return state
+
+
+def test_prior_balance_filled_from_same_ledger(two_years):
+    """Графа «на 31 декабря предыдущего года» берётся из журнала, а не из отдельного файла."""
+    prior = statements.check(two_years, 2026)["balance"]["prior"]
+    assert prior["available"] and prior["closed"] and prior["year"] == "2025"
+    assert prior["totals"]["1600"] == prior["totals"]["1700"] == 54_100_000.0
+    assert prior["reason"] == ""
+
+
+def test_prior_lines_do_not_leak_into_current(two_years):
+    """Строка показывает две разные суммы: прошлогоднюю и текущую."""
+    sheet = statements.check(two_years, 2026)["balance"]
+    retained = next(item for item in sheet["lines"] if item["code"] == "1370")
+    assert (retained["prior"], retained["amount"]) == (8_790_000.0, 20_040_000.0)
+    stock = next(item for item in sheet["lines"] if item["code"] == "1210")
+    assert (stock["prior"], stock["amount"]) == (360_000.0, 711_500.0)
+
+
+def test_prior_profit_is_prior_year_profit(two_years):
+    """В ОФР прошлого года — чистая прибыль прошлого года, а не текущего."""
+    profit = statements.check(two_years, 2026)["pnl"]
+    assert profit["prior_values"]["2400"] == 8_790_000.0
+    assert profit["values"]["2400"] == 11_250_000.0
+    assert profit["prior_values"]["2110"] == 44_000_000.0
+    assert profit["prior_available"] is True
+
+
+def test_continuity_checks_run_and_pass(two_years):
+    """Сопоставимость проверяется, а не подразумевается."""
+    report = statements.check(two_years, 2026)
+    assert report["ok"], [item["code"] for item in report["problems"]]
+    for code in ("PRIOR_COMPARATIVES", "PRIOR_CLOSED", "PRIOR_BALANCE_TIES",
+                 "OPENING_MATCHES_PRIOR", "RETAINED_CONTINUITY", "PNL_PRIOR_CHAIN"):
+        assert next(item for item in report["checks"] if item["code"] == code)["ok"], code
+
+
+def test_openings_mismatch_is_caught(two_years):
+    """Если подменить входящее сальдо, проверка сопоставимости это назовёт."""
+    broken = json.loads(json.dumps(two_years, default=str))
+    broken["entries"].insert(0, {
+        "key": "probe-opening", "event": "probe", "date": "2026-01-01", "period": "2026-01",
+        "status": ledger.STATUS_OK, "memo": "проверка сопоставимости", "rule": "probe",
+        "doc": {"number": "probe", "date": "2026-01-01"},
+        "lines": [{"account": "50", "side": ledger.DEBIT, "amount": "1000.00"},
+                  {"account": "84.01", "side": ledger.CREDIT, "amount": "1000.00"}]})
+    report = statements.check(broken, 2026)
+    assert not report["ok"]
+    assert not next(item for item in report["checks"] if item["code"] == "OPENING_MATCHES_PRIOR")["ok"]
+
+
+def test_first_reporting_year_is_not_an_error():
+    """Первый год показывается без сравнений — и это сказано словами, а не пустой клеткой."""
+    state, _ = build(SCENARIO)
+    year_close.close_year(state, 2026, decisions=read(DECISIONS))
+    report = statements.check(state, 2026)
+    prior = report["balance"]["prior"]
+    assert report["ok"]
+    assert prior["available"] is False and prior["first_year"] is True
+    assert "первый отчётный год" in prior["reason"]
+    assert next(item for item in report["checks"]
+                if item["code"] == "PRIOR_COMPARATIVES")["first_year"] is True
+
+
+def test_unclosed_prior_year_is_caught():
+    """Прошлый год есть, но не закрыт: сравнительные повисли бы в воздухе — это нарушение."""
+    state, _ = build(PRIOR_SCENARIO)
+    state, _ = build(SCENARIO, state=state)
+    year_close.close_year(state, 2026, decisions=read(DECISIONS))
+    report = statements.check(state, 2026)
+    assert not report["ok"]
+    assert not next(item for item in report["checks"] if item["code"] == "PRIOR_CLOSED")["ok"]
+
+
+def test_markdown_and_screen_show_comparison(two_years):
+    """Сравнение видно и в markdown, и в тексте экрана — не только в JSON."""
+    report = statements.check(two_years, 2026)
+    text = statements.to_markdown(report)
+    assert "на 31.12.2025" in text and "8 790 000,00" in text and "Годом ранее" in text
+    screen = statements.screen_text(report)
+    assert "на 31.12.2025" in screen and "сравнительно" in screen

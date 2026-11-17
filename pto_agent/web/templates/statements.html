@@ -37,31 +37,45 @@
   <h2>Бухгалтерский баланс на {{ report.balance.date }}</h2>
   <table class="table compact">
     <thead><tr><th>строка</th><th>наименование</th><th>счета</th>
-      <th class="num">сумма, ₽</th><th class="num">тыс. ₽</th></tr></thead>
+      <th class="num">на 31.12.{{ report.balance.prior.year }}{% if not report.balance.prior.available %} (нет данных){% endif %}, ₽</th>
+      <th class="num">на 31.12.{{ report.balance.year }}, ₽</th><th class="num">тыс. ₽</th></tr></thead>
     <tbody>
       {% for section in report.balance.sections %}
-      <tr><th colspan="5">{{ section.title }}</th></tr>
+      <tr><th colspan="6">{{ section.title }}</th></tr>
       {% for line in report.balance.lines if line.section == section.id %}
       <tr>
         <td>{{ line.code }}</td>
         <td>{{ line.title }}{% if line.amount < 0 %}<div class="muted small">отрицательная строка — ошибка учёта, а не «минус в балансе»</div>{% endif %}
           {% if not line.accounts and line.why_empty %}<div class="muted small">не заполняется: {{ line.why_empty }}</div>{% endif %}</td>
         <td class="muted small">{% for part in line.accounts %}{{ part.account }}{{ '−' if part.minus else '' }}{% if not loop.last %}, {% endif %}{% else %}—{% endfor %}</td>
+        <td class="num">{% if line.prior is not none %}{{ fmt(line.prior) }}{% else %}—{% endif %}</td>
         <td class="num">{{ fmt(line.amount) }}</td>
         <td class="num">{{ fmt(line.thousand) }}</td>
       </tr>
       {% endfor %}
       <tr><th colspan="3">итого по разделу</th>
+        <th class="num">{% if report.balance.prior.available %}{{ fmt(report.balance.prior.totals[section.total]) }}{% else %}—{% endif %}</th>
         <th class="num">{{ fmt(report.balance.totals[section.total]) }}</th><th></th></tr>
       {% endfor %}
     </tbody>
     <tfoot>
       <tr><th colspan="3">1600 баланс (актив)</th>
+        <th class="num">{% if report.balance.prior.available %}{{ fmt(report.balance.prior.totals['1600']) }}{% else %}—{% endif %}</th>
         <th class="num">{{ fmt(report.balance.totals['1600']) }}</th><th></th></tr>
       <tr><th colspan="3">1700 баланс (пассив)</th>
+        <th class="num">{% if report.balance.prior.available %}{{ fmt(report.balance.prior.totals['1700']) }}{% else %}—{% endif %}</th>
         <th class="num">{{ fmt(report.balance.totals['1700']) }}</th><th></th></tr>
     </tfoot>
   </table>
+  {% if report.balance.prior.available %}
+  <p class="muted small">Годом ранее: 1600 = {{ fmt(report.balance.prior.totals['1600']) }} ₽,
+    1700 = {{ fmt(report.balance.prior.totals['1700']) }} ₽ (на 31.12.{{ report.balance.prior.year }},
+    год {% if report.balance.prior.closed %}закрыт{% else %}не закрыт — сравнительные повисли бы в воздухе{% endif %}).
+    Изменение активов: {{ fmt(report.balance.totals['1600'] - report.balance.prior.totals['1600']) }} ₽.</p>
+  {% endif %}
+  {% if not report.balance.prior.available %}
+  <p class="muted small">{{ report.balance.prior.reason }}</p>
+  {% endif %}
   {% if report.balance.service_account %}
   <p class="muted small">Служебный счёт 000: {{ fmt(report.balance.service_account) }} ₽ —
     входящий остаток без капитала. В балансе этой суммы нет, потому что притворяться
@@ -76,8 +90,9 @@
 <section class="card">
   <h2>Отчёт о финансовых результатах за {{ year }}</h2>
   <table class="table compact">
-    <thead><tr><th>строка</th><th>наименование</th><th class="num">сумма, ₽</th>
-      <th class="num">тыс. ₽</th></tr></thead>
+    <thead><tr><th>строка</th><th>наименование</th>
+      <th class="num">за {{ report.pnl.prior_year }}, ₽</th>
+      <th class="num">за {{ report.pnl.year }}, ₽</th><th class="num">тыс. ₽</th></tr></thead>
     <tbody>
       {% for line in report.pnl.lines %}
       <tr>
@@ -85,6 +100,7 @@
         <td>{{ line.title }}
           {% if line.not_calculated %}<div class="muted small">не считается: {{ line.why_empty }}</div>
           {% elif line.note %}<div class="muted small">{{ line.note }}</div>{% endif %}</td>
+        <td class="num">{% if line.prior is not none %}{% if line.negative and line.prior %}({{ fmt(line.prior|abs) }}){% else %}{{ fmt(line.prior) }}{% endif %}{% else %}—{% endif %}</td>
         <td class="num">{% if line.negative and line.amount %}({{ fmt(line.amount|abs) }}){% else %}{{ fmt(line.amount) }}{% endif %}</td>
         <td class="num">{% if line.negative and line.amount %}({{ fmt((line.amount|abs) / 1000) }}){% else %}{{ fmt(line.amount / 1000) }}{% endif %}</td>
       </tr>

@@ -680,3 +680,14 @@ def test_statements_screen_shows_balance_and_honest_gaps(client, root):
     # круг 44: налог виден на экране, и ОДК/ОДДС названы «не строятся» с причиной
     assert "Налог на прибыль" in text and "расхождение" in text
     assert "Чего не хватает" in text and "ОДДС" in text
+
+
+def test_statements_screen_has_prior_year_column(client, root):
+    """Круг 45: на экране отчётности видна графа прошлого года — или причина, почему пусто."""
+    login(client, "buh")
+    text = client.get("/statements?year=2026").text
+    assert "на 31.12.2025" in text and "на 31.12.2026" in text
+    if "первый отчётный год" not in text:
+        # прошлый год есть: колонка заполнена числами прошлого года
+        assert "на 31.12.2025, ₽" in text
+    assert "Годом ранее" in text or "первый отчётный год" in text
