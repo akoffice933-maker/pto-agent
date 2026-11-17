@@ -367,6 +367,34 @@ check(tax.post_property_tax(prop_state, prop, code="Q1")["status"] == ledger.STA
       "повторная проводка аванса по имуществу не распознана как дубль")
 check(ledger.verify(prop_state)["ok"], "журнал не сходится после проводки по имуществу")
 
+# льготы по имуществу (круг 41): неподтверждённая льгота не уменьшает налог, а называется числом
+benefit_catalogue = tax.load_benefits()
+check(prop["benefits"]["applied"] == [],
+      "неподтверждённая льгота применена: налог уменьшен без основания")
+not_applied = prop["benefits"]["not_applied"]
+check(len(not_applied) == 1 and not_applied[0]["code"] == "REGION-CONSTRUCTION-DEMO",
+      f"заявленная льгота не попала в «не применена»: {not_applied}")
+check(not_applied and not_applied[0]["would_save_year"] == 126_500,
+      f"сумма неприменённой льготы {not_applied[0]['would_save_year'] if not_applied else '—'}, "
+      f"ожидалось 126 500 (годовой налог ангара)")
+confirmed = json.loads(json.dumps(benefit_catalogue))
+for row in confirmed["benefits"]:
+    row["confirmed"] = True
+prop_benefit = tax.property_tax(assets, "2026", rates=rates, benefits=confirmed)
+check(prop_benefit["totals"]["year"] == prop["totals"]["year"] - 126_500,
+      f"подтверждённая льгота дала {prop_benefit['totals']['year']} вместо "
+      f"{prop['totals']['year'] - 126_500}")
+check(not [row for row in prop_benefit["rows"]
+           if row.get("inventory") == "ОС-000204" and row["year"] > 0],
+      "освобождённый объект остался в налоге")
+no_basis = json.loads(json.dumps(assets))
+for asset in no_basis["assets"]:
+    asset.pop("benefit_basis", None)
+check(tax.property_tax(no_basis, "2026", rates=rates, benefits=confirmed)
+      ["benefits"]["applied"] == [],
+      "льгота применена без документа-основания")
+check(benefit_catalogue["not_implemented"], "у льгот нет списка «чего нет»")
+
 # выданный аванс: вычет НДС на 76.ВА только при ставке и договоре в документе
 def issued(contract: str | None):
     st = ledger.new_state()

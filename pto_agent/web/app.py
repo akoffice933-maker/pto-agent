@@ -493,9 +493,20 @@ def create_app(*, root: str | Path | None = None, data_dir: str | Path | None = 
         state = store.treasury_state()
         rules = treasury.load_rules()
         rows = _requests_view(state, user, matrix)
+        # месяц для недельного календаря: из запроса, иначе из последней заявки
+        periods = sorted({str(treasury.period_of(str(row.get("date") or "")))
+                          for row in state.get("requests") or [] if row.get("date")})
+        period = request.query_params.get("period") or (periods[-1] if periods else "")
+        week_report = treasury.weeks(state, period) if len(period) == 7 else None
+        week_problems = ([item for week in (week_report or {}).get("weeks") or []
+                          for item in week["problems"]
+                          if item["code"] == "WEEK_LIMIT_EXCEEDED"]
+                         if week_report else [])
         return render(request, "requests.html", user, rows=rows,
                       articles=_articles(rules), state_object=state.get("object") or "",
-                      objects=_objects_for(user, matrix, store.stock_state()))
+                      objects=_objects_for(user, matrix, store.stock_state()),
+                      week_report=week_report, week_period=period, week_problems=week_problems,
+                      week_periods=periods)
 
     @app.get("/requests/table", response_class=HTMLResponse)
     def requests_table(request: Request):

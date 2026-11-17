@@ -235,8 +235,15 @@ def post_entry(state: dict, *, event: str, date: str, doc: dict, lines: list[dic
                kind: str = "balance", memo: str = "", rule: str = "", key: str = "",
                bases: list[dict] | None = None, chart: dict | None = None,
                rules: dict | None = None, mode: str = MODE_POST,
-               force: bool = False) -> dict:
-    """Провести одну операцию. Всё, что не проходит проверку, — отказ, а не «проведём как есть»."""
+               force: bool = False, allow_closed: bool = False,
+               late_reason: str = "") -> dict:
+    """Провести одну операцию. Всё, что не проходит проверку, — отказ, а не «проведём как есть».
+
+    Исключение одно и названо вслух: **закрытие года** — последняя операция декабря, и она
+    неизбежно попадает в уже закрытый период. Такая проводка проходит только с
+    `allow_closed=True` и непустой причиной; причина и период остаются в самой записи
+    (`late`), а `verify` не считает её нарушением закрытого периода.
+    """
     chart = chart or load_chart()
     rules = rules if rules is not None else load_rules()
     date = str(date or "")
@@ -244,10 +251,15 @@ def post_entry(state: dict, *, event: str, date: str, doc: dict, lines: list[dic
     result = {"status": STATUS_REJECTED, "entry": None, "errors": [], "gaps": [], "warnings": []}
 
     closed = is_closed(state, date)
-    if closed:
+    if closed and not allow_closed:
         result["errors"].append({"code": "CLOSED_PERIOD", "what": number or event,
                                  "why": f"период {closed} закрыт: проведение только сторно "
                                         f"в открытом периоде"})
+        return result
+    if closed and allow_closed and not str(late_reason or "").strip():
+        result["errors"].append({"code": "LATE_WITHOUT_REASON", "what": number or event,
+                                 "why": f"проводка в закрытый период {closed} без причины "
+                                        f"не принимается: причина — часть записи"})
         return result
 
     clean: list[dict] = []
@@ -345,6 +357,8 @@ def post_entry(state: dict, *, event: str, date: str, doc: dict, lines: list[dic
                "doc": _doc_payload(doc, date),
                "memo": memo, "lines": clean, "bases": list(bases or []),
                "key": entry_key, "prev_hash": prev}
+    if closed:
+        payload["late"] = {"period": closed, "reason": str(late_reason).strip()}
     entry = dict(payload)
     entry["hash"] = _digest(prev, payload)
     state.setdefault("entries", []).append(entry)
@@ -1175,7 +1189,12 @@ def verify(state: dict, *, chart: dict | None = None) -> dict:
                                  "what": f"{entry.get('id')} / {line['account']}",
                                  "why": f"нет аналитики: {', '.join(missing)}"})
         closed = is_closed(state, str(entry.get("date")))
-        if closed and not str(entry.get("event", "")).startswith("storno."):
+        late = entry.get("late") or {}
+        if closed and late.get("reason") and late.get("period") == closed:
+            # проводка в закрытый период с названной причиной: это не «правили журнал»,
+            # это операция года; причина записана в самой записи и видна в отчёте
+            pass
+        elif closed and not str(entry.get("event", "")).startswith("storno."):
             # закрытие фиксирует, сколько записей в периоде было на момент закрытия:
             # то, что появилось позже, — уже нарушение
             seq = next((row.get("seq", 0) for row in state.get("periods") or []

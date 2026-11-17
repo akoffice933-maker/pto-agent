@@ -24,6 +24,9 @@
 18. лимит объекта не прикрывается экономией на другом объекте;
 19. аванс живёт на 60.02/62.02, зачитывается на меньшую из сумм и не превращается
     в выручку или в погашение долга;
+21. недельный разрез: недели режутся по понедельникам, остаток недели без движений
+    не обнуляется, просрочка попадает в первую неделю, а не исчезает; недельных лимитов
+    в законе нет — если организация их не задала, отчёт говорит это, а не придумывает;
 20. БДР считается начислением, а счёт, назначенный нескольким статьям, не разносится
     «на глаз»: он попадает в «не разнесено» с причиной.
 """
@@ -427,6 +430,60 @@ check(foreign["closing"] == calendar_own["closing"],
 check(bool(foreign["funding_unlinked"]), "строки чужого графика не помечены как непривязанные")
 check("складывать" in treasury.bdds(cash_state, "2026-10")["note"].lower(),
       "в БДДС не сказано, что факт и план складывать нельзя")
+
+# 21. недельный разрез: недели по понедельникам, остаток не обнуляется, просрочка не исчезает
+own_weeks = treasury.weeks(cash_state, "2026-10")
+check([row["iso"] for row in own_weeks["weeks"]] ==
+      ["2026-W40", "2026-W41", "2026-W42", "2026-W43", "2026-W44"],
+      "недели октября разрезаны не по календарю ISO")
+check([row["full"] for row in own_weeks["weeks"]] == [False, True, True, True, False],
+      "неполные недели на границе месяца не помечены")
+check(own_weeks["closing_confirmed"] == calendar_own["closing_confirmed"]
+      and own_weeks["closing"] == calendar_own["closing"],
+      "недельный отчёт и календарь разошлись по остатку")
+for week in own_weeks["weeks"]:
+    last = None
+    outflow = Decimal("0")
+    for day in calendar_own["rows"]:
+        if day["date"] <= week["end"]:
+            last = day
+        if week["start"] <= day["date"] <= week["end"]:
+            outflow += Decimal(str(day["out_fact"]))
+    expected = Decimal(str(last["balance_confirmed"])) if last else \
+        Decimal(str(calendar_own["opening"]))
+    check(Decimal(str(week["balance_confirmed"])) == expected,
+          f"остаток недели {week['index']} {week['balance_confirmed']} не равен остатку "
+          f"на {week['end']} ({expected}): неделя без движений обнулила счёт")
+    check(Decimal(str(week["out_fact"])) == outflow,
+          f"оплата недели {week['index']} {week['out_fact']} не равна дням недели ({outflow})")
+check(not own_weeks["week_limits"] and any("недельные лимиты" in text
+                                          for text in own_weeks["warnings"]),
+      "в демо-состоянии казначейства недельные лимиты не заданы, а отчёт об этом молчит")
+
+# недельный лимит, заданный организацией, ловит превышение с точной суммой
+week_state = treasury.new_state(object_name=treasury_payload["object"],
+                                opening=treasury_payload["opening"],
+                                limits=treasury_payload["limits"],
+                                contract=treasury_payload.get("contract") or "")
+week_state["object_limits"] = treasury_payload.get("object_limits") or {}
+week_state["week_limits"] = treasury_payload.get("week_limits") or {}
+for request in treasury_payload["requests"]:
+    treasury.add_request(week_state, request)
+for role in treasury.find(week_state, "З-001")["route"]:
+    treasury.approve(week_state, "З-001", role=role, person={
+        "снабжение": "Ким А.П.", "ПТО": "Волков С.И.", "финдиректор": "Орлова М.С.",
+        "главный инженер": "Панкратов Д.Ю."}.get(role, "Орлова М.С."), date="2026-10-10")
+week_limited = treasury.weeks(week_state, "2026-10")
+excess = [item for row in week_limited["weeks"] for item in row["problems"]
+          if item["code"] == "WEEK_LIMIT_EXCEEDED"]
+check(len(excess) == 1 and "511 200,00" in excess[0]["why"],
+      f"превышение недельного лимита не поймано с точной суммой: {excess}")
+check(any("неполная неделя" in item["why"] for row in week_limited["weeks"]
+          for item in row["problems"] if item["code"] == "PARTIAL_WEEK"),
+      "неполная неделя на границе месяца не названа причиной несравнимости")
+check("неделя 1" in treasury.weeks_markdown(own_weeks).lower()
+      or "| 1" in treasury.weeks_markdown(own_weeks),
+      "в markdown недельного календаря нет недель")
 
 for receipt in json.loads(RECEIPTS.read_text(encoding="utf-8"))["receipts"]:
     treasury.add_receipt(cash_state, receipt)

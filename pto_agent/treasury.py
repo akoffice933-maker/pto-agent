@@ -700,16 +700,32 @@ def calendar(state: dict, period: str, *, funding: dict | None = None) -> dict:
                 f"строк в остаток не включены — их нельзя считать деньгами этого объекта")
 
     opening = balance_at(state, (Date.fromisoformat(first) - timedelta(days=1)).isoformat())
-    balance = opening
+    # Два остатка, а не один. Подтверждённый считается только по фактически пришедшим деньгам;
+    # прогнозный добавляет план поступлений. До круга 40 здесь был один остаток, в который план
+    # входил молча: разрыв «закрывался» деньгами, которых на счёте нет, а правило модуля
+    # («ожидаемое поступление не увеличивает остаток») нарушалось в собственном расчёте.
+    confirmed = opening
+    forecast = opening
     gaps: list[dict] = []
+    gaps_forecast: list[dict] = []
     ordered = [rows[day] for day in sorted(rows)]
     for slot in ordered:
-        balance += kopeck(slot["in_fact"] + slot["in_plan"])
-        balance -= kopeck(slot["out_fact"] + slot["out_plan"])
-        slot["balance"] = num(balance)
-        if balance < 0:
-            gaps.append({"date": slot["date"], "amount": num(-balance),
-                         "why": "расходы по дате больше остатка на счёте"})
+        outflow = kopeck(slot["out_fact"] + slot["out_plan"])
+        confirmed = confirmed + kopeck(slot["in_fact"]) - outflow
+        forecast = forecast + kopeck(slot["in_fact"] + slot["in_plan"]) - outflow
+        slot["balance_confirmed"] = num(confirmed)
+        slot["balance_forecast"] = num(forecast)
+        slot["balance"] = num(forecast)      # прежнее имя: остаток «как ожидается»
+        if confirmed < 0:
+            gaps.append({"date": slot["date"], "amount": num(-confirmed),
+                         "scope": "подтверждённый",
+                         "why": "расходы по дате больше остатка на счёте: этих денег нет, "
+                                "план поступлений их не заменяет"})
+        if forecast < 0 and confirmed >= 0:
+            gaps_forecast.append({"date": slot["date"], "amount": num(-forecast),
+                                  "scope": "прогнозный",
+                                  "why": "разрыв закрывается только планом поступлений: если "
+                                         "деньги не придут к этой дате, платить нечем"})
     overdue = [{"number": row["number"], "counterparty": row["counterparty"],
                 "due_date": row.get("due_date"), "amount": num(kopeck(row.get("amount"))
                                                                - kopeck(row.get("paid")))}
@@ -719,13 +735,189 @@ def calendar(state: dict, period: str, *, funding: dict | None = None) -> dict:
                kopeck(row.get("paid"))]
     return {"period": period, "opening": num(opening), "warnings": warnings,
             "funding_unlinked": funding_unlinked,
-            "rows": ordered, "gaps": gaps, "overdue": overdue,
+            "rows": ordered, "gaps": gaps, "gaps_forecast": gaps_forecast, "overdue": overdue,
             "in_fact": num(sum(kopeck(slot["in_fact"]) for slot in ordered)),
             "in_plan": num(sum(kopeck(slot["in_plan"]) for slot in ordered)),
             "out_fact": num(sum(kopeck(slot["out_fact"]) for slot in ordered)),
             "out_plan": num(sum(kopeck(slot["out_plan"]) for slot in ordered)),
-            "closing": num(balance),
+            "closing": num(forecast), "closing_confirmed": num(confirmed),
+            "gap_total": num(sum(kopeck(item["amount"]) for item in gaps)),
+            "gap_forecast_total": num(sum(kopeck(item["amount"]) for item in gaps_forecast)),
             "funding_rows": funding_rows}
+
+
+def week_bounds(period: str) -> list[dict]:
+    """Недели месяца по календарю, а не «1–7, 8–14».
+
+    Неделя режется по понедельникам: первая и последняя недели месяца могут быть неполными —
+    и это видно в поле `full`. Ровные семидневки от 1-го числа сдвигали бы платежи со срока
+    «пятница» на чужую неделю.
+    """
+    first, last = _month_bounds(period)
+    start = Date.fromisoformat(first)
+    end = Date.fromisoformat(last)
+    # понедельник недели, в которую попало 1-е число
+    cursor = start - timedelta(days=start.weekday())
+    weeks: list[dict] = []
+    index = 1
+    while cursor <= end:
+        week_end = cursor + timedelta(days=6)
+        begin = max(cursor, start)
+        finish = min(week_end, end)
+        weeks.append({"index": index, "start": begin.isoformat(), "end": finish.isoformat(),
+                      "iso": f"{cursor.isocalendar()[0]}-W{cursor.isocalendar()[1]:02d}",
+                      "full": begin == cursor and finish == week_end})
+        cursor = week_end + timedelta(days=1)
+        index += 1
+    return weeks
+
+
+def weeks(state: dict, period: str, *, funding: dict | None = None) -> dict:
+    """Платёжный календарь по неделям: деньги, обязательства и лимиты объектов нарастающим.
+
+    Что считается и по какому правилу:
+
+    * к оплате недели — согласованные заявки со сроком в этой неделе; просроченные попадают
+      в первую неделю с пометкой, а не исчезают;
+    * лимит объекта — месячный: в недельном разрезе показывается, сколько из него израсходовано
+      **нарастающим итогом к концу недели** и сколько осталось. Недельного лимита в законе нет:
+      если организация задала свои (`week_limits`), контур сравнивает с ними и называет
+      превышение; если не задала — показывает только разрез и говорит об этом;
+    * остаток на конец недели — в двух видах: подтверждённый (фактические деньги) и прогнозный
+      (с планом поступлений). План не заменяет деньги.
+    """
+    calendar_report = calendar(state, period, funding=funding)
+    weeks_list = week_bounds(period)
+    # в недельный разрез попадают все заявки в работе: согласованные — это обязательство
+    # (платёж запланирован), «на согласовании» — ещё нет, но и не видно их только в отчёте
+    requests = [row for row in state.get("requests") or []
+                if row.get("status") not in (REJECTED, BLOCKED)
+                and kopeck(row.get("amount")) - kopeck(row.get("paid")) > 0]
+    week_limits = ((state.get("week_limits") or {}).get(period) or {})
+    result_weeks: list[dict] = []
+    warnings: list[str] = list(calendar_report.get("warnings") or [])
+    first_start = weeks_list[0]["start"] if weeks_list else ""
+    for week in weeks_list:
+        slot = {"index": week["index"], "start": week["start"], "end": week["end"],
+                "iso": week["iso"], "full": week["full"],
+                "in_fact": 0.0, "in_plan": 0.0, "out_fact": 0.0, "out_plan": 0.0,
+                "due": [], "balance_confirmed": 0.0, "balance_forecast": 0.0,
+                "objects": {}, "problems": []}
+        # остаток на конец недели — последний известный, а не ноль: неделя без движений
+        # не обнуляет счёт
+        carried_confirmed = calendar_report["opening"]
+        carried_forecast = calendar_report["opening"]
+        for day in calendar_report["rows"]:
+            if day["date"] < week["start"]:
+                carried_confirmed = day["balance_confirmed"]
+                carried_forecast = day["balance_forecast"]
+            elif week["start"] <= day["date"] <= week["end"]:
+                for key in ("in_fact", "in_plan", "out_fact", "out_plan"):
+                    slot[key] += day[key]
+                carried_confirmed = day["balance_confirmed"]
+                carried_forecast = day["balance_forecast"]
+        slot["balance_confirmed"] = num(carried_confirmed)
+        slot["balance_forecast"] = num(carried_forecast)
+        overdue_here: list[str] = []
+        for row in requests:
+            due = str(row.get("due_date") or row.get("date") or "")
+            left = kopeck(row.get("amount")) - kopeck(row.get("paid"))
+            target = None
+            if week["start"] <= due <= week["end"]:
+                target = week
+            elif due and due < first_start and week["index"] == 1:
+                target = week          # просрочка не исчезает: она в первой неделе месяца
+                overdue_here.append(str(row.get("number")))
+            if target is None:
+                continue
+            approved = row.get("status") in PAYABLE
+            slot["due"].append({"number": row.get("number"),
+                                "counterparty": row.get("counterparty"),
+                                "article": row.get("article"), "due_date": due,
+                                "amount": num(left), "approved": approved,
+                                "status": row.get("status"),
+                                "overdue": due < week["start"] and approved})
+            object_name = str(row.get("object") or state.get("object") or "")
+            table = slot["objects"].setdefault(object_name, {"limit": {}, "due": {},
+                                                             "pending": {}, "fact": {}})
+            key = "due" if approved else "pending"
+            table[key][str(row.get("article"))] = num(
+                kopeck(table[key].get(str(row.get("article"))) or 0) + left)
+        # лимиты объектов нарастающим итогом: из месяца, а не из недели
+        known_objects = set(slot["objects"].keys())
+        known_objects |= set((((state.get("object_limits") or {}).get(period) or {}).keys()))
+        for object_name in sorted(known_objects):
+            monthly = (((state.get("object_limits") or {}).get(period) or {})
+                       .get(object_name) or {})
+            used_total: dict[str, Decimal] = {}
+            for article in monthly:
+                used = Decimal("0")
+                for row in state.get("requests") or []:
+                    if row.get("status") in (REJECTED, BLOCKED):
+                        continue
+                    if period_of(str(row.get("date"))) != period:
+                        continue
+                    if str(row.get("object") or state.get("object") or "") != object_name:
+                        continue
+                    if str(row.get("article")) != article:
+                        continue
+                    due = str(row.get("due_date") or row.get("date") or "")
+                    if due and due > week["end"]:
+                        continue       # израсходовано к концу этой недели, а не за весь месяц
+                    used += kopeck(row.get("amount"))
+                used_total[article] = used
+            objects = slot["objects"].setdefault(object_name, {"limit": {}, "due": {},
+                                                              "pending": {}, "fact": {}})
+            for article, limit in monthly.items():
+                objects["limit"][article] = num(limit)
+                objects["fact"][article] = num(used_total[article])
+        # явные недельные лимиты организации (если заданы)
+        for object_name, table in week_limits.items():
+            for key, limit in (table or {}).items():
+                article, _, week_text = str(key).partition("@")
+                try:
+                    week_no = int(week_text or 0)
+                except ValueError:
+                    week_no = 0
+                if week_no and week_no != week["index"]:
+                    continue
+                objects = slot["objects"].setdefault(object_name, {"limit": {}, "due": {},
+                                                                  "pending": {}, "fact": {}})
+                spent = kopeck(objects["due"].get(article) or 0)
+                objects.setdefault("week_limit", {})[article] = num(limit)
+                if spent > kopeck(limit):
+                    slot["problems"].append({
+                        "code": "WEEK_LIMIT_EXCEEDED", "what": f"{object_name} / {article}",
+                        "why": f"за неделю {week['index']} к оплате {rub(spent)} при недельном "
+                               f"лимите {rub(limit)}: превышение {rub(spent - kopeck(limit))}"})
+        slot["in_fact"] = num(slot["in_fact"])
+        slot["in_plan"] = num(slot["in_plan"])
+        slot["out_fact"] = num(slot["out_fact"])
+        slot["out_plan"] = num(slot["out_plan"])
+        slot["due_total"] = num(sum(kopeck(row["amount"]) for row in slot["due"]
+                                    if row["approved"]))
+        slot["pending_total"] = num(sum(kopeck(row["amount"]) for row in slot["due"]
+                                        if not row["approved"]))
+        slot["overdue_total"] = num(sum(kopeck(row["amount"]) for row in slot["due"]
+                                        if row["overdue"]))
+        slot["overdue"] = overdue_here
+        if not slot["full"]:
+            slot["problems"].append({
+                "code": "PARTIAL_WEEK", "what": f"неделя {week['index']} ({week['iso']})",
+                "why": f"{slot['start']}…{slot['end']} — неполная неделя на границе месяца: "
+                       f"сравнивать её сумму с полной нельзя"})
+        result_weeks.append(slot)
+    if not week_limits:
+        warnings.append("недельные лимиты по объектам не заданы: показан разрез по неделям и "
+                        "использование месячного лимита нарастающим итогом. Придумывать "
+                        "недельные лимиты контур не будет — это решение организации")
+    return {"period": period, "weeks": result_weeks,
+            "opening": calendar_report["opening"],
+            "closing": calendar_report["closing"],
+            "closing_confirmed": calendar_report["closing_confirmed"],
+            "gaps": calendar_report["gaps"], "gaps_forecast": calendar_report["gaps_forecast"],
+            "week_limits": week_limits, "warnings": warnings,
+            "calendar": calendar_report}
 
 
 def funding_contract_note(funding: dict | None, state: dict) -> str | None:
@@ -749,6 +941,100 @@ def funding_contract_note(funding: dict | None, state: dict) -> str | None:
 
 
 # ─────────────────────────── БДДС ───────────────────────────
+def weeks_text(report: dict) -> str:
+    """Недельный календарь текстом: сначала деньги недели, потом обязательства и лимиты."""
+    out = [f"платёжный календарь по неделям на {report['period']}"]
+    out.append(f"  остаток на начало месяца {rub(report['opening'])}; "
+               f"по подтверждённым деньгам на конец {rub(report['closing_confirmed'])}, "
+               f"с планом поступлений {rub(report['closing'])}")
+    for week in report["weeks"]:
+        tail = "" if week["full"] else " (неполная)"
+        out.append(f"  неделя {week['index']} ({week['iso']}) {week['start']}…{week['end']}{tail}: "
+                   f"к оплате {rub(week['due_total'])}"
+                   + (f", на согласовании {rub(week['pending_total'])}"
+                      if week["pending_total"] else "")
+                   + (f", просрочено {rub(week['overdue_total'])}" if week["overdue_total"] else "")
+                   + f"; остаток {rub(week['balance_confirmed'])} "
+                     f"(с планом {rub(week['balance_forecast'])})")
+        for object_name, table in week["objects"].items():
+            if not (table.get("limit") or table.get("due") or table.get("pending")):
+                continue
+            parts = []
+            for article, limit in (table.get("limit") or {}).items():
+                used = table.get("fact", {}).get(article) or 0
+                pct = f"{used / limit * 100:.1f} %" if limit else "—"
+                parts.append(f"{article}: {rub(used)} из {rub(limit)} ({pct})")
+            for article, value in (table.get("week_limit") or {}).items():
+                parts.append(f"недельный лимит {article}: {rub(value)}")
+            out.append(f"    {object_name or 'без объекта'}: " + "; ".join(parts))
+        for item in week["problems"]:
+            if item["code"] == "WEEK_LIMIT_EXCEEDED":
+                out.append(f"    ! {item['what']}: {item['why']}")
+    if report.get("gaps"):
+        out.append("  разрыв по подтверждённым деньгам: "
+                   + "; ".join(f"{row['date']} — {rub(row['amount'])}" for row in report["gaps"]))
+    if report.get("gaps_forecast"):
+        out.append("  прогнозный разрыв (закрывается только планом поступлений): "
+                   + "; ".join(f"{row['date']} — {rub(row['amount'])}"
+                               for row in report["gaps_forecast"]))
+    for text in report.get("warnings") or []:
+        out.append(f"  ! {text}")
+    return "\n".join(out)
+
+
+def weeks_markdown(report: dict) -> str:
+    """Тот же недельный календарь в markdown — с лимитами объектов нарастающим итогом."""
+    lines = [f"# Платёжный календарь по неделям: {report['period']}", ""]
+    lines.append(f"Остаток на начало месяца {rub(report['opening'])}. На конец месяца: по "
+                 f"подтверждённым деньгам {rub(report['closing_confirmed'])}, с планом "
+                 f"поступлений {rub(report['closing'])}.")
+    lines.append("")
+    lines.append("| Неделя | Даты (ISO) | К оплате | На согласовании | Просрочено | Остаток "
+                 "| С планом |")
+    lines.append("|---|---|---:|---:|---:|---:|---:|")
+    for week in report["weeks"]:
+        lines.append(f"| {week['index']}{'' if week['full'] else ' *'} | {week['start']}…"
+                     f"{week['end']} ({week['iso']}) | {rub(week['due_total'])} | "
+                     f"{rub(week['pending_total'])} | "
+                     f"{rub(week['overdue_total'])} | {rub(week['balance_confirmed'])} | "
+                     f"{rub(week['balance_forecast'])} |")
+    if any(not week["full"] for week in report["weeks"]):
+        lines.append("")
+        lines.append("* Неполная неделя на границе месяца: её сумму нельзя сравнивать с полной.")
+    objects = []
+    for week in report["weeks"]:
+        for object_name, table in week["objects"].items():
+            for article, limit in (table.get("limit") or {}).items():
+                objects.append((week["index"], object_name, article, limit,
+                                table.get("fact", {}).get(article) or 0,
+                                (table.get("week_limit") or {}).get(article)))
+    if objects:
+        lines += ["", "## Лимиты объектов нарастающим итогом", "",
+                  "| Неделя | Объект | Статья | Лимит месяца | Израсходовано к концу недели | "
+                  "Остаток | Недельный лимит |", "|---|---|---|---:|---:|---:|---:|"]
+        for week_no, object_name, article, limit, used, week_limit in objects:
+            lines.append(f"| {week_no} | {object_name or 'без объекта'} | {article} | {rub(limit)} | "
+                         f"{rub(used)} | {rub(kopeck(limit) - kopeck(used))} | "
+                         f"{rub(week_limit) if week_limit else '—'} |")
+    problems = [item for week in report["weeks"] for item in week["problems"]
+                if item["code"] == "WEEK_LIMIT_EXCEEDED"]
+    if problems:
+        lines += ["", "## Превышение недельных лимитов", ""]
+        for item in problems:
+            lines.append(f"- **{item['code']}** · {item['what']}: {item['why']}")
+    if report.get("gaps") or report.get("gaps_forecast"):
+        lines += ["", "## Разрывы", ""]
+        for row in report.get("gaps") or []:
+            lines.append(f"- {row['date']} — {rub(row['amount'])}: {row['why']}")
+        for row in report.get("gaps_forecast") or []:
+            lines.append(f"- прогноз {row['date']} — {rub(row['amount'])}: {row['why']}")
+    if report.get("warnings"):
+        lines += ["", "## Оговорки", ""]
+        for text in report["warnings"]:
+            lines.append(f"- {text}")
+    return "\n".join(lines) + "\n"
+
+
 def bdds(state: dict, period: str) -> dict:
     """Движение денег по статьям: факт отдельно, план отдельно. Складывать их нельзя."""
     first, last = _month_bounds(period)
@@ -1296,7 +1582,8 @@ def screen(state: dict, period: str, *, funding: dict | None = None,
         not_included.append("счета БДР вне рабочего плана: "
                             + ", ".join(bdr_report["missing_accounts"]))
     for row in (rules.get("not_implemented") or []) + \
-            ((rules.get("bdr") or {}).get("not_implemented") or []):
+            ((rules.get("bdr") or {}).get("not_implemented") or []) + \
+            ((rules.get("weeks") or {}).get("not_implemented") or []):
         if row not in not_included:
             not_included.append(row)
     return {"period": period, "object": state.get("object") or "",
@@ -1306,7 +1593,11 @@ def screen(state: dict, period: str, *, funding: dict | None = None,
                      "out_fact": calendar_report["out_fact"],
                      "out_plan": calendar_report["out_plan"],
                      "closing": calendar_report["closing"],
-                     "gaps": calendar_report["gaps"]},
+                     "closing_confirmed": calendar_report["closing_confirmed"],
+                     "gap_total": calendar_report["gap_total"],
+                     "gap_forecast_total": calendar_report["gap_forecast_total"],
+                     "gaps": calendar_report["gaps"],
+                     "gaps_forecast": calendar_report["gaps_forecast"]},
             "calendar": calendar_report,
             "funding_note": funding_contract_note(funding, state),
             "funding_rows": calendar_report.get("funding_rows") or [],
@@ -1315,6 +1606,7 @@ def screen(state: dict, period: str, *, funding: dict | None = None,
             "limits": limits_usage(state, period),
             "bdds": bdds_report, "bdr": bdr_report, "advances": advance_report,
             "overdue": calendar_report["overdue"],
+            "weeks": weeks(state, period, funding=funding) if len(str(period)) == 7 else None,
             "not_included": not_included}
 
 
@@ -1324,15 +1616,34 @@ def screen_text(report: dict) -> str:
     out = [f"казначейство на {report['period']}"
            + (f" · {report['object']}" if report.get("object") else "")
            + (f" · {report['contract']}" if report.get("contract") else "")]
-    out.append(f"  остаток: начало {cash['opening']:,.2f} ₽ → конец {cash['closing']:,.2f} ₽ "
-               f"(пришло {cash['in_fact']:,.2f} ₽, оплачено {cash['out_fact']:,.2f} ₽)")
+    out.append(f"  остаток: начало {cash['opening']:,.2f} ₽ → по подтверждённым деньгам "
+               f"{cash.get('closing_confirmed', cash['closing']):,.2f} ₽, с планом поступлений "
+               f"{cash['closing']:,.2f} ₽ (пришло {cash['in_fact']:,.2f} ₽, оплачено "
+               f"{cash['out_fact']:,.2f} ₽)")
     out.append(f"  план: ожидается {cash['in_plan']:,.2f} ₽, к оплате "
-               f"{cash['out_plan']:,.2f} ₽ — в остаток не входит")
+               f"{cash['out_plan']:,.2f} ₽ — в подтверждённый остаток не входит")
     if cash["gaps"]:
-        out.append("  разрывы: " + "; ".join(f"{g['date']} — {g['amount']:,.2f} ₽"
-                                            for g in cash["gaps"]))
+        out.append("  разрыв по подтверждённым деньгам: "
+                   + "; ".join(f"{g['date']} — {g['amount']:,.2f} ₽" for g in cash["gaps"]))
     else:
-        out.append("  разрывов нет")
+        out.append("  разрывов по подтверждённым деньгам нет")
+    for gap in cash.get("gaps_forecast") or []:
+        out.append(f"  прогнозный разрыв {gap['date']}: {gap['amount']:,.2f} ₽ — закрывается "
+                   f"только планом поступлений")
+    weeks_report = report.get("weeks")
+    if weeks_report:
+        for week in weeks_report["weeks"]:
+            out.append(f"  неделя {week['index']} ({week['iso']}): к оплате "
+                       f"{week['due_total']:,.2f} ₽"
+                       + (f", на согласовании {week['pending_total']:,.2f} ₽"
+                          if week["pending_total"] else "")
+                       + f", остаток по факту {week['balance_confirmed']:,.2f} ₽")
+        for week in weeks_report["weeks"]:
+            for item in week["problems"]:
+                if item["code"] == "WEEK_LIMIT_EXCEEDED":
+                    out.append(f"  ! {item['what']}: {item['why']}")
+        for text in weeks_report["warnings"][-1:]:
+            out.append(f"  ! {text}")
     if report.get("funding_note"):
         out.append(f"  ! {report['funding_note']}")
     if report.get("funding_rows"):
