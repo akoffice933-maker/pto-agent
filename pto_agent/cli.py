@@ -2515,7 +2515,9 @@ def cmd_payroll(args) -> int:
             print(f"  {item['what']} — {item['basis']}")
         for text in source.get("conflicts") or []:
             print(f"  ВНИМАНИЕ: {text}")
-        for text in rules.get("not_implemented") or []:
+        for item in rules.get("not_implemented") or []:
+            # список «не сделано» — либо строки, либо {what, why}: печатаем оба вида
+            text = item.get("what") if isinstance(item, dict) else item
             print(f"  не сделано: {text}")
         return 0
 
@@ -2573,8 +2575,9 @@ def cmd_payroll(args) -> int:
                   f"{wage.rub(extra.get('sick_employer'))} · отпускные "
                   f"{wage.rub(extra.get('vacation'))} · премии {wage.rub(extra.get('bonus'))} · "
                   f"компенсации при увольнении {wage.rub(extra.get('dismissal'))} · "
-                  f"выходные пособия {wage.rub(extra.get('severance'))} · "
-                  f"за счёт СФР {wage.rub((extra.get('sick_fund') or 0) + (extra.get('maternity_fund') or 0))} "
+                  f"выходные пособия {wage.rub(extra.get('severance'))} · средний заработок на "
+                  f"период трудоустройства {wage.rub(extra.get('retention'))} · за счёт СФР "
+                  f"{wage.rub((extra.get('sick_fund') or 0) + (extra.get('maternity_fund') or 0) + (extra.get('childcare_fund') or 0))} "
                   f"(не наш расход)")
         if report.get("totals", {}).get("tax_free"):
             print(f"  не облагается НДФЛ и взносами (выходное пособие в пределах 3×): "

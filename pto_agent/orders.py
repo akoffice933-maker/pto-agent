@@ -29,7 +29,9 @@ from pathlib import Path
 KINDS = {"sick": "Больничный", "vacation": "Отпуск", "bonus": "Премия",
          "dismissal": "Увольнение (компенсация за неиспользованный отпуск)",
          "maternity": "Декрет (пособие по беременности и родам)",
-         "severance": "Выходное пособие (средний месячный заработок)"}
+         "severance": "Выходное пособие (средний месячный заработок)",
+         "childcare": "Пособие по уходу за ребёнком до 1,5 лет",
+         "retention": "Средний заработок на период трудоустройства (2-й и 3-й месяц)"}
 
 EPS = Decimal("0.01")
 
@@ -41,13 +43,22 @@ NOT_INCLUDED = [
     {"what": "расчёт больничного из МРОТ при неполной ставке",
      "why": "минимум зависит от доли ставки и районного коэффициента; в карточке сотрудника "
             "этих полей нет, поэтому минимум берётся общий и помечается предупреждением"},
-    {"what": "выходное пособие и выплаты при увольнении, кроме компенсации за отпуск",
-     "why": "средний месячный заработок, двухнедельный и трёхкратный средний — отдельный "
-            "расчёт по п. 3–6 Положения № 540; в контуре только компенсация за "
-            "неиспользованный отпуск"},
-    {"what": "декретные (пособие по беременности и родам)",
-     "why": "нужны замена лет расчётного периода, районный коэффициент и доля ставки: "
-            "механизм тот же, что у больничного, но цифры без этих полей будут неверными"},
+    {"what": "районный коэффициент и доля ставки в пособиях",
+     "why": "минимум и максимум зависят от коэффициента и занятости, а этих полей в карточке "
+            "сотрудника нет: сумма считается по общим пределам и помечается предупреждением"},
+    {"what": "единое пособие на ребёнка (вместо пособия до 1,5 лет) и «путинские» выплаты",
+     "why": "это выплаты по другому закону и по нуждаемости семьи: контур считает только "
+            "пособие по уходу по 255-ФЗ"},
+    {"what": "минимум пособия до 1,5 лет для отпусков, начавшихся до 2026 года",
+     "why": "минимум индексируется: для отпусков, начавшихся в 2026 году, это 40 % МРОТ "
+            "27 093 ₽ = 10 837,20 ₽, а для начавшихся в 2025-м после февральской индексации "
+            "действует прежняя величина. Дата начала отпуска в приказе есть, но таблица "
+            "минимумов по годам в справочнике не заведена: сумма считается по минимуму 2026 "
+            "и помечается «на проверку»"},
+    {"what": "пособие на второго и последующих детей по отдельному минимуму",
+     "why": "с 2021 года минимум по уходу до 1,5 лет одинаков для первого и последующих детей, "
+            "поэтому очередность ребёнка на сумму не влияет; если понадобится расчёт по "
+            "правилам до 2021 года, минимумы придётся вводить таблицей"},
 ]
 
 
@@ -499,9 +510,12 @@ def severance(order: dict, employee: dict, rules: dict, *, period: str) -> dict:
                  f"НДФЛ и взносы с {rub(taxable)} (сверх {tax_free_multiple:g}× = "
                  f"{rub(tax_free_limit)})"),
     }
-    if not sdz:
+    if not sdz or errors:
+        # ошибка в основании — это не «выплатим авансом»: сумма не показывается к выплате
         row["not_calculated"] = True
         row["amount"] = 0.0
+        row["taxable"] = 0.0
+        row["contrib_base"] = 0.0
     return row
 
 
@@ -655,6 +669,215 @@ def dismissal(order: dict, employee: dict, rules: dict, *, period: str) -> dict:
     return row
 
 
+def childcare(order: dict, employee: dict, rules: dict, *, period: str) -> dict:
+    """Пособие по уходу за ребёнком до 1,5 лет: 40 % среднего заработка, но в пределах минимума.
+
+    Что отличается от декретных и почему нельзя считать «как декрет»:
+
+    * процент фиксированный — 40 %, стаж не важен (ст. 11.2 255-ФЗ);
+    * считается **месячная** сумма: средний дневной × 30,4 × 40 % (ч. 5.1 ст. 14 255-ФЗ),
+      а не дни отпуска;
+    * сверху есть потолок — 40 % от предельного среднего дневного × 30,4 (в 2026 году
+      это 83 021,18 ₽), снизу — минимум 40 % МРОТ (10 837,20 ₽ для отпусков 2026 года);
+    * за неполный месяц платится пропорционально календарным дням;
+    * НДФЛ и взносов нет, платит СФР: в контуре сумма справочная.
+
+    Работа на неполном времени (и с 2024 года — на полном) права на пособие не отменяет:
+    это записано в правилах отдельным полем, но помечено «на проверку».
+    """
+    rules_care = (rules.get("benefits") or {}).get("childcare") or {}
+    percent = Decimal(str(rules_care.get("percent") or 40))
+    avg_days = Decimal(str(rules_care.get("avg_month_days") or "30.4"))
+    min_monthly = Decimal(str(rules_care.get("min_monthly") or 0))
+    max_monthly = Decimal(str(rules_care.get("max_monthly") or 0))
+    errors: list[dict] = []
+    warnings: list[str] = []
+    verify = bool(rules_care.get("min_basis_verify"))
+
+    base = order.get("earnings_2y")
+    excluded = int(order.get("excluded_days") or 0)
+    sdz = Decimal("0")
+    monthly_raw = Decimal("0")
+    source = ""
+    if base in (None, "") or kopeck(base) <= 0:
+        errors.append({"code": "CHILDCARE_NO_BASE", "what": order.get("number"),
+                       "why": "нет заработка за два предшествующих года: пособие из оклада не "
+                              "считается — нужна справка о заработке (в т.ч. с прошлых мест)"})
+    else:
+        divisor = Decimal("730") - Decimal(max(excluded, 0))
+        if divisor <= 0:
+            errors.append({"code": "CHILDCARE_NO_DIVISOR", "what": order.get("number"),
+                           "why": f"исключённых дней {excluded} — делитель не положителен"})
+        else:
+            sdz = kopeck(Decimal(str(base)) / divisor)
+            monthly_raw = kopeck(sdz * avg_days * percent / Decimal("100"))
+            source = (f"заработок {rub(base)} / (730 − {excluded}) = {rub(sdz)} × "
+                      f"{avg_days} × {percent:g} %")
+
+    monthly = monthly_raw
+    capped, raised = False, False
+    if monthly and max_monthly and monthly > max_monthly:
+        monthly, capped = max_monthly, True
+        warnings.append(f"месячное пособие {rub(monthly_raw)} выше предела {rub(max_monthly)} "
+                        f"(предельный средний дневной × {avg_days} × {percent:g} %): взят предел")
+    if monthly and min_monthly and monthly < min_monthly:
+        monthly, raised = min_monthly, True
+        warnings.append(f"месячное пособие {rub(monthly_raw)} ниже минимума {rub(min_monthly)} "
+                        f"({percent:g} % МРОТ 2026): взят минимум")
+
+    days_in_month = int(order.get("days_in_month") or _days_in_month(period))
+    part = order.get("days_of_leave")
+    days_paid = int(part) if part not in (None, "") else days_in_month
+    if days_paid <= 0 or days_paid > days_in_month:
+        errors.append({"code": "CHILDCARE_BAD_DAYS", "what": order.get("number"),
+                       "why": f"дней отпуска в месяце {days_paid} при {days_in_month} "
+                              f"календарных: оплата за месяц не из чего считается"})
+        days_paid = 0
+    if days_paid and days_paid < days_in_month:
+        verify = True
+        warnings.append(f"отпуск по уходу неполный месяц: {days_paid} из {days_in_month} к.д. — "
+                        f"пособие за часть месяца (ч. 5.1 ст. 14 255-ФЗ)")
+    amount = kopeck(monthly * Decimal(days_paid) / Decimal(days_in_month or 1))
+
+    child = str(order.get("child") or "")
+    row = {
+        "kind": "childcare", "number": order.get("number"), "date": order.get("date"),
+        "days": days_paid, "child": child,
+        "start": order.get("start"), "end": order.get("end"),
+        "sdz": num(sdz), "sdz_source": source,
+        "monthly_raw": num(monthly_raw), "monthly": num(monthly),
+        "capped_by_max": capped, "raised_to_min": raised,
+        "amount": 0.0,                          # платит СФР: не наш расход
+        "fund_amount": num(amount),             # справочно
+        "taxable": 0.0,                         # п. 1 ст. 217 НК РФ
+        "contrib_base": 0.0,                    # п. 1 ст. 422 НК РФ
+        "verify": verify, "errors": errors, "warnings": warnings,
+        "memo": (f"пособие по уходу {order.get('number')}: {percent:g} % × {rub(sdz)} × "
+                 f"{avg_days} = {rub(monthly)} в месяц, за {days_paid} из {days_in_month} к.д. — "
+                 f"{rub(amount)}; платит СФР, НДФЛ и взносов нет"),
+    }
+    if not sdz:
+        row["not_calculated"] = True
+    return row
+
+
+def retention(order: dict, employee: dict, rules: dict, *, period: str) -> dict:
+    """Средний месячный заработок на период трудоустройства: 2-й и 3-й месяц после увольнения.
+
+    ч. 1 ст. 178 ТК РФ: заработок сохраняется не свыше двух месяцев со дня увольнения,
+    **с зачётом выходного пособия**. Значит второй месяц — это разница между средним месячным
+    и уже выплаченным пособием, а не вторая полная выплата.
+
+    ч. 2 ст. 178 ТК РФ: третий месяц — только по решению органа службы занятости, и только если
+    работник обратился туда в течение двух недель после увольнения. Без решения и без отметки
+    об обращении контур третий месяц не считает: «выдали, потому что человек попросил» — это
+    не основание.
+
+    Обложение: НДФЛ и взносы не начисляются в пределах трёхкратного среднего месячного
+    заработка **суммарно** по всем выплатам при увольнении. Поэтому в приказе передаётся,
+    сколько необлагаемого лимита уже израсходовано (`tax_free_used`): иначе пособие и каждый
+    месяц трудоустройства льготировались бы по три раза.
+    """
+    rules_ret = (rules.get("benefits") or {}).get("retention") or {}
+    errors: list[dict] = []
+    warnings: list[str] = []
+    verify = False
+    month = int(order.get("month") or 0)
+    if month not in (2, 3):
+        errors.append({"code": "RETENTION_BAD_MONTH", "what": order.get("number"),
+                       "why": f"месяц трудоустройства {month!r}: ст. 178 ТК РФ говорит о втором "
+                              f"и (по решению службы занятости) третьем месяце"})
+    if month == 3:
+        decision = order.get("employment_decision") or {}
+        if not (decision.get("number") and decision.get("date")):
+            errors.append({"code": "RETENTION_NO_DECISION", "what": order.get("number"),
+                           "why": "третий месяц без решения органа службы занятости не "
+                                  "выплачивается (ч. 2 ст. 178 ТК РФ)"})
+        if order.get("applied_within_2_weeks") is not True:
+            errors.append({"code": "RETENTION_LATE_APPLICATION", "what": order.get("number"),
+                           "why": "нет подтверждения, что работник обратился в службу занятости "
+                                  "в течение двух недель после увольнения: без этого права на "
+                                  "третий месяц нет (ч. 2 ст. 178 ТК РФ)"})
+
+    base = order.get("base_12m")
+    worked_days = int(order.get("worked_days_12m") or 0)
+    sdz = Decimal("0")
+    source = ""
+    if base in (None, "") or kopeck(base) <= 0:
+        errors.append({"code": "RETENTION_NO_BASE", "what": order.get("number"),
+                       "why": "нет выплат за 12 месяцев перед увольнением: средний месячный "
+                              "заработок не считается из оклада"})
+    elif worked_days <= 0:
+        errors.append({"code": "RETENTION_NO_DAYS", "what": order.get("number"),
+                       "why": "не указано число отработанных дней за 12 месяцев"})
+    else:
+        sdz = kopeck(Decimal(str(base)) / Decimal(worked_days))
+        source = f"выплаты {rub(base)} / отработано {worked_days} р.д."
+
+    year_days = order.get("working_days_year") or \
+        ((rules.get("calendar") or {}).get("working_days_year") or {}).get("days") or 0
+    per_month = (Decimal(str(year_days)) / Decimal("12")) if year_days else Decimal("0")
+    monthly = kopeck(sdz * per_month)
+    mrot = Decimal(str(rules.get("mrot") or 0))
+    raised = False
+    if monthly and mrot and monthly < mrot:
+        monthly, raised = kopeck(mrot), True
+        warnings.append(f"средний месячный заработок ниже МРОТ {rub(mrot)}: взят МРОТ "
+                        f"(п. 18 Положения № 540)")
+
+    offset = Decimal("0")
+    offset_note = ""
+    if month == 2:
+        paid = order.get("severance_paid")
+        if paid in (None, ""):
+            warnings.append("не указано, сколько выходного пособия уже выплачено: зачёт "
+                            "не применён — второй месяц может быть завышен, цифра на проверку")
+            verify = True
+        else:
+            offset = kopeck(paid)
+            offset_note = f"зачёт выходного пособия {rub(offset)} (ч. 1 ст. 178 ТК РФ)"
+    gross_amount = monthly
+    amount = kopeck(monthly - offset) if monthly > offset else Decimal("0")
+    if month == 2 and offset and amount == 0:
+        warnings.append("выходное пособие уже покрыло второй месяц: к выплате 0 ₽ — "
+                        "это и есть зачёт, а не «ничего не положено»")
+
+    used = kopeck(order.get("tax_free_used") or 0)
+    limit = kopeck(monthly * Decimal("3"))
+    remaining = limit - used if limit > used else Decimal("0")
+    taxable = kopeck(amount - remaining) if amount > remaining else Decimal("0")
+    if used:
+        warnings.append(f"необлагаемый лимит трёхкратного среднего месячного заработка "
+                        f"({rub(limit)}) уменьшен на уже выплаченное {rub(used)}: "
+                        f"осталось {rub(remaining)} (п. 1 ст. 217 НК РФ)")
+        verify = True
+    row = {
+        "kind": "retention", "number": order.get("number"), "date": order.get("date"),
+        "month": month, "days": None,
+        "dismissal_date": order.get("dismissal_date"),
+        "sdz": num(sdz), "sdz_source": source,
+        "working_days_year": int(year_days) if year_days else 0,
+        "working_days_per_month": float(per_month.quantize(Decimal("0.0001"))),
+        "monthly": num(monthly), "offset": num(offset), "offset_note": offset_note,
+        "gross_monthly": num(gross_amount),
+        "amount": num(amount), "fund_amount": 0.0,
+        "tax_free_limit": num(limit), "tax_free_used": num(used),
+        "tax_free_remaining": num(remaining),
+        "taxable": num(taxable), "contrib_base": num(taxable),
+        "raised_to_min": raised, "verify": verify, "errors": errors, "warnings": warnings,
+        "memo": (f"{month}-й месяц трудоустройства {order.get('number')}: {rub(monthly)}"
+                 + (f" − {rub(offset)} ({offset_note})" if offset else "")
+                 + f" = {rub(amount)}; НДФЛ и взносы с {rub(taxable)}"),
+    }
+    if not sdz or errors:
+        # ошибка в основании — это не «выплатим авансом»: к выплате ноль и пометка
+        row["not_calculated"] = True
+        row["amount"] = 0.0
+        row["taxable"] = 0.0
+        row["contrib_base"] = 0.0
+    return row
+
+
 def report(orders: list[dict], staff: dict, rules: dict, *, period: str) -> dict:
     """Собрать все приказы месяца: строки по людям, суммы, что не посчиталось и почему."""
     employees = {str(row.get("tab")): row for row in staff.get("employees") or []}
@@ -663,6 +886,7 @@ def report(orders: list[dict], staff: dict, rules: dict, *, period: str) -> dict
                                           "sick_fund": 0.0, "vacation": 0.0, "bonus": 0.0,
                                           "dismissal": 0.0,
                                           "maternity_fund": 0.0, "severance": 0.0,
+                                          "childcare_fund": 0.0, "retention": 0.0,
                                           "gross": 0.0,
                                           "taxable": 0.0, "contrib_base": 0.0},
               "not_included": [dict(item) for item in NOT_INCLUDED]}
@@ -696,7 +920,8 @@ def report(orders: list[dict], staff: dict, rules: dict, *, period: str) -> dict
             continue
         row = {"sick": sick, "vacation": vacation, "bonus": bonus,
                "dismissal": dismissal, "maternity": maternity,
-               "severance": severance}[kind](
+               "severance": severance, "childcare": childcare,
+               "retention": retention}[kind](
             order, employee, rules, period=period)
         row["tab"] = tab
         row["name"] = employee.get("name")
@@ -705,7 +930,7 @@ def report(orders: list[dict], staff: dict, rules: dict, *, period: str) -> dict
         result["errors"].extend(row.pop("errors"))
         result["warnings"].extend(row.pop("warnings"))
         result["lines"].append(row)
-        if row["amount"] <= 0 and kind not in ("sick", "maternity"):
+        if row["amount"] <= 0 and kind not in ("sick", "maternity", "childcare"):
             continue
         slot = result["by_tab"].setdefault(tab, {"taxable": Decimal("0"),
                                                  "contrib_base": Decimal("0"),
@@ -716,6 +941,8 @@ def report(orders: list[dict], staff: dict, rules: dict, *, period: str) -> dict
                                                  "dismissal": Decimal("0"),
                                                  "maternity_fund": Decimal("0"),
                                                  "severance": Decimal("0"),
+                                                 "childcare_fund": Decimal("0"),
+                                                 "retention": Decimal("0"),
                                                  "gross": Decimal("0")})
         slot["gross"] += kopeck(row["amount"])
         slot["taxable"] += kopeck(row["taxable"])
@@ -728,6 +955,9 @@ def report(orders: list[dict], staff: dict, rules: dict, *, period: str) -> dict
         slot["maternity_fund"] += kopeck(row["fund_amount"]) if kind == "maternity" \
             else Decimal("0")
         slot["severance"] += kopeck(row["amount"]) if kind == "severance" else Decimal("0")
+        slot["childcare_fund"] += kopeck(row["fund_amount"]) if kind == "childcare" \
+            else Decimal("0")
+        slot["retention"] += kopeck(row["amount"]) if kind == "retention" else Decimal("0")
         totals = result["totals"]
         totals["amount"] = num(kopeck(totals["amount"]) + kopeck(row["amount"]))
         totals["sick_employer"] = num(kopeck(totals["sick_employer"])
@@ -744,6 +974,10 @@ def report(orders: list[dict], staff: dict, rules: dict, *, period: str) -> dict
                                        + (kopeck(row["fund_amount"]) if kind == "maternity" else 0))
         totals["severance"] = num(kopeck(totals["severance"])
                                   + (kopeck(row["amount"]) if kind == "severance" else 0))
+        totals["childcare_fund"] = num(kopeck(totals["childcare_fund"])
+                                       + (kopeck(row["fund_amount"]) if kind == "childcare" else 0))
+        totals["retention"] = num(kopeck(totals["retention"])
+                                  + (kopeck(row["amount"]) if kind == "retention" else 0))
         totals["gross"] = num(kopeck(totals["gross"]) + kopeck(row["amount"]))
         totals["taxable"] = num(kopeck(totals["taxable"]) + kopeck(row["taxable"]))
         totals["contrib_base"] = num(kopeck(totals["contrib_base"]) + kopeck(row["contrib_base"]))
@@ -766,7 +1000,7 @@ def to_markdown(result: dict, rules: dict | None = None) -> str:
         for row in result["lines"]:
             lines.append(f"| {row.get('number')} | {KINDS.get(row['kind'], row['kind'])} | "
                          f"{row.get('name')} | {row.get('days') or ''} | {rub(row.get('amount'))} | "
-                         f"{rub(row.get('fund_amount')) if row['kind'] == 'sick' else ''} | "
+                         f"{rub(row.get('fund_amount')) if row['kind'] in ('sick', 'childcare', 'maternity') else ''} | "
                          f"{row.get('cause') or row.get('sdz_source') or row.get('basis') or row.get('percent_basis') or ''} |")
     else:
         lines.append("Приказов нет: считается только оклад по табелю.")
@@ -776,9 +1010,11 @@ def to_markdown(result: dict, rules: dict | None = None) -> str:
                  f"(больничные работодателя {rub(totals.get('sick_employer'))}, отпускные "
                  f"{rub(totals.get('vacation'))}, премии {rub(totals.get('bonus'))}, "
                  f"компенсации при увольнении {rub(totals.get('dismissal'))}, выходные пособия "
-                 f"{rub(totals.get('severance'))}, декретные за счёт СФР "
-                 f"{rub(totals.get('maternity_fund'))}); "
-                 f"за счёт СФР {rub(totals.get('sick_fund'))} — не наш расход.")
+                 f"{rub(totals.get('severance'))}, средний заработок на период трудоустройства "
+                 f"{rub(totals.get('retention'))}); за счёт СФР: декретные "
+                 f"{rub(totals.get('maternity_fund'))}, пособие по уходу до 1,5 лет "
+                 f"{rub(totals.get('childcare_fund'))}, больничные "
+                 f"{rub(totals.get('sick_fund'))} — не наш расход.")
     if result.get("errors"):
         lines.append("")
         lines.append("## Не посчитано")
