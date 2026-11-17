@@ -18,6 +18,7 @@ from . import stock as stock_ledger
 from . import ledger as accounting
 from . import closing as accounting_close
 from . import treasury as cash
+from . import year_close as yearbook
 from .pdf_profiles import ProfileError, fact_rules, get_profile, schedule_markers
 from .kr_pdf import (derive_boq, extract_facts, extract_levels, find_schedules, kr_report,
                      read_pdf_text)
@@ -671,6 +672,42 @@ def _stock_balances(state: dict, *, as_of: str | None = None, warehouse: str | N
 
 
 # ─────────────────────────── ядро учёта: план счетов, журнал, ОСВ ───────────────────────────
+def cmd_year(args) -> int:
+    """Закрытие года: реформация 99 → 84, недостачи, оценочные обязательства, РБП."""
+    action = args.year_action
+    state = accounting.load(args.ledger)
+    chart = accounting.load_chart(args.chart) if getattr(args, "chart", None) else accounting.load_chart()
+    rules = yearbook.load_rules(args.rules) if getattr(args, "rules", None) else None
+    decisions = None
+    if getattr(args, "decisions", None):
+        decisions = json.loads(Path(args.decisions).read_text(encoding="utf-8"))
+
+    if action == "check":
+        report = yearbook.precheck(state, args.year, chart=chart)
+        print(f"год {args.year}: месяцы закрыты "
+              f"{len(report['closed_months'])}/12; открыты: "
+              f"{', '.join(report['open_months']) or '—'}")
+        for item in report["problems"]:
+            print(f"  ✗ [{item['code']}] {item['what']}: {item['why']}", file=sys.stderr)
+        return 0 if report["ok"] else 2
+
+    dry_run = action == "screen" or bool(getattr(args, "dry_run", False))
+    report = yearbook.close_year(state, args.year, decisions=decisions, chart=chart,
+                                 rules=rules, dry_run=dry_run)
+    print(yearbook.screen_text(report))
+    if getattr(args, "out", None):
+        path = Path(args.out)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(yearbook.to_markdown(report), encoding="utf-8")
+        print(f"\nmarkdown: {path}")
+    if not dry_run:
+        accounting.save(state, args.ledger)
+        print(f"журнал сохранён: {args.ledger}")
+    if report.get("problems"):
+        return 2
+    return 0 if report.get("closed") or dry_run else 1
+
+
 def cmd_ledger(args) -> int:
     action = args.ledger_action
     state = accounting.load(args.state) if getattr(args, "state", None) else accounting.new_state()
@@ -3746,6 +3783,36 @@ def main(argv=None):
     tr_ver = trss.add_parser("verify", help="сходится ли казначейство само с собой")
     tr_ver.add_argument("--state", default="out/treasury/state.json")
     tr_ver.set_defaults(func=cmd_treasury)
+
+    yr = sub.add_parser("year", help="закрытие года: реформация 99 → 84, 94, 96, 97")
+    yrs = yr.add_subparsers(dest="year_action", required=True)
+
+    yr_check = yrs.add_parser("check", help="можно ли закрывать год: закрыты ли 12 месяцев")
+    yr_check.add_argument("--year", required=True)
+    yr_check.add_argument("--ledger", default="out/year_close/ledger_2026.json")
+    yr_check.add_argument("--chart", default=None)
+    yr_check.add_argument("--rules", default=None)
+    yr_check.set_defaults(func=cmd_year)
+
+    yr_close = yrs.add_parser("close", help="закрыть год: решения, перекрытие декабря, реформация")
+    yr_close.add_argument("--year", required=True)
+    yr_close.add_argument("--ledger", default="out/year_close/ledger_2026.json")
+    yr_close.add_argument("--decisions", default=None,
+                          help="решения по 94/96/97 с основаниями (json)")
+    yr_close.add_argument("--chart", default=None)
+    yr_close.add_argument("--rules", default=None)
+    yr_close.add_argument("--out", default=None, help="markdown-отчёт")
+    yr_close.add_argument("--dry-run", dest="dry_run", action="store_true")
+    yr_close.set_defaults(func=cmd_year)
+
+    yr_screen = yrs.add_parser("screen", help="что будет при закрытии года, без проводок")
+    yr_screen.add_argument("--year", required=True)
+    yr_screen.add_argument("--ledger", default="out/year_close/ledger_2026.json")
+    yr_screen.add_argument("--decisions", default=None)
+    yr_screen.add_argument("--chart", default=None)
+    yr_screen.add_argument("--rules", default=None)
+    yr_screen.add_argument("--out", default=None)
+    yr_screen.set_defaults(func=cmd_year)
 
     led = sub.add_parser("ledger", help="ядро учёта: план счетов 94н, проводки, ОСВ")
     leds = led.add_subparsers(dest="ledger_action", required=True)

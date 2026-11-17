@@ -197,9 +197,26 @@
     {% for item in property.problems %}<li><b>{{ item.code }}</b> · {{ item.what }}: {{ item.why }}</li>{% endfor %}
   </ul>
   {% endif %}
+  {% if property.benefits and (property.benefits.applied or property.benefits.not_applied) %}
+  <h3>Льготы по имуществу</h3>
+  <p class="muted small">Льгота применяется только по подтверждённому основанию. Неприменённая —
+    не «нет льготы», а «не подтверждена»: налог считается без неё, а сумма, которую она дала бы,
+    названа числом.</p>
+  <ul class="small">
+    {% for row in property.benefits.applied %}
+    <li><b>{{ row.code }}</b> · {{ row.asset }} — применена ({{ row.basis }}), экономия за год
+      {{ row.would_save_year|rub }}</li>
+    {% endfor %}
+    {% for row in property.benefits.not_applied %}
+    <li><b>{{ row.code }}</b> · {{ row.asset }} — <b>не применена</b>: {{ row.why }};
+      справочно: за год {{ row.would_save_year|rub }}, по авансам {{ row.would_save_advances|rub }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
   <h3>Что не сделано по имуществу</h3>
   <ul class="muted small">
     {% for item in property.not_included %}<li><b>{{ item.what }}</b>: {{ item.why }}</li>{% endfor %}
+    {% for item in (property.benefits.not_implemented if property.benefits else []) %}<li>{{ item }}</li>{% endfor %}
     <li>проводки начисляются только по решению человека (<code>tax post-property</code>): Дт 91.02 Кт 68.08</li>
   </ul>
 </section>

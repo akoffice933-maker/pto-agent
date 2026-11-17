@@ -826,7 +826,39 @@ def _rub_round(value: Decimal) -> Decimal:
     return value.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
 
 
-def property_tax(assets_payload: dict, year: str, *, rates: dict | None = None) -> dict:
+BENEFITS_PATH = Path(__file__).resolve().parents[1] / "data" / "reference" / "property_benefits.json"
+
+
+def load_benefits(path: str | Path | None = None) -> dict:
+    path = Path(path) if path else BENEFITS_PATH
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if payload.get("schema") != "pto-agent/property-benefits@1":
+        raise ValueError(f"{path.name}: схема {payload.get('schema')!r} "
+                         f"не pto-agent/property-benefits@1")
+    return payload
+
+
+def _benefit_of(asset: dict, catalogue: dict) -> tuple[dict | None, str]:
+    """Можно ли применить льготу объекта. Возвращает (льгота|None, причина отказа)."""
+    code = str(asset.get("benefit") or "").strip()
+    if not code:
+        return None, ""
+    entry = next((row for row in catalogue.get("benefits") or []
+                  if str(row.get("code")) == code), None)
+    if not entry:
+        return None, (f"льготы «{code}» нет в справочнике: непроверенный код не применяется")
+    basis = asset.get("benefit_basis") or {}
+    if not (basis.get("number") and basis.get("date")):
+        return None, (f"льгота «{code}» заявлена, но основание не указано: нужен номер и дата "
+                      f"закона субъекта/документа")
+    if not entry.get("confirmed"):
+        return None, (f"льгота «{code}» не подтверждена в справочнике (confirmed: false): "
+                      f"сумма в отчёт идёт, но налог считается без неё")
+    return entry, ""
+
+
+def property_tax(assets_payload: dict, year: str, *, rates: dict | None = None,
+                 benefits: dict | None = None) -> dict:
     """Налог на имущество организаций: авансы за I квартал, полугодие, 9 месяцев и налог за год.
 
     База — регистр недвижимости (`data/demo/property/assets_2026.json`): в контуре нет учёта
@@ -845,6 +877,7 @@ def property_tax(assets_payload: dict, year: str, *, rates: dict | None = None) 
     `PROPERTY_NO_DATA`, потому что средняя «по имеющимся месяцам» — это другая цифра.
     """
     rates = rates or load_rates()
+    benefits = benefits if benefits is not None else load_benefits()
     section = rates.get("property") or {}
     rate_average = Decimal(str((section.get("rates") or {}).get("average") or 0))
     rate_cadastral = Decimal(str((section.get("rates") or {}).get("cadastral") or 0))
@@ -856,6 +889,11 @@ def property_tax(assets_payload: dict, year: str, *, rates: dict | None = None) 
               or {}, "rates": {"average": float(rate_average), "cadastral": float(rate_cadastral),
                                "region": section.get("region"),
                                "source": section.get("rates_source") or []},
+              "benefits": {"catalogue": benefits.get("benefits") or [], "applied": [],
+                           "not_applied": [],
+                           "note": "льгота применяется только по подтверждённому основанию; "
+                                   "неприменённая показывается суммой, которую она дала бы",
+                           "not_implemented": list(benefits.get("not_implemented") or [])},
               "not_included": [
                   {"what": "основные средства в журнале (счета 01 и 02)",
                    "why": "в контуре их нет: амортизация не начисляется, остаточная стоимость "
@@ -905,13 +943,16 @@ def property_tax(assets_payload: dict, year: str, *, rates: dict | None = None) 
                     "why": "база кадастровая, а кадастровой стоимости нет: сумму не считаем — "
                            "она берётся из ЕГРН, а не «примерно»"})
                 continue
+            benefit, why_not = _benefit_of(asset, benefits)
+            year_base = _rub_round(cadastral * rate_cadastral / Decimal("100"))
             advances = {code: _rub_round(cadastral * rate_cadastral
                                          / Decimal("100") / Decimal("4"))
                         for code, _, _, _, _ in PROPERTY_REPORTING}
-            bases = {code: cadastral for code, _, _, _, _ in PROPERTY_REPORTING}
+            _remember_benefit(report, asset, name, benefit, why_not, advances, year_base, benefits)
+            years_base = {code: cadastral for code, _, _, _, _ in PROPERTY_REPORTING}
+            advances, year_base = _apply_benefit(benefit, advances, year_base)
             taxable.append({"asset": asset, "name": name, "base": base, "cadastral": cadastral,
-                            "advances": advances, "bases": bases,
-                            "year": _rub_round(cadastral * rate_cadastral / Decimal("100"))})
+                            "advances": advances, "bases": years_base, "year": year_base})
             continue
 
         # среднегодовая база: проверяем, что есть стоимость на все нужные даты
@@ -927,6 +968,7 @@ def property_tax(assets_payload: dict, year: str, *, rates: dict | None = None) 
                        f"средняя за период не считается по неполному ряду — она была бы другой "
                        f"цифрой, а не той же"})
             continue
+        benefit, why_not = _benefit_of(asset, benefits)
         advances: dict[str, Decimal] = {}
         bases: dict[str, Decimal] = {}
         for code, _, months, next_month, _ in PROPERTY_REPORTING:
@@ -938,9 +980,12 @@ def property_tax(assets_payload: dict, year: str, *, rates: dict | None = None) 
         annual_days = months_needed
         average_year = sum((value_on(asset, day) for day in annual_days), Decimal("0")) \
             / Decimal(len(annual_days))
+        year_amount = _rub_round(average_year * rate_average / Decimal("100"))
+        _remember_benefit(report, asset, name, benefit, why_not, advances, year_amount, benefits)
+        advances, year_amount = _apply_benefit(benefit, advances, year_amount)
         taxable.append({"asset": asset, "name": name, "base": base,
                         "average": average_year, "advances": advances, "bases": bases,
-                        "year": _rub_round(average_year * rate_average / Decimal("100"))})
+                        "year": year_amount})
 
     advance_totals: dict[str, Decimal] = {code: Decimal("0") for code, *_ in PROPERTY_REPORTING}
     base_totals: dict[str, Decimal] = {code: Decimal("0") for code, *_ in PROPERTY_REPORTING}
@@ -979,6 +1024,55 @@ def property_tax(assets_payload: dict, year: str, *, rates: dict | None = None) 
                                "ask": "остаточная стоимость по месяцам и кадастровая стоимость"})
     report["ready"] = not report["problems"]
     return report
+
+
+def _apply_benefit(entry: dict | None, advances: dict[str, Decimal],
+                   year_amount: Decimal) -> tuple[dict[str, Decimal], Decimal]:
+    """Применить подтверждённую льготу. Освобождение — нули; иные виды эффекта не считаются."""
+    effect = (entry or {}).get("effect") or {}
+    if entry is None or effect.get("type") != "exempt":
+        return advances, year_amount
+    return {code: Decimal("0") for code in advances}, Decimal("0")
+
+
+def _remember_benefit(report: dict, asset: dict, name: str, entry: dict | None, why: str,
+                      advances: dict[str, Decimal], year_amount: Decimal,
+                      catalogue: dict | None = None) -> None:
+    """Записать, применилась ли льгота: неприменённая — это не «нет льготы», а «не подтверждена»."""
+    code = str(asset.get("benefit") or "").strip()
+    if not code:
+        return
+    block = report["benefits"]
+    basis = asset.get("benefit_basis") or {}
+    # заявленную льготу ищем и по неподтверждённой записи: «сколько дала бы» — это тоже цифра
+    declared = entry or next((row for row in (catalogue or {}).get("benefits") or []
+                              if str(row.get("code")) == code), None)
+    # экономия — это налог за год: авансы внутри года, складывать их с годом нельзя
+    saving_year = _benefit_saving(declared, year_amount)
+    saving_advances = (kopeck(sum(advances.values(), Decimal("0")))
+                       if _benefit_saving(declared, Decimal("1")) else Decimal("0"))
+    if entry is None:
+        block["not_applied"].append({
+            "code": code, "asset": name, "why": why,
+            "basis": f"{basis.get('number')} от {basis.get('date')}" if basis.get("number") else "",
+            "would_save_year": num(saving_year),
+            "would_save_advances": num(saving_advances),
+            "effect": (declared or {}).get("effect"),
+            "confirmed": bool((declared or {}).get("confirmed"))})
+        return
+    block["applied"].append({"code": code, "asset": name, "title": entry.get("title"),
+                             "basis": f"{basis.get('number')} от {basis.get('date')}",
+                             "effect": entry.get("effect"),
+                             "would_save_year": num(saving_year)})
+
+
+def _benefit_saving(entry: dict | None, year_amount: Decimal) -> Decimal:
+    """Сколько дала бы льгота за год. Только для «освобождения»: долю считать не из чего."""
+    effect = (entry or {}).get("effect") or {}
+    if entry is None or effect.get("type") != "exempt":
+        # без подтверждённого типа эффекта экономия не считается — иначе это выдуманная цифра
+        return Decimal("0")
+    return kopeck(year_amount)
 
 
 def post_property_tax(state: dict, report: dict, *, code: str = "Q1", date: str | None = None,
@@ -1203,6 +1297,19 @@ def to_markdown(report: dict) -> str:
             for item in report["not_included"]:
                 lines.append(f"- **{item.get('what')}**: {item.get('why')}")
     elif kind == "property":
+        benefits = report.get("benefits") or {}
+        if benefits.get("applied") or benefits.get("not_applied"):
+            lines.append("")
+            lines.append("## Льготы")
+            for row in benefits.get("applied") or []:
+                lines.append(f"- **{row['code']}** · {row['asset']}: применена "
+                             f"({row.get('basis')}), годовая экономия "
+                             f"{rub(row.get('would_save_year'))}")
+            for row in benefits.get("not_applied") or []:
+                lines.append(f"- **{row['code']}** · {row['asset']}: НЕ применена — {row['why']}; "
+                             f"налог без льготы, справочно экономия за год "
+                             f"{rub(row.get('would_save_year'))}, "
+                             f"по авансам {rub(row.get('would_save_advances'))}")
         totals = report.get("totals") or {}
         lines.append(f"Регион ставок: {(report.get('rates') or {}).get('region')} · "
                      f"среднегодовая {(report.get('rates') or {}).get('average')} % · "
