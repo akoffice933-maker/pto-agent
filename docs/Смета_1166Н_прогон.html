@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Прогон сметы 1166/Н — проверка арифметики, кодов и цен</title>
+<style>
+  :root{--ink:#14181f;--mut:#5b6472;--line:#dde2ea;--bg:#f6f8fb;--card:#fff;
+        --ok:#0a7d4f;--warn:#8a5a00;--bad:#b3261e;--accent:#1f5fa8}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:16px/1.55 -apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
+  .wrap{max-width:1080px;margin:0 auto;padding:28px 20px 80px}
+  h1{font-size:28px;line-height:1.22;margin:0 0 6px}
+  .sub{color:var(--mut);margin:0 0 20px}
+  h2{font-size:20px;margin:32px 0 10px;padding-top:14px;border-top:1px solid var(--line)}
+  h3{font-size:16px;margin:18px 0 8px}
+  p{margin:9px 0}
+  code{background:#eef1f6;padding:1px 5px;border-radius:4px;font-size:13.5px}
+  pre{background:#111820;color:#dbe6f0;padding:12px 14px;border-radius:9px;overflow-x:auto;font-size:13px}
+  table{border-collapse:collapse;width:100%;margin:12px 0;background:var(--card);
+        border-radius:9px;overflow:hidden;font-size:14.5px}
+  th,td{border-bottom:1px solid var(--line);padding:9px 11px;text-align:left;vertical-align:top}
+  th{background:#eef2f7;font-weight:600}
+  tr:last-child td{border-bottom:none}
+  .num{font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+  .ok{color:var(--ok);font-weight:600}
+  .warn{color:var(--warn);font-weight:600}
+  .bad{color:var(--bad);font-weight:600}
+  .kpi{display:flex;flex-wrap:wrap;gap:12px;margin:16px 0}
+  .kpi div{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:11px 15px;min-width:148px}
+  .kpi b{display:block;font-size:21px;line-height:1.2}
+  .kpi span{color:var(--mut);font-size:13px}
+  .note{background:#fff8e6;border-left:4px solid #e0a800;padding:11px 14px;border-radius:0 8px 8px 0;margin:14px 0;font-size:15px}
+  .bad-note{background:#fdeceb;border-left:4px solid var(--bad);padding:11px 14px;border-radius:0 8px 8px 0;margin:14px 0;font-size:15px}
+  .ok-note{background:#e9f7f0;border-left:4px solid var(--ok);padding:11px 14px;border-radius:0 8px 8px 0;margin:14px 0;font-size:15px}
+  .small{font-size:13.5px;color:var(--mut)}
+  ul,ol{margin:8px 0 8px 22px;padding:0}
+  li{margin:5px 0}
+  footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--mut);font-size:13.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Прогон сметы № 1166/Н — ремонт эл. проводки 2-го этажа</h1>
+<p class="sub">ДО МОУ «Дубровская СОШ», Ленинградская область. Файл: АРОС-Лидер 6.3.2, ФСНБ-2022 доп. №15,
+цены III кв. 2025, ресурсно-индексный метод. Проверка машинная: 47 позиций разобраны из PDF,
+арифметика и коды сверены с базой ФГИС ЦС. Ни одна цифра не вводилась вручную.</p>
+
+<div class="kpi">
+  <div><b class="num">924 622,47 ₽</b><span>сметная стоимость в документе</span></div>
+  <div><b class="num">47</b><span>позиций разобрано</span></div>
+  <div><b class="num">4</b><span>раздела, все сошлись</span></div>
+  <div><b class="num">11 / 11</b><span>материалов найдено в ФСБЦ-2022</span></div>
+</div>
+
+<h2>Главное</h2>
+<div class="ok-note"><b>Арифметика сходится полностью.</b> Сумма позиций каждого раздела совпадает
+с «Итого по разделу», а сумма разделов — с «ВСЕГО ПО СМЕТЕ»: 924 622,47 ₽, расхождение 0,00 ₽
+по всем четырём разделам и по итогу.</div>
+<div class="note"><b>Найдено, что важно знать заказчику.</b> В этой смете колонка «Прямые затраты»
+<b>не включает стоимость материалов по норме</b>, а колонка «Всего» включает. Поэтому «Всего» больше
+суммы ПЗ + НР + СП на <b>381 922,47 ₽</b> — это материалы, заложенные внутри расценок. Само по себе
+это не ошибка, но при сверке с актом КС-2 надо сравнивать именно колонку «Всего», иначе объём
+материалов потеряется.</div>
+<div class="note"><b>Цены ресурсов пересчитаны с разными коэффициентами.</b> По 14 материальным
+строкам восстановлен коэффициент «цена в смете ÷ база ФСБЦ-2022»: кабель — 1,12, кабель-каналы —
+1,22, труба стальная — 1,08, провод ПуГВ — 1,20, автоматы — 1,16, распаечные коробки — 0,94.
+Это нормально для ресурсно-индексного метода, но означает: <b>единого индекса ко всей смете
+применить нельзя</b>, каждый ресурс индексируется по своей группе.</div>
+
+<h2>1. Что проверено</h2>
+<table>
+<tr><th>проверка</th><th>итог</th><th>подробности</th></tr>
+<tr><td>Арифметика разделов 1–4</td><td class="ok">сошлось</td>
+    <td>83 476,16 / 756 747,87 / 82 892,90 / 1 505,54 ₽ — Δ 0,00 в каждом</td></tr>
+<tr><td>Арифметика итога</td><td class="ok">сошлось</td>
+    <td>924 622,47 против «ВСЕГО ПО СМЕТЕ» — Δ 0,00</td></tr>
+<tr><td>Построчно: Всего = ПЗ + НР + СП + материалы</td><td class="ok">сошлось</td>
+    <td>31 строка работ: отрицательных остатков нет; у 10 строк материалов в норме нет (остаток 0).
+        Остаток в сумме 381 922,47 ₽ — это материалы внутри расценок</td></tr>
+<tr><td>Коды ресурсов в ФСБЦ-2022</td><td class="ok">11 из 11</td>
+    <td>все коды материалов и оборудования есть в базе ФГИС ЦС, наименования и единицы совпадают</td></tr>
+<tr><td>Цены ресурсов к ФСБЦ-2022</td><td class="warn">проверено</td>
+    <td>14 строк, коэффициенты от 0,94 до 1,22 — группируются по видам ресурсов (см. ниже)</td></tr>
+<tr><td>Сметные шифры ГЭСН/ФЕР</td><td class="warn">3 из 28</td>
+    <td>в базе знаний только ФЕР-2020, ГЭСН в неё не загружались. Совпали 3 шифра, остальные
+        25 — «не проверено», а не «ошибка»</td></tr>
+<tr><td>Ставки НР и СП</td><td class="warn">не проверено</td>
+    <td>восстановлено от прямых затрат: НР 92,8 %, СП 48,6 %. База начисления — фонд оплаты труда,
+        которого в PDF нет. Норматив по виду работ к проверке не подключён</td></tr>
+</table>
+
+<h2>2. Разделы</h2>
+<table>
+<tr><th>раздел</th><th class="num">позиций</th><th class="num">итог по документу, ₽</th><th>сверка</th></tr>
+<tr><td>1. Демонтаж электропроводки</td><td class="num">12</td><td class="num">83 476,16</td><td class="ok">сошлось</td></tr>
+<tr><td>2. Электромонтажные работы</td><td class="num">27</td><td class="num">756 747,87</td><td class="ok">сошлось</td></tr>
+<tr><td>3. Прочие работы</td><td class="num">6</td><td class="num">82 892,90</td><td class="ok">сошлось</td></tr>
+<tr><td>4. Вывоз мусора</td><td class="num">2</td><td class="num">1 505,54</td><td class="ok">сошлось</td></tr>
+<tr><td><b>Всего по смете</b></td><td class="num">47</td><td class="num"><b>924 622,47</b></td><td class="ok">сошлось</td></tr>
+</table>
+<p class="small">Структура по документу: прямые затраты 642 277,59 ₽, НР 182 112,49 ₽,
+СП 95 306,05 ₽. По видам работ: строительные 202 321,30 ₽, монтажные 713 952,19 ₽,
+оборудование 4 926,34 ₽, прочие затраты 3 422,64 ₽. ПНР «вхолостую» 2 566,98 ₽,
+«под нагрузкой» 855,66 ₽.</p>
+
+<h2>3. Цены ресурсов против базы ФСБЦ-2022</h2>
+<p class="small">База — открытые данные ФГИС ЦС (ФСБЦ-2022, 45 847 ресурсов) в базисном уровне цен.
+Коэффициент = цена в смете ÷ (база × количество).</p>
+<table>
+<tr><th>код</th><th>ресурс</th><th class="num">кол-во</th><th class="num">в смете, ₽</th>
+    <th class="num">база × кол-во</th><th class="num">коэф.</th></tr>
+<tr><td>21.1.06.09-0151</td><td>Кабель ВВГнг(A)-LS 3×1,5</td><td class="num">0,3264</td><td class="num">17 199,48</td><td class="num">15 356,67</td><td class="num">1,120</td></tr>
+<tr><td>21.1.06.09-0152</td><td>Кабель ВВГнг(A)-LS 3×2,5</td><td class="num">0,1632</td><td class="num">13 261,24</td><td class="num">11 840,40</td><td class="num">1,120</td></tr>
+<tr><td>21.1.06.09-0153</td><td>Кабель ВВГнг(A)-LS 3×4</td><td class="num">0,0816</td><td class="num">10 278,11</td><td class="num">9 176,88</td><td class="num">1,120</td></tr>
+<tr><td>20.2.05.04-0057</td><td>Кабель-канал ПВХ 25×25 мм</td><td class="num">0,9792</td><td class="num">5 967,76</td><td class="num">4 891,61</td><td class="num">1,220</td></tr>
+<tr><td>20.2.05.04-0061</td><td>Кабель-канал ПВХ 40×25 мм</td><td class="num">0,204</td><td class="num">1 764,53</td><td class="num">1 446,33</td><td class="num">1,220</td></tr>
+<tr><td>21.2.03.05-0068</td><td>Провод ПуГВ 1×4</td><td class="num">0,0592</td><td class="num">2 181,97</td><td class="num">1 819,89</td><td class="num">1,199</td></tr>
+<tr><td>62.1.01.09-1101</td><td>Автоматический выключатель 1P 16А</td><td class="num">20</td><td class="num">2 335,00</td><td class="num">2 012,80</td><td class="num">1,160</td></tr>
+<tr><td>62.1.05.03-1641</td><td>УЗО 2P 25А 30мА</td><td class="num">3</td><td class="num">2 591,34</td><td class="num">2 421,84</td><td class="num">1,070</td></tr>
+<tr><td>23.3.05.02-1410</td><td>Труба стальная бесшовная Ø32×2,8</td><td class="num">3,09</td><td class="num">1 099,67</td><td class="num">1 018,22</td><td class="num">1,080</td></tr>
+<tr><td>20.5.02.07-0003</td><td>Коробка распаечная 70×70×40</td><td class="num">16</td><td class="num">1 194,40</td><td class="num">1 270,72</td><td class="num">0,940</td></tr>
+<tr><td>20.5.02.04-0001</td><td>Коробка ответвительная 100×100×50</td><td class="num">6</td><td class="num">556,02</td><td class="num">591,54</td><td class="num">0,940</td></tr>
+</table>
+<p class="small">Три строки кабеля 3×1,5 и 3×2,5 во втором блоке (позиции 28 и 30) дают 1,119 —
+это округление количества (0,049 вместо 0,04896), не расхождение.</p>
+
+<h2>4. Что осталось непроверенным — и почему</h2>
+<div class="bad-note">
+<ol style="margin:0 0 0 20px">
+  <li><b>Ставки НР и СП по нормативам.</b> В PDF нет фонда оплаты труда по каждой норме, а НР и СП
+      начисляются именно на него. Восстановленные от ПЗ 92,8 % и 48,6 % — не норматив, а следствие.
+      Чтобы проверить по-настоящему, нужен либо файл АРОС в машиночитаемом виде, либо нормативы
+      НР/СП по видам работ в базе.</li>
+  <li><b>Объёмы работ против дефектной ведомости.</b> Основание сметы — дефектная ведомость, её в
+      комплекте нет. Без неё нельзя сказать, соответствует ли количество (например, 326,4 м кабеля 3×1,5)
+      фактическому объёму.</li>
+  <li><b>25 шифров ГЭСН из 28.</b> В базе знаний только ФЕР-2020; ГЭСН (в т.ч. ГЭСНр, ГЭСНм, ГЭСНп)
+      не загружались, поэтому «не найдено» здесь означает «не с чем сверить», а не «ошибка в шифре».</li>
+  <li><b>Индекс Минстроя к смете не применён.</b> В документе указано письмо от 22.08.2025
+      № 49743-АЛ/09 (III кв. 2025). Проверить, что заложенные коэффициенты соответствуют этому
+      письму, можно только по самим индексам для Ленинградской области — в разобранной базе индексов
+      пока III квартал 2026, за 2025 год письма не скачаны.</li>
+  <li><b>Оборудование 4 926,34 ₽ не разложено по позициям.</b> В смете эта сумма есть в итогах по
+      видам работ, но отдельными строками в разделах не выделена — сверить нечем.</li>
+</ol>
+</div>
+
+<h2>5. Что сделать дальше</h2>
+<ol>
+  <li>Запросить у сметчика файл АРОС (или XML/Excel-выгрузку) — тогда проверятся ФОТ, НР, СП и
+      нормативы по видам работ, а не только суммы.</li>
+  <li>Запросить дефектную ведомость — сверить объёмы до подписания.</li>
+  <li>Скачать письма Минстроя за III кв. 2025 (№ 49743-АЛ/09) и сверить восстановленные
+      коэффициенты 1,12 / 1,22 / 1,08 / 1,20 / 1,16 / 0,94 с официальными индексами
+      для Ленинградской области.</li>
+  <li>При сверке КС-2 брать колонку «Всего», а не «Прямые затраты»: материалы 381 922,47 ₽
+      сидят внутри «Всего».</li>
+</ol>
+
+<footer>
+Прогон выполнен скриптом <code>scripts/check_smeta_pdf.py</code>; машиночитаемые результаты —
+<code>out/smeta_check/smeta_parsed.json</code> и <code>smeta_check.json</code>.
+Проверено: 47 позиций, 4 раздела, 11 кодов ФСБЦ, 28 шифров норм. Дата: 18.11.2026.
+</footer>
+
+</div>
+</body>
+</html>
