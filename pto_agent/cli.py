@@ -30,6 +30,10 @@ from .takeoff import (build_draft as build_takeoff_draft, confirm as confirm_tak
 from .materials import (export_materials_xlsx, materials_to_markdown, orders_from_decision,
                         read_act_materials, read_receipts, reconcile as reconcile_materials)
 from .prices import DEFAULT_INDEX, import_prices, load_index, lookup, price_history, prices_to_markdown
+from . import indices as cost_indices
+from . import ter as ter_registry
+
+
 from .procurement import (build_request, compare_quotes, decide, export_comparison_xlsx,
                           load_quotes, procurement_to_markdown, request_from_estimate)
 from .reconcile import reconcile
@@ -394,6 +398,30 @@ def cmd_prices(args) -> int:
 
     print("неизвестное действие", file=sys.stderr)
     return 2
+
+
+# ─────────────────────────── реестр ТЕР ───────────────────────────
+def cmd_ter(args) -> int:
+    """Реестр территориальных нормативов. Расценок нет — и это написано в ответе."""
+    data = ter_registry.registry(args.dir)
+    if args.region:
+        result = ter_registry.for_region(args.region, data)
+        print(ter_registry.registry_to_markdown(result, data), end="")
+        return 0 if result.get("status") == "found" else 1
+    print(ter_registry.registry_to_markdown(None, data), end="")
+    return 0 if data.get("status") == "ok" else 1
+
+
+# ─────────────────────────── индексы Минстроя ───────────────────────────
+def cmd_indices(args) -> int:
+    """Индекс по субъекту — из письма Минстроя, с указанием страницы PDF."""
+    data = cost_indices.load(args.dir)
+    if args.subject:
+        result = cost_indices.index_for(args.subject, data, quarter=args.quarter)
+        print(cost_indices.indices_to_markdown(result, data), end="")
+        return 0 if result.get("status") == "found" else 1
+    print(cost_indices.indices_to_markdown(None, data), end="")
+    return 0 if data.get("status") == "ok" else 1
 
 
 # ─────────────────────────── закупка материалов ───────────────────────────
@@ -3366,6 +3394,17 @@ def main(argv=None):
     ph.set_defaults(func=cmd_prices)
     pls = prsub.add_parser("list", help="список версий цен")
     pls.set_defaults(func=cmd_prices)
+
+    tr = sub.add_parser("ter", help="ТЕР: реестр сборников по региону (расценок в API нет)")
+    tr.add_argument("--dir", default="data/ter")
+    tr.add_argument("--region", default=None, help="субъект РФ, например «Краснодарский край»")
+    tr.set_defaults(func=cmd_ter)
+
+    ix = sub.add_parser("indices", help="индексы Минстроя: значение по субъекту с источником")
+    ix.add_argument("--dir", default="data/indices")
+    ix.add_argument("--subject", default=None, help="субъект РФ, например «Краснодарский край»")
+    ix.add_argument("--quarter", default=None, help="квартал, например «III кв. 2026»")
+    ix.set_defaults(func=cmd_indices)
 
     pc = sub.add_parser("procure", help="закупка материалов: заявка из сметы, сравнение КП, решение")
     pc.add_argument("--out", default="out/procurement")
