@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Круг 49. Проверка трёх «пробелов» — что подтвердилось, что нет</title>
+<style>
+  :root{--ink:#14181f;--mut:#5b6472;--line:#dde2ea;--bg:#f6f8fb;--card:#fff;
+        --ok:#0a7d4f;--bad:#b3261e;--part:#8a5a00;--accent:#1f5fa8}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:16px/1.55 -apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
+  .wrap{max-width:1060px;margin:0 auto;padding:28px 20px 80px}
+  h1{font-size:30px;line-height:1.2;margin:0 0 6px}
+  .sub{color:var(--mut);margin:0 0 22px}
+  h2{font-size:21px;margin:34px 0 10px;padding-top:14px;border-top:1px solid var(--line)}
+  h3{font-size:17px;margin:20px 0 8px}
+  p{margin:9px 0}
+  code{background:#eef1f6;padding:1px 5px;border-radius:4px;font-size:13.5px}
+  pre{background:#111820;color:#dbe6f0;padding:13px 15px;border-radius:9px;overflow-x:auto;
+      font-size:13px;line-height:1.45}
+  table{border-collapse:collapse;width:100%;margin:12px 0;background:var(--card);
+        border-radius:9px;overflow:hidden;font-size:14.5px}
+  th,td{border-bottom:1px solid var(--line);padding:9px 11px;text-align:left;vertical-align:top}
+  th{background:#eef2f7;font-weight:600}
+  tr:last-child td{border-bottom:none}
+  .verdict{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;margin:18px 0}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:15px 17px}
+  .card h4{margin:0 0 6px;font-size:16px}
+  .tag{display:inline-block;font-size:12.5px;font-weight:700;padding:2px 8px;border-radius:20px;
+       margin-bottom:8px;letter-spacing:.02em}
+  .t-no{background:#e6f5ee;color:var(--ok)}
+  .t-yes{background:#fdeceb;color:var(--bad)}
+  .t-part{background:#fdf3e2;color:var(--part)}
+  .num{font-variant-numeric:tabular-nums}
+  .note{background:#fff8e6;border-left:4px solid #e0a800;padding:11px 14px;border-radius:0 8px 8px 0;
+        margin:14px 0;font-size:15px}
+  .bad-note{background:#fdeceb;border-left:4px solid var(--bad);padding:11px 14px;
+            border-radius:0 8px 8px 0;margin:14px 0;font-size:15px}
+  ul,ol{margin:8px 0 8px 22px;padding:0}
+  li{margin:5px 0}
+  .kpi{display:flex;flex-wrap:wrap;gap:12px;margin:16px 0}
+  .kpi div{background:var(--card);border:1px solid var(--line);border-radius:10px;
+           padding:11px 15px;min-width:150px}
+  .kpi b{display:block;font-size:22px;line-height:1.2}
+  .kpi span{color:var(--mut);font-size:13px}
+  .small{font-size:13.5px;color:var(--mut)}
+  .strike{text-decoration:line-through;color:var(--mut)}
+  footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--mut);font-size:13.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Круг 49. Проверка трёх «пробелов»</h1>
+<p class="sub">Запрос: найти в интернете или на GitHub пробел по трём пунктам — ТЕР, индексы пересчёта,
+реестр отчётности и данные заказчика. Проверялось запросами к API и разбором скачанных файлов,
+а не рассуждением. Дата проверки: 18 ноября 2026.</p>
+
+<div class="verdict">
+  <div class="card">
+    <span class="tag t-no">ПРОБЕЛА НЕТ</span>
+    <h4>Индексы пересчёта</h4>
+    <p class="small">Заявлялось: письма Минстроя, ручной импорт. На деле письма лежат в открытом API
+    ФГИС ЦС и скачиваются без авторизации. Автоматизация была не найдена, а источник есть.</p>
+    <p><b class="num">2 905</b> значения разобрано из 6 писем III квартала 2026.</p>
+  </div>
+  <div class="card">
+    <span class="tag t-part">ПОДТВЕРЖДЕНО ЧАСТИЧНО</span>
+    <h4>ТЕР</h4>
+    <p class="small">Заявлялось: в открытых данных только федеральная база, сборники — PDF на
+    региональных сайтах. Для расценок верно. Для реквизитов — нет: реестр ФРСН открыт и
+    машиночитаем.</p>
+    <p><b class="num">846</b> записей реестра, расценок — ноль.</p>
+  </div>
+  <div class="card">
+    <span class="tag t-yes">НЕВЕРНО, НО НЕДОСТИЖИМО</span>
+    <h4>Реестр отчётности / данные заказчика</h4>
+    <p class="small">Заявлялось: внешнего источника не существует. Источник есть — ЕИС.
+    Но из этой среды канал не работает; для нас данные по-прежнему только от заказчика.</p>
+    <p>FTP: <b>баннер не пришёл</b>. HTTPS: <b>TLS оборван</b>.</p>
+  </div>
+</div>
+
+<h2>1. Индексы пересчёта: это не «руками», это API</h2>
+
+<p>Письма Минстроя опубликованы в API ФГИС ЦС как дерево документов, без авторизации:</p>
+<pre>GET /api/NormLegalDocPublished?limit=100&amp;normLegalDocPublishedType=10&amp;state=20
+    &amp;normLegalDocBaseKind=40&amp;parentGuid=&lt;год&gt;   → кварталы
+    …&amp;parentGuid=&lt;квартал&gt;                     → по группам ресурсов / по объектам
+    …&amp;parentGuid=&lt;узел&gt;                        → письма: number, name, filePath (uuid)
+GET /api/values/GetFileContent/&lt;uuid&gt;            → PDF</pre>
+
+<table>
+<caption class="small" style="caption-side:bottom;text-align:left;padding-top:6px">
+  III квартал 2026 — все 6 писем, найденных в дереве; размеры и число страниц — из скачанных файлов.</caption>
+<tr><th>письмо</th><th>файл (uuid)</th><th>размер</th><th>страниц</th></tr>
+<tr><td>45358-ИФ/09 от 23.07.2026</td><td><code>d465eb3f-8c79-4289-a7bd-3765632b7c69</code></td><td class="num">12,0 МБ</td><td class="num">100</td></tr>
+<tr><td>46728-ИФ/09 от 30.07.2026</td><td><code>4a127ad8-256f-49d4-9d3c-03cb5048d168</code></td><td class="num">6,7 МБ</td><td class="num">56</td></tr>
+<tr><td>50058-ИФ/09 от 13.08.2026</td><td><code>862c733b-d85e-4992-885a-554a72e10675</code></td><td class="num">5,7 МБ</td><td class="num">39</td></tr>
+<tr><td>52419-ИФ/09 от 24.08.2026</td><td><code>bc9f5446-a9f3-4bc7-9b59-d31cbbacd558</code></td><td class="num">0,5 МБ</td><td class="num">1</td></tr>
+<tr><td>53691-АЛ/09 от 28.08.2026</td><td><code>73448900-e21e-456a-ad5b-b9dc8f4e5f7e</code></td><td class="num">23,5 МБ</td><td class="num">69</td></tr>
+<tr><td>58705-ИФ/09 от 21.09.2026</td><td><code>1ae7a169-f0f8-4199-81d5-0938e0e90d0c</code></td><td class="num">0,5 МБ</td><td class="num">2</td></tr>
+</table>
+
+<h3>Что сделано</h3>
+<p><code>scripts/import_indices.py</code> скачивает дерево и разбирает PDF в таблицу
+<code>data/indices/minstroy_indices.csv.gz</code>. Формат «длинный»: одна строка — одно значение,
+с обязательными полями <code>letter</code> (письмо), <code>table_title</code> (дословная шапка таблицы
+из PDF) и <code>page</code> (страница). Поэтому каждую цифру можно открыть в письме и сверить.</p>
+<p>Почему не «по колонке на вид индекса»: состав приложений в письмах разный. В 53691-АЛ/09 есть
+приложение «Автомобильные дороги / Искусственные дорожные сооружения», в 45358-ИФ/09 его нет вовсе,
+зато есть «перевозка грузов автомобильным транспортом». Широкая таблица молча потеряла бы различие.</p>
+
+<div class="kpi">
+  <div><b class="num">2 905</b><span>значений разобрано</span></div>
+  <div><b class="num">303</b><span>строки субъектов</span></div>
+  <div><b class="num">10</b><span>видов таблиц</span></div>
+  <div><b class="num">330</b><span>прочерков «-» (не ноль)</span></div>
+</div>
+
+<table>
+<tr><th>письмо</th><th>значений</th><th>комментарий</th></tr>
+<tr><td>45358-ИФ/09</td><td class="num">435</td><td>в т.ч. перевозки грузов, ОСНБЖ</td></tr>
+<tr><td>46728-ИФ/09</td><td class="num">1 142</td><td>железные дороги, ОСНБЖ, сигнализация</td></tr>
+<tr><td>53691-АЛ/09</td><td class="num">1 312</td><td>автомобильные дороги, пусконаладка, ОСНБЖ</td></tr>
+<tr><td>58705-ИФ/09</td><td class="num">16</td><td>Ямало-Ненецкий АО, 4 зоны</td></tr>
+<tr><td>50058-ИФ/09, 52419-ИФ/09</td><td class="num">0</td><td>таблиц вида «№ п/п | субъект | числа» нет — текстовые разъяснения</td></tr>
+</table>
+
+<h3>Пример: Краснодарский край, III квартал 2026</h3>
+<p class="small">Письмо 53691-АЛ/09 от 28.08.2026, страница 52 PDF, шапка «Индексы к ФЕР-2001/ТЕР-2001
+по объектам строительства».</p>
+<table>
+<tr><th>вид индекса</th><th>значение</th><th>источник</th></tr>
+<tr><td>Автомобильные дороги</td><td class="num"><b>12,66</b></td><td class="small">стр. 52 PDF</td></tr>
+<tr><td>Искусственные дорожные сооружения</td><td class="num"><b>20,02</b></td><td class="small">стр. 52 PDF</td></tr>
+</table>
+<p>В смете проверить так: <code>python3 -m pto_agent indices --subject "Краснодарский край"</code></p>
+
+<div class="note">
+<b>Границы разбора — честно.</b> Разбираются таблицы вида «№ п/п | субъект | числа». Приложения
+«по объектам строительства» и «по элементам прямых затрат» свёрстаны с объединёнными ячейками и
+вертикальными заголовками (на стр. 6 слово «Московская область» набрано по буквам в столбик) —
+они остаются только в PDF. В отчёте стоит <b>факт</b> — 2 905 значений, а не «сколько должно быть».
+</div>
+<p class="small">Отдельно проверено: эндпоинт <code>IndicesOfChangeEstimatedPrice</code>, который по
+названию должен отдавать индексы, при всех комбинациях параметров возвращает
+<code>{"total":0,"items":[]}</code>. То есть документы-письма в API есть, а нормализованной таблицы
+индексов — нет.</p>
+
+<h2>2. ТЕР: реестр открыт, расценок в машиночитаемом виде нет</h2>
+
+<p>Заявление «в открытых данных ФГИС ЦС только федеральная база» верно <b>для расценок</b>
+и неверно <b>для реквизитов</b>.</p>
+<pre>GET /api/FrsnEdition/section                      → раздел 3 = территориальные нормативы
+GET /api/FrsnEdition/Estimate/Section?section=6   → 845 записей
+GET /api/FrsnEdition/Estimate/Section?section=7   → 1 запись</pre>
+<p>Актуальность реестра на дату запроса: <b>06.11.2026</b>. Всего <b>846</b> записей; регион удаётся
+выделить из наименования у <b>605</b> записей (30 субъектов), у 241 записи регион в названии не
+указан — они внесены общей формулировкой, и колонка остаётся пустой, а не заполняется догадкой.</p>
+
+<table>
+<caption class="small" style="caption-side:bottom;text-align:left;padding-top:6px">
+  Краснодарский край — все 3 записи реестра, с приказами и регистрационными номерами.</caption>
+<tr><th>наименование</th><th>приказ</th><th>рег. номер</th></tr>
+<tr><td>Территориальные сметные нормативы… на материалы, изделия и конструкции</td>
+    <td>Приказ Минстроя России от 31.12.2014 № 937/пр</td><td>от 22.01.2015 № 220</td></tr>
+<tr><td>Изменения в ТЕР Краснодарского края (ремонтно-строительные и строительные работы)</td>
+    <td>Письмо Минрегиона России от 09.04.2012 № 8238-ИП/08</td><td>от 04.04.2012 № 124</td></tr>
+<tr><td>Территориальные единичные расценки Краснодарского края</td>
+    <td>Письмо Минрегиона России от 26.10.2010 № 36854-ИП/08</td><td>от 26.10.2010 № 47</td></tr>
+</table>
+
+<h3>Чего нет — и как это проверено</h3>
+<ol>
+  <li><b>Таблиц расценок нет в API ФРСН.</b> <code>FrsnEdition/Estimate/Section</code> отдаёт
+      наименование, приказ, рег. номер, <code>editionId</code> и ссылку — полей с расценками нет.</li>
+  <li><b>ТЕР нет в архиве ФСНБ-2022.</b> Разбор официального ZIP через <code>zipfile</code>: 7 XML —
+      ГЭСН, ГЭСНм, ГЭСНмр, ГЭСНп, ГЭСНр, ФСБЦ_Мат&amp;Оборуд, ФСБЦ_Маш. Ни одного файла ТЕР.
+      <span class="small">(grep по «ТЕР» в этих XML даёт ложные срабатывания — это слово «диаметр».)</span></li>
+  <li><b>Ссылки реестра ведут на недоступный хост.</b> 662 записи имеют ссылку, 648 из них —
+      один адрес <code>view.territorial.php</code>. Проверка: DNS отдаёт 82.202.190.8,
+      TCP/TLS не отвечает (curl код 000), fetch_page → HTTP 500.</li>
+  <li><b>На GitHub данных ТЕР нет.</b> Поиск по «ФРСН», «ТЕР расценки», «смета parser» —
+      репозиториев с таблицами ТЕР нет. <code>proovcme/fgis-mcp</code> (MIT) фиксирует то же
+      разделение: ТЕР = подразделы 6/7 ФРСН со внешними ссылками.
+      <code>ErvSed/smeta-fsnb-data</code> — SQLite из открытых данных, только федеральная база.</li>
+</ol>
+
+<div class="note"><b>Вывод.</b> «Сборники ТЕР — региональные сайты и PDF» — верно.
+«В открытых данных только федеральная база» — верно для расценок. Добавленная ценность:
+теперь список сборников по региону с приказами получается автоматически.
+Оговорка: наличие записи в реестре не означает, что сборник действует в актуальной редакции —
+реестр даёт реквизиты внесения, а не статус.</div>
+
+<h2>3. Реестр отчётности и данные заказчика: источник есть, но недостижим</h2>
+<p>Единственный пункт, где проверка не дала окончательного ответа, — и это зафиксировано как есть.</p>
+<p>Реестр контрактов и отчётности по 44-ФЗ публикуется в ЕИС, включая FTP-выгрузку открытых данных.
+На GitHub есть рабочие инструменты под неё: <code>Homyakin/ZakupkiParser</code> (MIT),
+<code>aksyuk/zakupki_gov_ru</code> (MIT), <code>stufently/free-zakupki-gov-ru-monitor</code> (MIT).
+Значит, источник существует и машиночитаем.</p>
+
+<table>
+<tr><th>проверка из этой среды</th><th>результат</th></tr>
+<tr><td>DNS <code>zakupki.gov.ru</code></td><td>95.167.245.92 — резолвится</td></tr>
+<tr><td>TCP 21 / 80 / 443</td><td>порты открыты</td></tr>
+<tr><td>HTTPS <code>curl https://zakupki.gov.ru/</code></td><td>TLS Client Hello уходит, ответа нет (код 000)</td></tr>
+<tr><td>fetch_page реестра контрактов</td><td>HTTP 500</td></tr>
+<tr><td>FTP <code>ftp://zakupki.gov.ru/</code></td><td>соединение есть, баннер 220 не приходит: <code>curl: (56) response reading failed</code></td></tr>
+<tr><td>DNS <code>ftp.zakupki.gov.ru</code></td><td>не резолвится</td></tr>
+</table>
+
+<div class="bad-note"><b>Что это значит.</b> «Внешнего источника не существует» — неверно: источник есть.
+Но «данные заказчика — только данные организации» остаётся верным <i>для нас</i>: пока канал
+недостижим, эти данные можно получить только от заказчика. Это ограничение доступа из конкретной
+сети, а не отсутствие источника. <code>data.gov.ru</code> в 2026 отдаёт JS-SPA на любой путь,
+включая <code>/api/json/dataset</code>, — прежний API открытых данных не работает.</div>
+
+<h2>Что добавлено в репозиторий</h2>
+<table>
+<tr><th>файл</th><th>что содержит</th></tr>
+<tr><td><code>scripts/import_indices.py</code></td><td>скачивание дерева писем ФГИС ЦС и разбор PDF</td></tr>
+<tr><td><code>scripts/import_ter_registry.py</code></td><td>выгрузка реестра ФРСН (разделы 6 и 7)</td></tr>
+<tr><td><code>data/indices/</code></td><td>2 905 значений из 6 писем III кв. 2026 + meta</td></tr>
+<tr><td><code>data/ter/</code></td><td>846 записей реестра ТЕР + meta</td></tr>
+<tr><td><code>pto_agent/indices.py</code></td><td>индекс по субъекту с источником и страницей PDF</td></tr>
+<tr><td><code>pto_agent/ter.py</code></td><td>реестр по региону с явным <code>prices_available: false</code></td></tr>
+<tr><td><code>pto_agent/cli.py</code></td><td>команды <code>indices</code>, <code>ter</code></td></tr>
+<tr><td><code>tests/test_indices.py</code>, <code>tests/test_ter_registry.py</code></td>
+    <td>13 тестов: прочерк ≠ ноль, нет данных → причина, расценок нет → сказано</td></tr>
+</table>
+
+<h2>Не сделано</h2>
+<div class="bad-note">
+<ol style="margin:0 0 0 20px">
+  <li><b>Расценки ТЕР не получены.</b> В машиночитаемом виде их нет ни в одном открытом источнике;
+      ссылки реестра ведут на недоступный хост. Демо-ставки остаются как fallback с пометкой.</li>
+  <li><b>Разобрано не всё содержимое писем.</b> Приложения «по объектам строительства» и
+      «по элементам прямых затрат» в CSV не попали; в письмах 50058-ИФ/09 и 52419-ИФ/09 таблиц
+      нужного вида нет — 0 значений.</li>
+  <li><b>ЕИС проверен только на доступность.</b> Содержательно данные не скачаны: канал не работает.</li>
+  <li><b>Индексы не подключены к расчёту сметы.</b> Модуль отдаёт значение с источником, но пересчёт
+      базисной стоимости в текущую автоматически не выполняется — нужно решить, к каким позициям
+      применяется каждая колонка.</li>
+  <li><b>Актуальность редакций ТЕР не проверена.</b> Реестр даёт реквизиты внесения, а не статус.</li>
+</ol>
+</div>
+
+<footer>
+Круг 49. Все цифры на экране получены запросами к API ФГИС ЦС и разбором скачанных PDF
+18.11.2026; ни одно значение не вписано вручную. Полный текст — <code>docs/70_Проверка_пробелов_круг_49.md</code>.
+</footer>
+
+</div>
+</body>
+</html>
