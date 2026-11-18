@@ -277,13 +277,25 @@ def test_cli_verify_norms_exit_code(tmp_path):
 
 
 def test_cli_verify_norms_pue_fragment_passes_with_note(tmp_path):
-    """ПУЭ 1.8.37 в базе фрагментом: код 0, но статус — «подтверждено фрагментом»."""
+    """ПУЭ 1.8.37 фрагментом: код 0, но статус — «подтверждено фрагментом».
+
+    С круга 48 ПУЭ загружен целиком, поэтому рабочая база даёт `verified`; сценарий
+    фрагмента проверяется на отдельном каталоге с одним фрагментарным документом.
+    """
+    norms_dir = tmp_path / "norms"
+    norms_dir.mkdir()
+    (norms_dir / "pue.md").write_text(
+        "---\ndesignation: ПУЭ, 7-е изд.\ntitle: ПУЭ (фрагмент)\nkind: ПУЭ\n"
+        "edition: 7-е изд.\nstatus: fragment\neffective_from: 2003-01-01\nversion: 1\n"
+        "source: тест\n---\n# ПУЭ (фрагмент)\n\n## 1.8.37\nЭлектрические аппараты, "
+        "вторичные цепи и электропроводки напряжением до 1 кВ испытываются в объеме, "
+        "предусмотренном настоящим параграфом.\n", encoding="utf-8")
     spec = tmp_path / "spec.json"
     spec.write_text(json.dumps({"norms": [{"doc": "ПУЭ, 7-е изд.", "clause": "1.8.37"}]},
                                ensure_ascii=False), encoding="utf-8")
     res = subprocess.run([sys.executable, "-m", "pto_agent", "asbuilt", "verify-norms",
-                          "--spec", str(spec)], capture_output=True, text=True,
-                         timeout=120, cwd=ROOT)
+                          "--spec", str(spec), "--norms-dir", str(norms_dir)],
+                         capture_output=True, text=True, timeout=120, cwd=ROOT)
     report = json.loads(res.stdout)
     assert report["results"][0]["status"] == "verified_partial"
     assert report["verified_partial"] == 1

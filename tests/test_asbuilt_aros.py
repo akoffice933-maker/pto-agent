@@ -147,16 +147,52 @@ def test_specs_carry_norms_with_clauses_and_mark_source(doc):
 
 
 # ───────────────────────────── нормативная база ─────────────────────────────
-def test_pue_fragment_is_reported_as_fragment_not_full_verification():
+def test_pue_full_text_is_verified_fully_and_missing_clause_is_reported():
+    """С круга 48 ПУЭ загружен целиком: п. 1.8.37 подтверждается полностью, а не «фрагментом».
+
+    Фрагментарный статус теперь проверяется отдельно (см. ниже) — на демо-базе, где
+    фрагмент реально остался, а не на рабочей базе, где документ закрыт полностью.
+    """
     report = verify_norms([{"doc": "ПУЭ, 7-е изд.", "clause": "1.8.37"},
                            {"doc": "ПУЭ, 7-е изд.", "clause": "1.8.999"},
                            {"doc": "СП 70.13330.2012", "clause": "5.3.3"}])
     statuses = {(r["doc"], r["clause"]): r["status"] for r in report["results"]}
-    assert statuses[("ПУЭ, 7-е изд.", "1.8.37")] == "verified_partial"
+    assert statuses[("ПУЭ, 7-е изд.", "1.8.37")] == "verified"
     assert statuses[("ПУЭ, 7-е изд.", "1.8.999")] == "clause_missing"
     assert statuses[("СП 70.13330.2012", "5.3.3")] == "verified"
+    assert report["verified"] == 2
+
+
+FRAGMENT_DOC = """---
+designation: ПУЭ, 7-е изд.
+title: ПУЭ, глава 1.8 (фрагмент)
+kind: ПУЭ
+edition: 7-е изд., глава 1.8
+status: fragment
+effective_from: 2003-01-01
+version: 1
+source: тест
+---
+# ПУЭ, глава 1.8 (фрагмент)
+
+## 1.8.37
+Электрические аппараты, вторичные цепи и электропроводки напряжением до 1 кВ испытываются
+в объеме, предусмотренном настоящим параграфом.
+"""
+
+
+def test_pue_fragment_alone_is_still_reported_as_partial(tmp_path):
+    """Если в базе только фрагмент, статус остаётся «подтверждено фрагментом».
+
+    Проверка идёт на отдельном каталоге: в рабочей базе ПУЭ с круга 48 загружен целиком,
+    и статус `fragment` там больше не встречается — это и есть предмет проверки.
+    """
+    (tmp_path / "pue_fragment.md").write_text(FRAGMENT_DOC, encoding="utf-8")
+    report = verify_norms([{"doc": "ПУЭ, 7-е изд.", "clause": "1.8.37"}],
+                          folder=tmp_path)
+    assert report["results"][0]["status"] == "verified_partial"
     assert report["verified_partial"] == 1
-    assert "фрагмент" in report["verdict"] or "фрагментами" in report["verdict"]
+    assert "фрагмент" in report["verdict"]
 
 
 def test_base_merges_working_and_demo_documents():

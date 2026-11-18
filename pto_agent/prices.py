@@ -38,6 +38,7 @@ COLUMN_ALIASES = {
     "дата": "date", "date": "date",
 }
 DEFAULT_INDEX = Path("data/prices/index.json")
+GZIP_VERSION_LIMIT = 5_000_000      # байт; версия тяжелее — пишется как .json.gz
 
 
 def _num(value) -> float | None:
@@ -61,9 +62,15 @@ def read_rows(path: str | Path) -> tuple[list[dict], list[str]]:
     elif path.suffix.lower() in {".csv", ".txt"}:
         with path.open(encoding="utf-8-sig", newline="") as f:
             rows = [row for row in csv.reader(f)]
+    elif path.suffix.lower() == ".gz":
+        # выгрузки ФСНБ весят десятки мегабайт: в репозиторий кладём .csv.gz,
+        # а читаем так же, как обычный csv — без ручного распаковывания
+        import gzip
+        with gzip.open(path, "rt", encoding="utf-8-sig", newline="") as f:
+            rows = [row for row in csv.reader(f)]
     else:
         raise ValueError(f"неизвестный формат выгрузки цен: {path.suffix} "
-                         f"(поддержаны xlsx и csv)")
+                         f"(поддержаны xlsx, csv и csv.gz)")
 
     header_index, mapping = None, {}
     for i, row in enumerate(rows[:10]):
@@ -126,6 +133,15 @@ def import_prices(path: str | Path, *, source: str, price_date: str, region: str
     body["digest"] = digest
     version_path = out / f"prices_{version_id}.json"
     version_path.write_text(json.dumps(body, ensure_ascii=False, indent=1), encoding="utf-8")
+    # Большая выгрузка (ФСНБ — десятки тысяч расценок) в репозитории хранится сжатой:
+    # 30 МБ JSON превращаются в 1,2 МБ gzip, и версия перестаёт «весить» в истории git.
+    if version_path.stat().st_size > GZIP_VERSION_LIMIT:
+        import gzip
+        packed = version_path.with_suffix(".json.gz")
+        with version_path.open("rb") as src, gzip.open(packed, "wb", compresslevel=9) as dst:
+            dst.write(src.read())
+        version_path.unlink()
+        version_path = packed
 
     index_path = out / "index.json"
     index = json.loads(index_path.read_text(encoding="utf-8")) if index_path.exists() else \
@@ -169,7 +185,11 @@ def load_version(version: dict | str, out_dir: str | Path = "data/prices") -> di
         if not match:
             raise KeyError(f"версия {version} не найдена в индексе")
         version = match
-    return json.loads((Path(out_dir) / version["file"]).read_text(encoding="utf-8"))
+    path = Path(out_dir) / version["file"]
+    if path.suffix == ".gz":
+        import gzip
+        return json.loads(gzip.decompress(path.read_bytes()).decode("utf-8"))
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def lookup(code: str = "", name: str = "", *, as_of: str | None = None,

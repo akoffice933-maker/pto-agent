@@ -60,10 +60,12 @@ def test_norm_absent_from_base_is_marked_unverified():
 
 def test_norm_clause_missing_but_document_present():
     """Документ в базе есть, пункта нет — отдельная формулировка, а не «проверено»."""
+    # 4.2.1 в ПУЭ-7 нет (глава 4.2 — про распределительные устройства до 1 кВ,
+    # нумерация до 4.2.120 и без вложенных), поэтому ссылка не подтверждается.
     draft = tk.build_tk_draft(work_type_id="elec",
-                              matrix=_matrix_with_norms(clause="4.2.1"))
+                              matrix=_matrix_with_norms(clause="4.2.999"))
     norm = draft["norms"][0]
-    assert norm["verified"] is False and "пункта 4.2.1" in norm["reason"]
+    assert norm["verified"] is False and "пункта 4.2.999" in norm["reason"]
 
 
 def test_no_norm_in_matrix_asks_for_them():
