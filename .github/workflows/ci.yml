@@ -81,6 +81,8 @@ jobs:
         run: python scripts/check_year.py
       - name: Годовая отчётность (баланс и ОФР по ФСБУ 4/2023 — актив = пассив, увязки, что не проведено)
         run: python scripts/check_statements.py
+      - name: Таблицы ТЗ (объёмы из PDF, расхождения цифрами, выгрузка знает раздел)
+        run: python scripts/check_tz_tables.py .github/tz/ТЗ_Адлер.pdf
       - name: Реестр опенсорса под этапы 6–7 (лицензии, покрытие задач, формы ФНС в данных)
         run: python scripts/check_tax_edo_oss.py
       - name: Коды видов операций (приказ № ММВ-7-3/136@, отменённые коды не заведены)

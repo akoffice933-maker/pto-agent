@@ -1512,7 +1512,8 @@ def cmd_takeoff(args) -> int:
               f"{totals['medium']} · низкая {totals['low']}) · «не оценено» "
               f"{totals['not_estimated']} · не разобрано {totals['unparsed']}")
         for check in report["checks"]:
-            mark = "✓" if check["result"] == "сходится" else "!"
+            # «не проверено» — это не расхождение: у такой проверки ok = None
+            mark = "·" if check.get("ok") is None else ("✓" if check.get("ok") else "!")
             print(f"  {mark} {check['name'][:70]}: {check['result']}")
         for item in report["not_estimated"]:
             print(f"  не оценено: {item['description'][:60]} — {item['why']}", file=sys.stderr)
