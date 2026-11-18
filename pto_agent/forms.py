@@ -357,6 +357,26 @@ def _base_row(**kwargs) -> dict:
             "note": kwargs.get("note", "")}
 
 
+def _period_label_for(period: str, req: dict | None = None) -> str:
+    """Подпись периода: сначала из реквизита шапки, затем из даты, иначе пусто.
+
+    Раньше сюда попадала дата конца периода («2026-11-30»), и `_month_label` её не
+    узнавал — бланк выходил с пустым «за 2026-11-30» и файлом «без_периода».
+    """
+    if req:
+        value = str((req.get("Отчётный период") or {}).get("value") or "").strip()
+        if value:
+            return value
+    text = (period or "").strip()
+    if not text:
+        return ""
+    if len(text) == 7 and text[4] == "-":
+        return _month_label(text)
+    if len(text) >= 10 and text[4] == "-" and text[7] == "-":     # ISO-дата → её месяц
+        return _month_label(text[:7])
+    return text
+
+
 def envelope(kind: str, *, period: str, req: dict, rows: list[dict], totals: dict,
              gaps: list[dict], warnings: list[str], sources: list[str]) -> dict:
     """Общая обёртка бланка: шапка, строки, итоги, запросы, оговорки."""
@@ -368,7 +388,7 @@ def envelope(kind: str, *, period: str, req: dict, rows: list[dict], totals: dic
         "title": spec["title"],
         "approved_by": spec["source"],
         "period": period,
-        "period_label": _month_label(period) if period else "",
+        "period_label": _period_label_for(period, req),
         "status": STATUS_DRAFT,
         "draft_notice": "ЧЕРНОВИК. Не подписано. Юридической силы не имеет.",
         "requisites": req,
@@ -524,9 +544,12 @@ def build_ks2(positions: list[dict], *, period_from: str, period_to: str,
     period = period_to or period_from
     req = requisites_dict or requisites(period=_month_label(period[:7]) if period else "")
     if not req.get("Отчётный период", {}).get("value"):
-        req = requisites(period=_month_label(period[:7]) if period else "",
-                         **{k: v["value"] for k, v in req.items() if v.get("value")
-                            and k != "Отчётный период"})
+        # период не задан — подставляем месяц, а остальные реквизиты переносим как есть.
+        # Раньше здесь русские ключи («Объект», «Договор») передавались как именованные
+        # аргументы requisites(), и КС-2 падала с TypeError, как только в шапке было
+        # заполнено хоть одно поле. Теперь переносим по явному соответствию.
+        req = _req_map({k: v["value"] for k, v in req.items() if v.get("value")},
+                       (period[:7] if period else ""))
     code = FORMS["ks2"]["code"]
     gaps = _gaps_from_requisites(req, code)
     warnings: list[str] = []
@@ -610,8 +633,10 @@ def build_ks2(positions: list[dict], *, period_from: str, period_to: str,
                      "ask": "проверить журнал работ и смету — возможно, объёмы не разнесены"})
 
     rate = _dec(vat_rate)
+    if rate is not None and rate > 1:
+        rate = rate / Decimal("100")      # сюда приходит «20», внутри считаем долей 0,2
     if rate is None:
-        rate = Decimal("20")
+        rate = Decimal("0.2")
         warnings.append("ставка НДС не задана — применена 20%; проверьте реквизит договора")
         gaps.append({"what": "ставка НДС", "why": "в данных нет ставки из договора",
                      "ask": "указать ставку НДС договора (20 %, 10 %, без НДС)"})
@@ -636,8 +661,10 @@ def build_ks2(positions: list[dict], *, period_from: str, period_to: str,
         "positions_reduced": len(reduced_positions),
         "excluded": ("позиции с ограничениями в сумму акта не входят" if blocked_positions else ""),
     }
-    form = envelope("ks2", period=period, req=req, rows=rows, totals=totals, gaps=gaps,
-                    warnings=warnings,
+    # в шапку и имя файла идёт начало периода: `period_to` — это дата окончания,
+    # а бланк подписывается «за месяц», и «2026-11-30» в подписи выглядит ошибкой
+    form = envelope("ks2", period=period_from or period_to, req=req, rows=rows, totals=totals,
+                    gaps=gaps, warnings=warnings,
                     sources=["журнал выполненных работ", "смета", "расхождения сверки"])
     if number:
         form["number"] = number
@@ -752,8 +779,10 @@ def build_ks3(acts: list[dict], *, period: str, requisites_dict: dict | None = N
                      "ask": "указать другой период или загрузить акты"})
 
     rate = _dec(vat_rate)
+    if rate is not None and rate > 1:
+        rate = rate / Decimal("100")
     if rate is None:
-        rate = Decimal("20")
+        rate = Decimal("0.2")
         warnings.append("ставка НДС не задана в договоре — применена 20%; проверьте реквизит")
         gaps.append({"what": "ставка НДС", "why": "в данных нет ставки из договора",
                      "ask": "указать ставку НДС договора (20 %, 10 %, без НДС)"})
@@ -1586,6 +1615,12 @@ def build_from_files(kind: str, *, period: str, acts_path: str | None = None,
             payload = {"lines": payload}
         if not payload.get("lines"):
             errors.append("в файле нет позиций акта (lines) — КС-2 не из чего собрать")
+        # период берём из командной строки, а не только из файла: обязательный
+        # --period раньше игнорировался, и акт выходил «без периода»
+        period_from, period_to = _period_bounds(period) if period else ("", "")
+        payload.setdefault("period", [period_from, period_to])
+        if not payload.get("period"):
+            payload["period"] = [period_from, period_to]
         form = ks2_from_summary(payload, req=req, vat_rate=vat_rate,
                                 number=str((req or {}).get("Номер акта") or ""))
         form["warnings"] = errors + form["warnings"]

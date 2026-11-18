@@ -4032,7 +4032,10 @@ def main(argv=None):
               ("--customer", {"default": ""}), ("--contractor", {"default": ""})]
     fk2 = fms.add_parser("ks2", help="акт о приёмке выполненных работ (КС-2) по итогам run")
     fk2.add_argument("--summary", default="out/summary.json",
-                     help="итог прогона run (позиции, объёмы, ограничения)")
+                     help="итог прогона run или любой файл с позициями (lines) — "
+                          "в том числе собранный из сметы")
+    fk2.add_argument("--saldo", "--from-estimate", dest="saldo", action="store_true",
+                     help="позиции в файле заданы в формате сметы: name/unit/qty/price")
     fk2.add_argument("--vat-rate", default=None, help="ставка НДС из договора (20, 10, 0)")
     fk2.add_argument("--number", default="", help="номер акта")
     for flag, options in common:
