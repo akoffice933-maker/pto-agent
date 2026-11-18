@@ -354,6 +354,7 @@ def extract(doc: dict) -> dict:
                     checks.append({
                         "name": f"п. {heading['clause']}: «Установить и закрепить {declared} новых шкафов»",
                         "formula": f"строк в таблице шкафов: {len(rows)}, заявлено: {declared}",
+                        "ok": ok,
                         "result": "сходится" if ok else "расходится",
                         "note": "" if ok else "сверить таблицу с текстом ТЗ"})
             elif kind == "routes":
@@ -470,6 +471,7 @@ def _route_total_check(rows: list[dict], total: dict, heading: dict) -> dict:
           and declared_count == actual_count)
     return {"name": f"п. {heading['clause']}: итог таблицы маршрутов ({heading['title']})",
             "formula": "; ".join(parts),
+            "ok": ok,
             "result": "сходится" if ok else "расходится",
             "note": "" if ok else "разница в итоге — уточнить у проектировщика"}
 
@@ -478,7 +480,7 @@ def _distribution_check(distribution: dict, heading: dict) -> dict:
     numbers = [n for n in distribution["numbers"] if n is not None]
     if len(numbers) < 3:
         return {"name": f"п. {heading['clause']}: распределение по прокладке",
-                "formula": distribution["raw"][:80], "result": "не проверено",
+                "formula": distribution["raw"][:80], "ok": None, "result": "не проверено",
                 "note": "слишком мало чисел в строке"}
     total, parts = numbers[0], numbers[1:]
     summary = sum(parts)
@@ -486,6 +488,7 @@ def _distribution_check(distribution: dict, heading: dict) -> dict:
     return {"name": f"п. {heading['clause']}: сумма способов прокладки = общая длина",
             "formula": f"{' + '.join(f'{p:g}' for p in parts)} = {summary:g} против "
                        f"общей длины {total:g} ({distribution['address']})",
+            "ok": ok,
             "result": "сходится" if ok else "расходится",
             "note": "" if ok else f"расхождение {abs(total - summary):g} — сумма способов "
                                   f"прокладки не равна итогу; объём принят по итогу таблицы"}
@@ -553,9 +556,21 @@ def _derive_prose(prose: dict[str, list[dict]], lines: list[dict],
     caveats: list[dict] = []
     all_text = " ".join(item["text"] for items in prose.values() for item in items)
 
+    # подпись раздела для прозы: в boq.csv она становится графой «раздел», иначе все
+    # пункты 5.4–5.9 сваливаются в один безымянный раздел
+    prose_sections = {
+        "5.3": "Монтаж кабельнесущих систем",
+        "5.4": "Земляные работы",
+        "5.6.5": "Дооснащение существующих шкафов",
+        "5.7": "Разделка и подключение кабелей",
+        "5.8": "Сварка оптических волокон",
+        "5.9": "Измерения и тестирование",
+    }
+
     def add(clause, description, unit, qty, confidence, formula, source, trade=""):
         out.append({"description": f"[п. {clause}] {description}", "unit": unit, "qty": qty,
-                    "confidence": confidence, "clause": clause, "trade": trade,
+                    "confidence": confidence, "clause": clause,
+                    "trade": trade or prose_sections.get(clause, ""),
                     "source": source, "formula": formula,
                     "raw": formula[:120]})
 
@@ -736,6 +751,7 @@ def _cross_checks(boq: list[dict], lines: list[dict]) -> list[dict]:
             "name": f"оговорка «исправлено с {match.group(1)} до {match.group(2)}»: {name[:45]}",
             "formula": f"в тексте количество {stated.group(1) if stated else '—'}, "
                        f"оговорка называет {match.group(1)} и {match.group(2)}",
+            "ok": bool(stated and stated.group(1) in (match.group(1), match.group(2))),
             "result": ("сходится" if stated and stated.group(1) in
                        (match.group(1), match.group(2)) else "расходится"),
             "note": "требуется письменное уточнение проектировщика: оговорка противоречит "
@@ -749,11 +765,13 @@ def _cross_checks(boq: list[dict], lines: list[dict]) -> list[dict]:
         fiber_count = int(fibers.group(1)) if fibers else 8
         expected = lines_count * fiber_count * 2
         actual = welding[0]["qty"]
+        ok = abs(expected - float(actual)) < 0.01
         checks.append({
             "name": "сварка волокон = линии × волокна × 2 конца",
             "formula": f"{lines_count} лин. × {fiber_count} волокон × 2 = {expected}; "
                        f"в ТЗ {actual:g}",
-            "result": "сходится" if abs(expected - float(actual)) < 0.01 else "расходится",
+            "ok": ok,
+            "result": "сходится" if ok else "расходится",
             "note": "" if abs(expected - float(actual)) < 0.01
                     else "количество сварок в ТЗ не бьётся с числом линий"})
     return checks
@@ -771,7 +789,9 @@ def to_boq_rows(report: dict) -> list[dict]:
             "qty": line["qty"],
             "confidence": line["confidence"],
             "source": line.get("source") or "",
-            "trade": line.get("trade") or "",
+            # графа называется «раздел»: по ней boq.csv режется на разделы ведомости,
+            # а не превращается в одну плоскую таблицу
+            "раздел": line.get("trade") or "без раздела",
         })
     return rows
 
@@ -782,7 +802,7 @@ def write_boq_csv(report: dict, path: str | Path) -> Path:
     rows = to_boq_rows(report)
     with open(path, "w", encoding="utf-8-sig", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=["masterformat_code", "description", "unit",
-                                                    "qty", "confidence", "source", "trade"])
+                                                    "qty", "confidence", "source", "раздел"])
         writer.writeheader()
         for row in rows:
             writer.writerow(row)
@@ -811,7 +831,9 @@ def report_to_markdown(report: dict) -> str:
         out += ["", "## Проверки цифр ТЗ", "", "| Проверка | Как проверено | Результат | Примечание |",
                 "|---|---|---|---|"]
         for check in report["checks"]:
-            out.append(f"| {check['name'][:60]} | {check['formula'][:80]} | {check['result']} | "
+            mark = "не проверено" if check.get("ok") is None else (
+                "сходится" if check.get("ok") else "**расходится**")
+            out.append(f"| {check['name'][:60]} | {check['formula'][:80]} | {mark} | "
                        f"{check.get('note') or '—'} |")
     if report.get("not_estimated"):
         out += ["", "## Не оценено (в деньги не превращается)", "",

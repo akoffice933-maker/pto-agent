@@ -392,3 +392,34 @@ def test_real_tz_document_volumes():
     lengths = sum(l["qty"] for l in real["lines"] if "Прокладка оптического" in l["description"])
     assert lengths == 8270
     assert any(c["result"] == "расходится" for c in real["checks"])
+
+
+# ── круг 46: проверки ТЗ говорят ok, а выгрузка знает раздел ─────────────────
+def test_checks_carry_boolean_not_only_russian_word(report):
+    """У проверки есть машинный признак ok: сравнение по строке «сходится» ломается на «не проверено»."""
+    assert report["checks"], "проверок нет"
+    for check in report["checks"]:
+        assert "ok" in check, check["name"]
+        assert check["ok"] in (True, False, None) or isinstance(check["ok"], bool)
+    failed = [c for c in report["checks"] if c["ok"] is False]
+    assert failed and all(c["result"] == "расходится" for c in failed)
+
+
+def test_boq_csv_keeps_section_not_flat_trade(report, tmp_path):
+    """boq.csv отдаёт графу «раздел»: иначе ведомость теряет деление на разделы работ."""
+    path = write_boq_csv(report, tmp_path / "boq.csv")
+    text = path.read_text(encoding="utf-8-sig")
+    header = text.splitlines()[0]
+    assert header.endswith("раздел") and "trade" not in header
+    rows, problems = read_boq(path)
+    # «нет количества» — это строка «при наличии», она и должна уйти в «не включено»
+    assert all("нет количества" in problem for problem in problems), problems
+    assert rows and all(line.get("trade") for line in rows), "у строки нет раздела"
+
+
+def test_prose_lines_have_section_name(report):
+    """Пункты 5.4/5.7/5.8/5.9 раньше попадали в безымянный раздел — теперь у них есть название."""
+    by_clause = {line["clause"]: line for line in report["lines"] if line.get("clause")}
+    assert by_clause["5.4"]["trade"] == "Земляные работы"
+    assert by_clause["5.8"]["trade"] == "Сварка оптических волокон"
+    assert not [line for line in report["lines"] if not (line.get("trade") or "").strip()]
