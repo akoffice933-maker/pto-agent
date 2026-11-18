@@ -21,12 +21,24 @@
 from __future__ import annotations
 
 import argparse
+import calendar
 import json
 import sys
 from pathlib import Path
 
 # материальные строки — код ресурса ФГИС ЦС, а не сметная норма
 WORK_PREFIXES = ("ГЭСН", "ФЕР", "ТЕР", "ФССЦпг")
+
+
+def month_bounds(period: str) -> list[str]:
+    """'2026-11' → ['2026-11-01', '2026-11-30'].
+
+    Последний день берётся из календаря, а не подставляется «-31»: в ноябре
+    30 дней, и «2026-11-31» — несуществующая дата, которую потом не разобрать.
+    """
+    year, month = (int(x) for x in str(period).split("-")[:2])
+    return [f"{year:04d}-{month:02d}-01",
+            f"{year:04d}-{month:02d}-{calendar.monthrange(year, month)[1]:02d}"]
 
 
 def is_work(code: str) -> bool:
@@ -85,7 +97,7 @@ def main(argv=None) -> int:
     payload = {
         "schema": "pto-agent/ks2-lines@1",
         "object": a.object or (parsed.get("header") or {}).get("object") or "",
-        "period": ([a.period + "-01", a.period + "-31"] if a.period else []),
+        "period": (month_bounds(a.period) if a.period else []),
         "vat_rate": None,
         "lines": lines,
         "excluded": skipped,

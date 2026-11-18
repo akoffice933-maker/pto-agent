@@ -86,3 +86,10 @@ def test_bundled_lines_file_builds_act():
     assert form["totals"]["positions"] >= 1
     assert form["totals"]["amount_claim"] > 0
     assert form["gaps"]  # пустые реквизиты обязаны попасть в запросы, а не исчезнуть
+
+
+def test_month_bounds_uses_real_last_day():
+    """«2026-11-31» — несуществующая дата: последний день месяца берётся из календаря."""
+    mod = _ks2_script()
+    assert mod.month_bounds("2026-11") == ["2026-11-01", "2026-11-30"]
+    assert mod.month_bounds("2028-02") == ["2028-02-01", "2028-02-29"]
