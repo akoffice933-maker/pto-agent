@@ -98,6 +98,8 @@ def _parse_front_matter(text: str) -> tuple[dict, str]:
 def load_norms(folder: Path) -> list[Clause]:
     clauses = []
     for path in sorted(folder.glob("*.md")):
+        if path.stem.lower() == "readme":
+            continue          # README — контракт формата, а не нормативный документ
         meta, body = _parse_front_matter(path.read_text(encoding="utf-8"))
         eff = None
         if meta.get("effective_from"):
@@ -199,7 +201,11 @@ class NormIndex:
         citations = []
         for clause, score in hits[:2]:
             body = clause.body.strip()
+            # Цитата для показа может быть сокращена многоточием, но проверка дословности
+            # идёт по показанной части без «…»: иначе длинный пункт никогда не подтвердится,
+            # и любой ответ по нему блокируется как «цитата не прошла проверку».
             quote = body if len(body) <= 400 else body[:400].rsplit(" ", 1)[0] + "…"
+            quote_checked = quote[:-1].rstrip() if quote.endswith("…") else quote
             citations.append({
                 "doc": clause.doc.designation,
                 "title": clause.doc.title,
@@ -210,7 +216,8 @@ class NormIndex:
                 "actual_as_of": as_of.isoformat(),
                 "file": f"{clause.doc.file}#{clause.clause}",
                 "score": round(score, 3),
-                "verified": cite_verify(quote, clause.body),
+                "verified": cite_verify(quote_checked, clause.body),
+                "truncated": quote.endswith("…"),
             })
 
         verified = all(c["verified"] for c in citations) and bool(citations)
@@ -223,7 +230,7 @@ class NormIndex:
             return NormAnswer("not_found",
                               "Цитата не прошла проверку дословности — ответ заблокирован.",
                               citations, False, "low", as_of,
-                              [f"{c['doc']} п. {c['clause']}" for c, _ in hits])
+                              [f"{c.doc.designation} п. {c.clause}" for c, _ in hits])
         return NormAnswer(
             "ambiguous" if ambiguous else "answer",
             conclusion,
