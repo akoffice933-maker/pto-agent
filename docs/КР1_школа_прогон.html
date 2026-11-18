@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Прогон тома КР1 — школа на 825 учащихся, г. Сертолово</title>
+<style>
+  :root{--ink:#14181f;--mut:#5b6472;--line:#dde2ea;--bg:#f6f8fb;--card:#fff;
+        --ok:#0a7d4f;--warn:#8a5a00;--bad:#b3261e}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:16px/1.55 -apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
+  .wrap{max-width:1080px;margin:0 auto;padding:28px 20px 80px}
+  h1{font-size:27px;line-height:1.22;margin:0 0 6px}
+  .sub{color:var(--mut);margin:0 0 20px}
+  h2{font-size:20px;margin:32px 0 10px;padding-top:14px;border-top:1px solid var(--line)}
+  h3{font-size:16px;margin:18px 0 8px}
+  p{margin:9px 0}
+  code{background:#eef1f6;padding:1px 5px;border-radius:4px;font-size:13.5px}
+  pre{background:#111820;color:#dbe6f0;padding:12px 14px;border-radius:9px;overflow-x:auto;font-size:13px}
+  table{border-collapse:collapse;width:100%;margin:12px 0;background:var(--card);
+        border-radius:9px;overflow:hidden;font-size:14.5px}
+  th,td{border-bottom:1px solid var(--line);padding:9px 11px;text-align:left;vertical-align:top}
+  th{background:#eef2f7;font-weight:600}
+  tr:last-child td{border-bottom:none}
+  .num{font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+  .ok{color:var(--ok);font-weight:600}
+  .warn{color:var(--warn);font-weight:600}
+  .bad{color:var(--bad);font-weight:600}
+  .kpi{display:flex;flex-wrap:wrap;gap:12px;margin:16px 0}
+  .kpi div{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:11px 15px;min-width:170px}
+  .kpi b{display:block;font-size:20px;line-height:1.25}
+  .kpi span{color:var(--mut);font-size:13px}
+  .note{background:#fff8e6;border-left:4px solid #e0a800;padding:11px 14px;border-radius:0 8px 8px 0;margin:14px 0;font-size:15px}
+  .bad-note{background:#fdeceb;border-left:4px solid var(--bad);padding:11px 14px;border-radius:0 8px 8px 0;margin:14px 0;font-size:15px}
+  .ok-note{background:#e9f7f0;border-left:4px solid var(--ok);padding:11px 14px;border-radius:0 8px 8px 0;margin:14px 0;font-size:15px}
+  .small{font-size:13.5px;color:var(--mut)}
+  ul,ol{margin:8px 0 8px 22px;padding:0}
+  li{margin:5px 0}
+  footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--mut);font-size:13.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Прогон тома 7820/03-02-КР1 — школа на 825 учащихся, г. Сертолово</h1>
+<p class="sub">Раздел 4 «Конструктивные и объёмно-планировочные решения», часть 1. Заказчик — МКУ «Единая служба
+заказчика» Всеволожского района, проектировщик ООО «Портал Плюс», 2021. Файл: 49 страниц, текстовый слой у 42.
+Прогон через профиль <code>kr</code> агента, цены — ФСБЦ-2022 из открытых данных ФГИС ЦС.</p>
+
+<div class="kpi">
+  <div><b class="num">49</b><span>страниц в томе, 7 без текста (графика/скан)</span></div>
+  <div><b class="num">14</b><span>конструктивных фактов извлечено с цитатами</span></div>
+  <div><b class="num">2</b><span>объёма выведено расчётом</span></div>
+  <div><b class="num">27,04 млн ₽</b><span>плита по ФСБЦ-2022 (требует проверки)</span></div>
+</div>
+
+<h2>Главное</h2>
+<div class="ok-note"><b>Инструмент работает, но том — не смета.</b> В нём нет ни ведомости объёмов работ,
+ни ведомости расхода стали, ни спецификации материалов. Всё, что можно посчитать — это два объёма бетона,
+выведенные из габаритов и толщин, указанных в тексте. Точных объёмов из этого тома не получить: нужен
+обмер чертежа или ведомость от проектировщика.</div>
+<div class="bad-note"><b>Нашёл и исправил две ошибки в собственном инструменте.</b>
+Первая: карта сопоставления «элемент → ресурс» ссылалась на коды, которых в реальной базе ФСБЦ
+либо нет, либо они означают другой материал — например, код бетона В25 в демо-наборе в ФСБЦ-2022
+оказался <i>асботекстолитом</i>. Вторая: база цен содержала только расценки ФЕР, сметных цен ресурсов
+ФСБЦ в ней не было вовсе, поэтому любая позиция получала <code>no_price</code>. Обе исправлены: карта
+переписана на коды, сверенные с ФСБЦ-2022, база пополнена 45 847 ресурсами.</div>
+<div class="warn-note note"><b>Где расчёт завышает.</b> Инструмент взял 4 перекрытия по всей площади
+габарита. Но в томе написано: здание из <b>четырёх блоков</b> — два 3-этажных, один 2-этажный, один
+одноэтажный, у всех подвал. По фактической этажности перекрытий не 4, а 3,25 «этажа» на блок — объём
+меньше на <b>1 735,5 м³ (−19 %)</b>. Это исправление я внёс в отчёт как обязательную поправку, а не
+оставил в примечании.</div>
+
+<h2>1. Что написано в томе (проверяемые факты)</h2>
+<table>
+<tr><th>параметр</th><th>значение</th><th class="num">стр.</th></tr>
+<tr><td>габариты здания по осям</td><td>138,4 × 76 м</td><td class="num">11</td></tr>
+<tr><td>этажность</td><td>3 надземных + подвал; 4 блока: два 3-эт., один 2-эт., один 1-эт.</td><td class="num">10</td></tr>
+<tr><td>высота до верха парапета</td><td>16,40 м от дневной поверхности</td><td class="num">10</td></tr>
+<tr><td>фундамент</td><td>монолитная плита 500 мм, бетон В25 W6 F150</td><td class="num">11</td></tr>
+<tr><td>перекрытия</td><td>монолитные 220 мм, бетон В25; балки 400×470 и 400×800 мм</td><td class="num">11</td></tr>
+<tr><td>стены подвала</td><td>монолитные 250 мм, В25 W6 F150</td><td class="num">11</td></tr>
+<tr><td>внутренние стены и колонны</td><td>стены 200 мм, колонны 400×400 мм, бетон В25 W4 F100</td><td class="num">11</td></tr>
+<tr><td>сетка колонн</td><td>7,2 × 7,2 м (максимальный пролёт)</td><td class="num">11</td></tr>
+<tr><td>наружные стены</td><td>газобетон D500 AEROC Classic 200 мм + минвата 120 мм</td><td class="num">11–12</td></tr>
+<tr><td>перегородки</td><td>полнотелый кирпич КР-р-по 250×120×65, 120 мм</td><td class="num">11</td></tr>
+<tr><td>лестницы</td><td>сборные и монолитные ж/б марши и площадки, бетон В25</td><td class="num">11</td></tr>
+<tr><td>шахта лифта</td><td>монолитная 200 мм, акустический шов 40 мм</td><td class="num">11</td></tr>
+</table>
+<p class="small">Все значения — с цитатами и номерами страниц в <code>kr_report.md</code>; ничего не додумано.</p>
+
+<h2>2. Объёмы, которые получаются расчётом</h2>
+<table>
+<tr><th>элемент</th><th class="num">объём</th><th>уверенность</th><th>формула и оговорка</th></tr>
+<tr><td>Бетон В25 W6 F150 — фундаментная плита</td><td class="num">5 259,2 м³</td>
+    <td class="warn">средняя</td>
+    <td>10 518,4 м² × 500 мм. Верхняя оценка: проёмы, приямки и участки без плиты не вычтены</td></tr>
+<tr><td>Бетон В25 — перекрытия</td><td class="num">9 256,2 м³ → <b>7 520,7 м³</b></td>
+    <td class="bad">низкая</td>
+    <td>как посчитал инструмент: 10 518,4 м² × 220 мм × 4. По фактической этажности блоков:
+        10 518,4 × 220 мм × 3,25 = 7 520,7 м³. Балки не вычтены и не добавлены</td></tr>
+</table>
+
+<h3>Стоимость по ФСБЦ-2022 (базис 01.01.2022)</h3>
+<table>
+<tr><th>позиция</th><th>код ФСБЦ</th><th class="num">цена, ₽</th><th class="num">объём</th><th class="num">сумма, ₽</th><th>статус</th></tr>
+<tr><td>Смеси бетонные БСТ на щебне из гравия, класс В25, F150, W6</td><td>04.1.02.05-0150</td>
+    <td class="num">5 140,56</td><td class="num">5 259,2 м³</td><td class="num">27 035 233,15</td>
+    <td class="warn">на проверку: объём средней уверенности</td></tr>
+<tr><td>Смеси бетонные БСТ на щебне из гравия, класс В25, F100, W4 (перекрытия)</td><td>04.1.02.05-0300</td>
+    <td class="num">5 044,54</td><td class="num">7 520,7 м³</td><td class="num">37 938 250,02</td>
+    <td class="bad">не включено: уверенность «низкая»</td></tr>
+</table>
+<p class="small">Это <b>не смета</b>: базисная цена 01.01.2022 без пересчёта индексами Минстроя, без НР и СП,
+без арматуры, опалубки и работ. Строка перекрытий намеренно не включена в итог — объём не проверен.</p>
+
+<h2>3. Чего в томе нет — и что нужно спросить</h2>
+<div class="bad-note">
+<ol style="margin:0 0 0 20px">
+  <li><b>Ведомость объёмов работ</b> — в томе отсутствует. Объёмы приходится выводить из текста.</li>
+  <li><b>Ведомость расхода стали</b> — отсутствует. Арматура не посчитана вовсе: это основная статья
+      стоимости монолитного каркаса, без неё оценка неполна принципиально.</li>
+  <li><b>Объём колонн</b> — есть сечение 400×400 и сетка 7,2×7,2, но нет высот этажей и раскладки колонн.</li>
+  <li><b>Объём балок</b> — есть сечения 400×470 и 400×800 мм, нет общей длины.</li>
+  <li><b>Кладка и газобетон</b> — материалы и толщины указаны, площадей стен по этажам нет.</li>
+  <li><b>Площади блоков</b> — известно только 138,4 × 76 м в габаритах; здание многоугольное, фактическая
+      площадь меньше, и по блокам она не раскрыта.</li>
+  <li><b>7 страниц без текста</b> (планы и разрезы, стр. 40–46) — обмер по ним этим прогоном не делался;
+      одна страница (46) не прочиталась: превышен лимит токенов в потоке PDF.</li>
+</ol>
+</div>
+
+<h2>4. Что нужно, чтобы получить реальные объёмы и стоимость</h2>
+<ol>
+  <li><b>Ведомость объёмов работ и ведомость расхода стали</b> из тома КР или из сметной документации —
+      это снимает все ограничения сразу.</li>
+  <li><b>Обмер планов и разрезов</b> (стр. 40–46) — если ведомостей нет. Инструмент обмера в агенте есть,
+      но на этих страницах нужна векторная графика или DWG.</li>
+  <li><b>Индексы Минстроя за нужный квартал по Ленинградской области</b> — чтобы перевести цены ФСБЦ
+      из базиса 01.01.2022 в текущий уровень. В базе пока разобраны индексы III кв. 2026.</li>
+</ol>
+
+<footer>
+Прогон: <code>pto_agent takeoff pdf --map data/reference/takeoff_map_kr1.json --prices-dir data/prices_fsnb</code>.
+Файлы: <code>out/kr1_v2/kr_report.md</code>, <code>draft.json</code>, <code>draft.xlsx</code>.
+Цены — ФСБЦ-2022 (45 847 ресурсов, открытые данные ФГИС ЦС), коды сверены. Дата: 18.11.2026.
+</footer>
+
+</div>
+</body>
+</html>
