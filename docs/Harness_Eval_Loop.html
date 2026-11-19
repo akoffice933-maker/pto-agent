@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Harness · Eval · Loop — что внедрено</title>
+<style>
+:root{--ink:#15181d;--mut:#6b7280;--line:#e3e6ea;--cvt:#eceff3;--ok:#0f7b45;--warn:#b45309;--bad:#b91c1c;--bg:#f6f7f9}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,"Segoe UI",Roboto,Arial,sans-serif}
+.wrap{max-width:1140px;margin:0 auto;padding:28px 18px 64px}
+h1{font-size:26px;margin:0 0 6px;letter-spacing:-.01em} h2{font-size:19px;margin:34px 0 10px}
+.sub{color:var(--mut);margin:0 0 20px;max-width:900px}
+.corr{background:#fff;border:1px solid var(--line);border-left:4px solid var(--warn);border-radius:8px;padding:13px 16px;margin:0 0 22px}
+.corr b{color:var(--warn)}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}
+.card{background:#fff;border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.card .k{color:var(--mut);font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+.card .v{font-size:22px;font-weight:700;margin-top:4px;font-variant-numeric:tabular-nums}
+.card .v.ok{color:var(--ok)}
+table{border-collapse:collapse;width:100%;background:#fff;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+th,td{border-bottom:1px solid var(--line);padding:7px 9px;text-align:left;vertical-align:top}
+th{background:var(--cvt);font-size:11.5px;text-transform:uppercase;letter-spacing:.03em;color:#374151}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+td.c{text-align:center;white-space:nowrap}
+td.code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px;white-space:nowrap}
+td.mut{color:var(--mut);font-size:13px}
+.p{display:inline-block;padding:1px 8px;border-radius:999px;font-size:11.5px;font-weight:700}
+ul{background:#fff;border:1px solid var(--line);border-radius:10px;padding:14px 20px 14px 34px;margin:0}
+li{margin:8px 0}
+.note{color:var(--mut);font-size:13px;margin:10px 0 0;max-width:960px}
+.foot{margin-top:34px;color:var(--mut);font-size:12.5px;border-top:1px solid var(--line);padding-top:14px}
+.layer{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--mut);margin-bottom:2px}
+</style></head><body><div class="wrap">
+<h1>Harness · Eval · Loop — три слоя, как они выглядят в нашем коде</h1>
+<p class="sub">Не пересказ курса, а то, что проверяемо: границы агента лежат данными, поведение
+измеряется прогоном, провалы осаждаются в граф и возвращаются следующим кругом.</p>
+
+<div class="corr">
+<b>Сначала про источник.</b> Курса «от Google» про graph engineering не существует: посты с
+разными таймингами и содержанием не ссылаются на страницу Google, а проверка от 11.08.2026
+не нашла такого курса ни на одном ресурсе Google. У Google есть фреймворк (ADK 2.0 с графовыми
+workflow) — то есть они это делают, а не преподают. Философия рабочая, атрибуция — нет.
+</div>
+
+<div class="cards">
+  <div class="card"><div class="k">Инструментов в манифесте</div><div class="v">10</div></div>
+  <div class="card"><div class="k">Постоянных запретов</div><div class="v">8</div></div>
+  <div class="card"><div class="k">Балл eval</div><div class="v ok">1.0</div></div>
+  <div class="card"><div class="k">Проверок pass / fail / skip</div>
+    <div class="v">10 / 0 / 0</div></div>
+  <div class="card"><div class="k">Кругов цикла</div><div class="v">1</div></div>
+</div>
+
+<h2><span class=layer>Слой 1</span><br>Harness: границы как данные, а не абзац в промпте</h2>
+<p class="note">У каждого инструмента — уровень автономии и обязательное доказательство, которое
+агент предъявляет вместе с результатом. Манифест проверяется кодом: если в нём появится
+несуществующий модуль или тест, <code>eval</code> падает.</p>
+<table style="margin-top:12px">
+<thead><tr><th>Инструмент</th><th>Уровень</th><th>Что агент обязан предъявить</th><th>Почему так</th></tr></thead>
+<tbody><tr><td><b>сверка сметы и журнала</b></td><td><span class=p style="background:#e5f4ec;color:#0f7b45">auto</span></td><td>по каждой строке: шифр, объём, цена, источник цены и версия выгрузки</td><td class=mut>пересчёт не меняет документы, ошибку видно сразу</td></tr><tr><td><b>акт КС-2</b></td><td><span class=p style="background:#eef2fb;color:#2e5c9a">confirm</span></td><td>источник каждой позиции; флаг «объём не подтверждён журналом»; пустые реквизиты — в запросы</td><td class=mut>печатная форма — черновик; подпись и УКЭП не в роли агента</td></tr><tr><td><b>цены ресурсов</b></td><td><span class=p style="background:#e5f4ec;color:#0f7b45">auto</span></td><td>источник, дата действия, регион, версия выгрузки, digest — или отказ not_found</td><td class=mut>цена без даты и источника не используется</td></tr><tr><td><b>нормативный ответ</b></td><td><span class=p style="background:#e5f4ec;color:#0f7b45">auto</span></td><td>дословная цитата и пункт; при отсутствии — «не найдено», а не пересказ</td><td class=mut>ответ без цитаты не выдаётся</td></tr><tr><td><b>проверка сметы по индексу</b></td><td><span class=p style="background:#e5f4ec;color:#0f7b45">auto</span></td><td>ряд индексов, медиана, ряд демонтажа, список необъяснённых выбросов</td><td class=mut>не пересчитывает смету — только показывает отношение</td></tr><tr><td><b>объёмы по чертежу</b></td><td><span class=p style="background:#eef2fb;color:#2e5c9a">confirm</span></td><td>страница/лист, единица, уверенность и что не распознано</td><td class=mut>распознавание ошибается; объём без подтверждения не идёт в акт</td></tr><tr><td><b>подпись документа</b></td><td><span class=p style="background:#fdf1dc;color:#b45309">human</span></td><td>ФИО и роль человека из справочника пользователей</td><td class=mut>подпись — действие человека; агент только готовит</td></tr><tr><td><b>проводка в учёте</b></td><td><span class=p style="background:#eef2fb;color:#2e5c9a">confirm</span></td><td>план проводок с основанием; фактическая проводка — только по команде человека</td><td class=mut>регистры ведутся всегда, проводки — по решению человека</td></tr><tr><td><b>отправка контрагенту</b></td><td><span class=p style="background:#fbe9e9;color:#b91c1c">never</span></td><td>—</td><td class=mut>внешняя отправка — не действие агента ни в каком виде</td></tr><tr><td><b>изменение базы нормативов</b></td><td><span class=p style="background:#fdf1dc;color:#b45309">human</span></td><td>источник (номер приказа/письма) и digest файла</td><td class=mut>нормативы меняются только решением человека, с указанием документа</td></tr></tbody></table>
+
+<h2>Что запрещено всегда — и где это реально проверяется</h2>
+<table><thead><tr><th>Запрет</th><th>Где в коде</th><th>Чем доказано</th></tr></thead>
+<tbody><tr><td>ходить по file:// и другим схемам, кроме http/https</td><td class=code>pto_agent/netguard.py</td><td class=code>tests/test_net_and_parsers.py</td></tr>
+<tr><td>ходить в облачные метаданные и link-local адреса</td><td class=code>pto_agent/netguard.py</td><td class=code>tests/test_net_and_parsers.py</td></tr>
+<tr><td>отдавать пароль по открытому http на внешний хост</td><td class=code>pto_agent/netguard.py</td><td class=code>tests/test_net_and_parsers.py</td></tr>
+<tr><td>следовать редиректу на другой хост с заголовком Authorization</td><td class=code>pto_agent/netguard.py</td><td class=code>tests/test_net_and_parsers.py</td></tr>
+<tr><td>подписывать документы вместо человека</td><td class=code>pto_agent/sign.py</td><td class=code>tests/test_forms.py</td></tr>
+<tr><td>проводить бухгалтерские документы (проводки) самостоятельно</td><td class=code>pto_agent/ledger.py</td><td class=code>tests/test_ledger.py</td></tr>
+<tr><td>выдумывать цену, объём или норматив при отсутствии данных</td><td class=code>pto_agent/numeric.py</td><td class=code>tests/test_integrity_numbers.py</td></tr>
+<tr><td>удалять хвост журнала аудита</td><td class=code>pto_agent/audit.py</td><td class=code>tests/test_journals.py</td></tr></tbody></table>
+<p class="note">Ни один запрет не держится «на честном слове»: у каждого есть модуль и тест.
+Подпись — только человек: проверка разбирает код через <code>ast</code> и требует, чтобы
+параметры «кто» и «роль» нельзя было не передать.</p>
+
+<h2><span class=layer>Слой 2</span><br>Eval: «проверено», а не «выглядит правильно»</h2>
+<table style="margin-top:10px">
+<thead><tr><th>Проверка поведения</th><th class=c>Статус</th><th>Что установлено</th></tr></thead>
+<tbody><tr><td>Арифметика акта сходится</td><td class=c style="color:#0f7b45;font-weight:700">✓ pass</td><td>сходится</td></tr><tr><td>У каждой строки есть цена и происхождение</td><td class=c style="color:#0f7b45;font-weight:700">✓ pass</td><td>все 8 строк с ценой и происхождением</td></tr><tr><td>Пропуски не выдаются за успех</td><td class=c style="color:#0f7b45;font-weight:700">✓ pass</td><td>пропущено 4 контуров — они так и помечены, не зелёные</td></tr><tr><td>Цены с датой, источником и версией</td><td class=c style="color:#0f7b45;font-weight:700">✓ pass</td><td>все 2 версий с источником, датой и digest</td></tr><tr><td>Нормативный ответ требует цитату</td><td class=c style="color:#0f7b45;font-weight:700">✓ pass</td><td>в ответе обязательны answer_type и citations</td></tr><tr><td>Агент отказывает на опасных адресах</td><td class=c style="color:#0f7b45;font-weight:700">✓ pass</td><td>отказ по 3 адресам из 3</td></tr><tr><td>Подпись — только человек</td><td class=c style="color:#0f7b45;font-weight:700">✓ pass</td><td>подпись документа требует «кто» и «роль» без значений по умолчанию (5 функций), без провайдера — отказ</td></tr><tr><td>Манифест границ совпадает с кодом</td><td class=c style="color:#0f7b45;font-weight:700">✓ pass</td><td>10 инструментов и 8 запретов подтверждены файлами</td></tr><tr><td>Смета сходится сама с собой</td><td class=c style="color:#0f7b45;font-weight:700">✓ pass</td><td>работы 855,559.59 + материалы 69,062.88 = 924,622.47 против итога 924,622.47 (Δ 0.00)</td></tr><tr><td>Проверка по индексу сообщает свои ограничения</td><td class=c style="color:#0f7b45;font-weight:700">✓ pass</td><td>20 из 47 позиций с парой в базе; ограничения перечислены (4)</td></tr></tbody></table>
+<p class="note"><b>skip — это не «хорошо».</b> Он значит «проверять было нечем», и так и
+печатается. Отдельная проверка ловит случай, когда все проверки пропущены, а вердикт стоит
+«ready».</p>
+
+<h2><span class=layer>Слой 3</span><br>Loop: цикл с тормозом, а не «7×24 без ограничений»</h2>
+<p class="note">Остановка: <b>провалов нет: очередной круг не нашёл, что чинить</b>. Четыре независимых тормоза — бюджет кругов, отсутствие
+роста балла, повтор тех же провалов и узел, который не закрылся за отведённые попытки.</p>
+<table style="margin-top:10px">
+<thead><tr><th>Круг</th><th class=n>Балл</th><th class=n>Провалов</th><th class=n>Новых узлов</th>
+<th class=n>Закрыто</th><th class=n>Открытых узлов</th></tr></thead>
+<tbody><tr><td class=code>20261119-1</td><td class=n>1.0</td><td class=n>0</td><td class=n>0</td><td class=n>0</td><td class=n>0</td></tr></tbody></table>
+<p class="note">Проверено на живом сбое: испорченная сумма акта (+1 000 ₽) → круг осадил узел,
+потратил попытки, перевёл его в «нужен человек» и остановился. После починки данных узел
+закрылся <b>прошедшей проверкой</b>, а не словом «сделано».</p>
+
+<h2>Чего нет — и это решение, а не недоделка</h2>
+<ul><li>агент не правит собственный код: «исправление» = повторная проверка и узел в графе, а не коммит</li><li>закрыть узел можно только прошедшей проверкой, словом «сделано» — нельзя</li><li>за круг добавляется не больше 5 узлов</li><li>узел, не закрывшийся за 3 попыток, уходит человеку</li></ul>
+<p class="note">Агент не правит собственный код. «Самоэволюция» в буквальном смысле — правка
+собственной логики без человека — в бухгалтерском документе стоит дороже сэкономленного
+времени. Цикл закрывает то, что закрывается проверкой; всё остальное уходит человеку с
+доказательством.</p>
+
+<h2>Что eval не измеряет</h2>
+<ul><li>Качество распознавания чертежей: нужен размеченный набор, его нет.</li><li>Правильность цен поставщиков: у нас только база ФГИС ЦС, КП в прогоне нет.</li><li>Качество текстовых объяснений LLM: оценивается человеком, а не баллом.</li></ul>
+
+<div class="foot">
+Артефакты: <code>out/harness/manifest.json</code>, <code>out/eval/report.md</code>,
+<code>out/loop/run.md</code>, <code>out/loop/runs.jsonl</code>.
+Команды: <code>pto_agent harness</code> · <code>pto_agent eval</code> ·
+<code>pto_agent backlog</code> · <code>pto_agent loop</code>.
+</div>
+</div></body></html>

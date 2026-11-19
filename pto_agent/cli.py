@@ -3339,6 +3339,76 @@ def cmd_invoices(args) -> int:
           file=sys.stderr)
     return 2
 
+# ─────────────────── harness / eval / backlog / loop ───────────────────
+def cmd_harness(args):
+    """Манифест границ агента: инструменты, уровни автономии, доказательства, память."""
+    from .harness import manifest, to_markdown
+    man = manifest()
+    out = Path(args.out) if hasattr(args, "out") else Path("out/harness")
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "manifest.json").write_text(json.dumps(man, ensure_ascii=False, indent=1),
+                                       encoding="utf-8")
+    (out / "manifest.md").write_text(to_markdown(man), encoding="utf-8")
+    c = man["counts"]
+    print(f"Инструментов: {c['tools']} · запретов: {c['boundaries']} · digest {man['digest']}")
+    for level, count in sorted(c["by_level"].items()):
+        print(f"  {level:<8} {count}")
+    print(f"Файл: {out / 'manifest.json'}")
+    return 0
+
+
+def cmd_eval(args):
+    """Проверка поведения: арифметика, происхождение цифр, честность, отказы."""
+    from .eval import run_all
+    report = run_all(out_dir=args.out, summary_path=args.summary, review_path=args.review)
+    c = report["counts"]
+    mark = {"pass": "✓", "fail": "✗", "skip": "·"}
+    print(f"Eval: балл {report['score']} · pass {c['pass']} / fail {c['fail']} / "
+          f"skip {c['skip']}")
+    for r in report["results"]:
+        if r["status"] != "pass" or args.verbose:
+            print(f"  {mark.get(r['status'], '?')} {r['title']}: {r['why']}")
+    print(f"Отчёт: {Path(args.out) / 'report.md'}")
+    return 0 if report["verdict"] != "fail" else 1
+
+
+def cmd_backlog(args):
+    """Граф работ, выросший из провалов проверок."""
+    from .backlog import Backlog, to_markdown
+    path = Path(args.file)
+    bl = Backlog(path)
+    if args.show:
+        print(to_markdown(bl))
+        return 0
+    if args.close:
+        node = bl.close(args.close, note=args.note or "закрыто из CLI", cycle=args.cycle)
+        if not node:
+            print(f"узла {args.close} нет", file=sys.stderr)
+            return 1
+        bl.save()
+        print(f"{node['id']}: {node['status']} — {node.get('closed_note', '')}")
+        return 0 if node["status"] == "closed" else 1
+    print(to_markdown(bl))
+    print(f"Файл: {path}")
+    return 0
+
+
+def cmd_loop(args):
+    """Прогон цикла eval → backlog → повторная проверка, с тормозом."""
+    from .loop import run
+    res = run(cycles=args.cycles, out_dir=args.out, patience=args.patience,
+              repeat_limit=args.repeat_limit, max_attempts=args.max_attempts,
+              sleep_s=args.sleep, summary_path=args.summary, review_path=args.review)
+    print(f"Кругов: {res['cycles_run']} из {res['cycles_budget']} · лучший балл "
+          f"{res['best_score']} · остановка: {res['stop_reason']}")
+    for h in res["history"]:
+        print(f"  {h['cycle']}: балл {h['score']}, провалов {len(h['failures'])}, "
+              f"новых узлов {h['nodes_added']}, закрыто {len(h['nodes_closed'])}")
+    print(f"Отчёт: {Path(args.out) / 'run.md'} · журнал {Path(args.out) / 'runs.jsonl'}")
+    return 0
+
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     # подкоманды CAD и MCP живут в своих пакетах: делегируем до разбора argparse,
@@ -4190,6 +4260,37 @@ def main(argv=None):
     rv.add_argument("--object-name", default=None)
     rv.add_argument("--out", default="out/review")
     rv.set_defaults(func=cmd_review)
+
+    # ── harness / eval / backlog / loop ──
+    hn = sub.add_parser("harness", help="границы агента: инструменты, уровни, доказательства")
+    hn.add_argument("--out", default="out/harness")
+    hn.set_defaults(func=cmd_harness)
+
+    ev = sub.add_parser("eval", help="проверка поведения агента, а не «выглядит правильно»")
+    ev.add_argument("--out", default="out/eval")
+    ev.add_argument("--summary", default=None, help="summary.json прогона (по умолчанию — из out/)")
+    ev.add_argument("--review", default=None, help="review.json сводки проверок")
+    ev.add_argument("--verbose", action="store_true", help="показывать и прошедшие проверки")
+    ev.set_defaults(func=cmd_eval)
+
+    blp = sub.add_parser("backlog", help="граф работ из провалов проверок")
+    blp.add_argument("--file", default="out/backlog/backlog.json")
+    blp.add_argument("--show", action="store_true")
+    blp.add_argument("--close", default=None, help="id узла, который закрываем")
+    blp.add_argument("--note", default="", help="чем доказано закрытие")
+    blp.add_argument("--cycle", default="")
+    blp.set_defaults(func=cmd_backlog)
+
+    lp = sub.add_parser("loop", help="цикл eval → backlog → проверка, с тормозом")
+    lp.add_argument("--cycles", type=int, default=3)
+    lp.add_argument("--out", default="out/loop")
+    lp.add_argument("--patience", type=int, default=2, help="кругов без роста балла до остановки")
+    lp.add_argument("--repeat-limit", type=int, default=3, help="повторов тех же провалов")
+    lp.add_argument("--max-attempts", type=int, default=3, help="попыток на один узел")
+    lp.add_argument("--sleep", type=float, default=0.0, help="пауза между кругами, с")
+    lp.add_argument("--summary", default=None, help="summary.json для проверок поведения")
+    lp.add_argument("--review", default=None, help="review.json сводки проверок")
+    lp.set_defaults(func=cmd_loop)
 
     web = sub.add_parser("web", help="экраны учёта: роли, склад, акты, заявки, проводки, закрытие")
     web.add_argument("--root", default="out", help="каталог состояний контуров")
