@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DDC CWICR: что взять, что нет — проверка на наших данных</title>
+<style>
+:root{--ink:#15181d;--mut:#6b7280;--line:#e3e6ea;--cvt:#eceff3;--ok:#0f7b45;--warn:#b45309;--bad:#b91c1c;--bg:#f6f7f9}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,"Segoe UI",Roboto,Arial,sans-serif}
+.wrap{max-width:1180px;margin:0 auto;padding:28px 18px 64px}
+h1{font-size:26px;margin:0 0 6px;letter-spacing:-.01em} h2{font-size:19px;margin:34px 0 12px}
+.sub{color:var(--mut);margin:0 0 20px;max-width:940px}
+.lead{background:#fff;border:1px solid var(--line);border-left:4px solid var(--ok);border-radius:8px;padding:14px 16px;margin:0 0 22px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:8px}
+.stat{background:#fff;border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.stat .k{color:var(--mut);font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+.stat .v{font-size:22px;font-weight:700;margin-top:4px;font-variant-numeric:tabular-nums}
+.card{background:#fff;border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:10px}
+.card .t{font-weight:700;font-size:15px}
+.tag{display:inline-block;margin-left:6px;padding:1px 8px;border-radius:999px;background:#e5f4ec;color:var(--ok);font-size:11px;font-weight:600;vertical-align:2px}
+.card p{margin:6px 0 0;color:#2b3038;font-size:14px}
+.card p.act{color:var(--mut)}
+table{border-collapse:collapse;width:100%;background:#fff;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+th,td{border-bottom:1px solid var(--line);padding:7px 9px;text-align:left;vertical-align:top}
+th{background:var(--cvt);font-size:11.5px;text-transform:uppercase;letter-spacing:.03em;color:#374151}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+td.c{text-align:center;color:var(--mut);white-space:nowrap}
+td.code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px;white-space:nowrap}
+tr.warn td{background:#fdf6ec}
+ul{background:#fff;border:1px solid var(--line);border-radius:10px;padding:14px 20px 14px 34px;margin:0}
+li{margin:8px 0}
+.note{color:var(--mut);font-size:13px;margin:10px 0 0;max-width:960px}
+.scroll{overflow:auto}
+.foot{margin-top:34px;color:var(--mut);font-size:12.5px;border-top:1px solid var(--line);padding-top:14px}
+</style></head><body><div class="wrap">
+<h1>DDC CWICR: что взять, что нет — и проверка на нашей смете</h1>
+<p class="sub">Разбор <code>datadrivenconstruction/OpenConstructionEstimate-DDC-CWICR</code>
+(тег v0.4.0). Смотрел не README, а данные: скачал RU-трек и сверил с нашей базой ФЕР-2020.</p>
+
+<div class="lead">
+<b>Короткий ответ:</b> данные брать нельзя (CC BY-NC 4.0), идеи — можно и нужно.
+Одну идею уже проверил на вашей смете и получил результат, которого у нас раньше не было:
+неявный индекс сметы и коэффициент на демонтаж, который в документе не напечатан.
+</div>
+
+<div class="cards">
+  <div class="stat"><div class="k">Расценок в их базе</div><div class="v">55 719</div></div>
+  <div class="stat"><div class="k">Строк в RU-треке</div><div class="v">900 225</div></div>
+  <div class="stat"><div class="k">Совпало с нашим ФЕР по названию</div><div class="v">81,6 %</div></div>
+  <div class="stat"><div class="k">Медиана их цены к ФЕР-2000</div><div class="v">×34,1</div></div>
+  <div class="stat"><div class="k">Их лицензия данных</div><div class="v">CC BY-NC</div></div>
+</div>
+<p class="note">Разброс отношения по перцентилям: p5 ×11,4 · p25 ×21,3 · медиана ×34,1 · p75 ×62,8 ·
+p95 ×151,5. В «правдоподобный» диапазон индекса ×40…60 попадает только 16,7 % позиций — как база цен
+это не годится.</p>
+
+<h2>Что берём — пять вещей</h2>
+<div class=card><div class=t>Ресурсная развёртка норм <span class=tag>Главное</span></div><p>У них расценка разложена на ресурсы с количеством: разряд, электроэнергия, электроды, краны по грузоподъёмности, сварочные агрегаты — 8,2 строки на расценку. У нас в базе только итоги ФОТ/ЭММ/материалы. Без развёртки нет ни потребности в материалах по норме, ни ведомости расхода стали, которую вы просили по КР1.</p><p class=act><b>Что делать:</b> Импортировать поресурсную часть из нашего же ФСНБ (в XML ФГИС ЦС она есть), DDC — как образец схемы.</p></div>
+<div class=card><div class=t>Проверка сметы по неявному индексу <span class=tag>Сделано в этом круге</span></div><p>Норма неизменна, цена региональна — значит цена позиции ÷ цена ФЕР-2000 даёт индекс, которым смета пересчитана. Он не напечатан в документе, но вытаскивается. На смете 1166/Н виден коэффициент демонтажа ≈ 0,33, и остаются 2 строки для проверки глазами.</p><p class=act><b>Что делать:</b> scripts/check_implicit_index.py — уже в репозитории, с тестами.</p></div>
+<div class=card><div class=t>Типизация строк row_type <span class=tag>Средний приоритет</span></div><p>У них строка — типизированная запись: Ресурс / Состав работ / Машинист / Масса / Электричество / Абстрактный ресурс / Услуга. «Состав работ» — готовый текст для акта скрытых работ, «Масса» — для ведомости стали, «Электричество» — для мощности.</p><p class=act><b>Что делать:</b> Перенять типизацию при импорте ФСНБ: одна строка — один тип, а не текст в примечании.</p></div>
+<div class=card><div class=t>Инвариант «нормы не меняются, меняются цены» <span class=tag>Средний приоритет</span></div><p>У них 30 треков с побайтово одинаковыми нормами и CI-тест track-parity. У нас смена базы цен могла незаметно менять норму — теста на это нет.</p><p class=act><b>Что делать:</b> Добавить тест: нормы ФЕР/ФСБЦ при смене версии цен не меняются.</p></div>
+<div class=card><div class=t>Правило «отклонение &gt;30 % — с обоснованием» <span class=tag>Дёшево</span></div><p>Их CONTRIBUTING требует обосновывать цену, отклоняющуюся от медианы более чем на 30 %. Это прямо то, о чём мы говорили по ФЕР/ТЕР.</p><p class=act><b>Что делать:</b> Вписать в чек-лист пополнения базы как формальное правило.</p></div>
+
+<h2>Чего не берём</h2>
+<div class="scroll"><table><thead><tr><th>Что</th><th>Почему нет</th></tr></thead><tbody><tr><td><b>55 719 расценок и 27 672 ресурса</b></td><td>CC BY-NC 4.0 — в MIT-ядро нельзя. Плюс редакция и регион не наши, уровень цен не подтверждён.</td></tr>
+<tr><td><b>rate_code / resource_code</b></td><td>Зашифрованные, не ГЭСН/ФЕР: сопоставление только по тексту, а он на 12 % пустой.</td></tr>
+<tr><td><b>Qdrant-снапшоты (1 ГБ)</b></td><td>Производная от данных → та же CC BY-NC. И 3072-мерные OpenAI-эмбеддинги нам не нужны: BM25 в norms.py работает без внешних вызовов.</td></tr>
+<tr><td><b>n8n-workflow (Apache-2.0)</b></td><td>Технически можно, но у нас свой CLI и MCP — дублировать оркестрацию незачем.</td></tr>
+<tr><td><b>PDF-книга</b></td><td>All rights reserved.</td></tr>
+<tr><td><b>Их цены как «рыночные»</b></td><td>Средняя по Петербургу на неизвестную дату — не источник для акта. Наше правило «цена с датой и версией выгрузки» строже.</td></tr></tbody></table></div>
+
+<h2>Проверка на вашей смете 1166/Н: неявный индекс</h2>
+<p class="note">Цена позиции ÷ цена той же нормы в базе ФЕР-2000 (базис 01.01.2000). Метод считает,
+что норма неизменна, а цена региональна — тогда отношение и есть индекс пересчёта.
+Сопоставлено 20 позиций из 47; общая медиана <b>×105.9</b>.</p>
+<div class="cards" style="margin-top:12px">
+  <div class="stat"><div class="k">Монтаж / прочее</div><div class="v">×110.1</div></div>
+  <div class="stat"><div class="k">Демонтаж</div><div class="v">×36.1</div></div>
+  <div class="stat"><div class="k">Коэффициент демонтажа</div><div class="v">×0.33</div></div>
+  <div class="stat"><div class="k">Связь доли материалов с индексом</div><div class="v">0.57</div></div>
+</div>
+<p class="note">Коэффициент демонтажа <b>×0.33</b> в смете нигде не напечатан —
+он виден только из отношения цен. Связь «доля ФОТ+ЭММ ↔ логарифм индекса» = 0.57:
+чем больше в норме материалов, тем ниже общий индекс. Это не дефект сметы, а следствие того, что труд
+и материалы индексируются по-разному, а наша база даёт их одной суммой.</p>
+
+<div class="scroll" style="margin-top:14px"><table>
+<thead><tr><th class=n>№</th><th>Шифр</th><th>Наименование</th><th class=n>Цена сметы</th>
+<th class=n>ФЕР-2000</th><th class=n>Индекс</th><th class=n>От ряда</th><th class=c>Ряд</th>
+<th class=n>Доля ФОТ+ЭММ</th><th class=c>Метка</th></tr></thead>
+<tbody><tr class=''><td class=n>7</td><td class=code>ГЭСНм08-02-390-01</td><td>Демонтаж коробов пластмассовых шириной до 40 мм</td><td class=n>6 676.79</td><td class=n>206.76</td><td class=n><b>×32.3</b></td><td class=n>-10.5 %</td><td class=c>демонтаж</td><td class=n>75 %</td><td class=c>ok</td></tr>
+<tr class=''><td class=n>9</td><td class=code>ГЭСНм10-08-019-01</td><td>Демонтаж коробки ответвительной на стене</td><td class=n>200.14</td><td class=n>5.29</td><td class=n><b>×37.8</b></td><td class=n>+4.7 %</td><td class=c>демонтаж</td><td class=n>92 %</td><td class=c>ok</td></tr>
+<tr class=''><td class=n>10</td><td class=code>ГЭСНп03-01-007-01</td><td>Демонтаж завесы воздушно-тепловой (регулируемой)</td><td class=n>3 422.64</td><td class=n>94.83</td><td class=n><b>×36.1</b></td><td class=n>+0.0 %</td><td class=c>демонтаж</td><td class=n>100 %</td><td class=c>ok</td></tr>
+<tr class=''><td class=n>11</td><td class=code>ГЭСНм08-03-575-01</td><td>Демонтаж автоматических выключателей</td><td class=n>439.44</td><td class=n>10.60</td><td class=n><b>×41.5</b></td><td class=n>+15.0 %</td><td class=c>демонтаж</td><td class=n>96 %</td><td class=c>ok</td></tr>
+<tr class='warn'><td class=n>12</td><td class=code>ГЭСН20-02-019-01</td><td>Демонтаж кронштейнов под вентиляционное оборудование</td><td class=n>3 153.40</td><td class=n>928.06</td><td class=n><b>×3.4</b></td><td class=n>-90.6 %</td><td class=c>демонтаж</td><td class=n>6 %</td><td class=c>outlier</td></tr>
+<tr class='warn'><td class=n>15</td><td class=code>ГЭСНм08-03-591-08</td><td>Розетка штепсельная неутопленного типа (48 шт)</td><td class=n>83 784.71</td><td class=n>454.03</td><td class=n><b>×184.5</b></td><td class=n>+67.6 %</td><td class=c>монтаж/прочее</td><td class=n>77 %</td><td class=c>outlier</td></tr>
+<tr class=''><td class=n>16</td><td class=code>ГЭСНм08-03-591-01</td><td>Выключатель одноклавишный неутопленного типа (17 шт)</td><td class=n>61 151.18</td><td class=n>424.07</td><td class=n><b>×144.2</b></td><td class=n>+31.0 %</td><td class=c>монтаж/прочее</td><td class=n>75 %</td><td class=c>ok</td></tr>
+<tr class=''><td class=n>17</td><td class=code>ГЭСНм08-03-591-04</td><td>Выключатель двухклавишный неутопленного типа (4 шт)</td><td class=n>66 509.00</td><td class=n>456.45</td><td class=n><b>×145.7</b></td><td class=n>+32.3 %</td><td class=c>монтаж/прочее</td><td class=n>77 %</td><td class=c>ok</td></tr>
+<tr class=''><td class=n>18</td><td class=code>ГЭСНм08-02-409-09</td><td>Труба гофрированная ПВХ по конструкциям (560 м)</td><td class=n>21 335.83</td><td class=n>156.33</td><td class=n><b>×136.5</b></td><td class=n>+24.0 %</td><td class=c>монтаж/прочее</td><td class=n>89 %</td><td class=c>ok</td></tr>
+<tr class=''><td class=n>19</td><td class=code>ГЭСНм08-02-412-02</td><td>Затягивание провода в трубы сечением до 6 мм² (320 м)</td><td class=n>7 568.47</td><td class=n>68.77</td><td class=n><b>×110.1</b></td><td class=n>+0.0 %</td><td class=c>монтаж/прочее</td><td class=n>79 %</td><td class=c>ok</td></tr>
+<tr class=''><td class=n>21</td><td class=code>ГЭСНм08-02-412-03</td><td>Затягивание провода в трубы сечением до 16 мм² (240 м)</td><td class=n>8 986.87</td><td class=n>87.25</td><td class=n><b>×103.0</b></td><td class=n>-6.4 %</td><td class=c>монтаж/прочее</td><td class=n>74 %</td><td class=c>ok</td></tr>
+<tr class=''><td class=n>24</td><td class=code>ГЭСНм08-02-390-01</td><td>Короба пластмассовые шириной до 40 мм (116 м)</td><td class=n>22 495.80</td><td class=n>206.76</td><td class=n><b>×108.8</b></td><td class=n>-1.2 %</td><td class=c>монтаж/прочее</td><td class=n>75 %</td><td class=c>ok</td></tr>
+<tr class=''><td class=n>27</td><td class=code>ГЭСНм08-02-399-01</td><td>Провод в коробах сечением до 6 мм² (48 м)</td><td class=n>3 973.17</td><td class=n>38.59</td><td class=n><b>×103.0</b></td><td class=n>-6.4 %</td><td class=c>монтаж/прочее</td><td class=n>73 %</td><td class=c>ok</td></tr>
+<tr class=''><td class=n>29</td><td class=code>ГЭСНм08-02-399-02</td><td>Провод в коробах сечением до 35 мм² (68 м)</td><td class=n>5 245.19</td><td class=n>47.95</td><td class=n><b>×109.4</b></td><td class=n>-0.6 %</td><td class=c>монтаж/прочее</td><td class=n>78 %</td><td class=c>ok</td></tr>
+<tr class=''><td class=n>33</td><td class=code>ГЭСНм08-03-575-01</td><td>Монтаж приборов/аппаратов (автоматы + УЗО)</td><td class=n>1 468.85</td><td class=n>10.60</td><td class=n><b>×138.6</b></td><td class=n>+25.9 %</td><td class=c>монтаж/прочее</td><td class=n>96 %</td><td class=c>ok</td></tr>
+<tr class=''><td class=n>36</td><td class=code>ГЭСНм08-02-409-09</td><td>Труба гофрированная ПВХ (58 м)</td><td class=n>21 335.84</td><td class=n>156.33</td><td class=n><b>×136.5</b></td><td class=n>+24.0 %</td><td class=c>монтаж/прочее</td><td class=n>89 %</td><td class=c>ok</td></tr>
+<tr class=''><td class=n>37</td><td class=code>ГЭСНм08-02-412-02</td><td>Затягивание провода в трубы до 6 мм² (58 м)</td><td class=n>7 568.50</td><td class=n>68.77</td><td class=n><b>×110.1</b></td><td class=n>+0.0 %</td><td class=c>монтаж/прочее</td><td class=n>79 %</td><td class=c>ok</td></tr>
+<tr class='warn'><td class=n>42</td><td class=code>ГЭСН46-03-011-01</td><td>Пробивка борозд в кирпичных стенах до 20 см² (40 м)</td><td class=n>20 096.40</td><td class=n>339.11</td><td class=n><b>×59.3</b></td><td class=n>-46.1 %</td><td class=c>монтаж/прочее</td><td class=n>100 %</td><td class=c>outlier</td></tr>
+<tr class='warn'><td class=n>43</td><td class=code>ГЭСНм08-02-411-01</td><td>Рукав металлический наружным диаметром до 48 мм</td><td class=n>44 062.33</td><td class=n>1 010.15</td><td class=n><b>×43.6</b></td><td class=n>-60.4 %</td><td class=c>монтаж/прочее</td><td class=n>40 %</td><td class=c>outlier</td></tr>
+<tr class=''><td class=n>45</td><td class=code>ГЭСН46-03-017-05</td><td>Заделка отверстий  гнезд и борозд в бетонных стенах</td><td class=n>104 504.24</td><td class=n>1 227.39</td><td class=n><b>×85.1</b></td><td class=n>-22.7 %</td><td class=c>монтаж/прочее</td><td class=n>52 %</td><td class=c>ok</td></tr></tbody></table></div>
+
+<h2>Единственное, что стоит смотреть глазами</h2>
+<ul><li><b>ГЭСНм08-03-591-08</b> ×184.5 (+67.6 % к своему ряду) — Розетка штепсельная неутопленного типа (48 шт)</li>
+<li><b>ГЭСН46-03-011-01</b> ×59.3 (-46.1 % к своему ряду) — Пробивка борозд в кирпичных стенах до 20 см² (40 м)</li></ul>
+<p class="note">Остальные «выпавшие» объясняются долей материалов — это не ошибки сметы.</p>
+
+<h2>Без пары в базе: индекс не выводится</h2>
+<div class="scroll"><table><thead><tr><th class=n>№</th><th>Шифр</th><th>Причина</th></tr></thead>
+<tbody><tr><td class=n>1</td><td class=code>ГЭСНр67-01-004-05</td><td>ремонтные расценки (сб. 67) — своей ставки в базе ФЕР-2020 нет</td></tr>
+<tr><td class=n>2</td><td class=code>ГЭСНр67-01-004-03</td><td>ремонтные расценки (сб. 67) — своей ставки в базе ФЕР-2020 нет</td></tr>
+<tr><td class=n>3</td><td class=code>ГЭСНр67-01-004-01</td><td>ремонтные расценки (сб. 67) — своей ставки в базе ФЕР-2020 нет</td></tr>
+<tr><td class=n>4</td><td class=code>ГЭСНр67-01-004-06</td><td>ремонтные расценки (сб. 67) — своей ставки в базе ФЕР-2020 нет</td></tr>
+<tr><td class=n>5</td><td class=code>ГЭСНр67-01-002-01</td><td>ремонтные расценки (сб. 67) — своей ставки в базе ФЕР-2020 нет</td></tr>
+<tr><td class=n>6</td><td class=code>ГЭСНр67-01-002-11</td><td>ремонтные расценки (сб. 67) — своей ставки в базе ФЕР-2020 нет</td></tr>
+<tr><td class=n>8</td><td class=code>ГЭСНр67-01-003-01</td><td>ремонтные расценки (сб. 67) — своей ставки в базе ФЕР-2020 нет</td></tr>
+<tr><td class=n>13</td><td class=code>ГЭСНм08-03-610-04</td><td>шифра нет в базе ФЕР-2020 (доп. 9) — сверять не с чем</td></tr>
+<tr><td class=n>14</td><td class=code>ГЭСНм08-03-609-04</td><td>шифра нет в базе ФЕР-2020 (доп. 9) — сверять не с чем</td></tr>
+<tr><td class=n>20</td><td class=code>21.1.06.09-0151</td><td>материал или оборудование (код ФГИС ЦС) — своей расценки нет, индекс не выводится</td></tr>
+<tr><td class=n>22</td><td class=code>21.1.06.09-0152</td><td>материал или оборудование (код ФГИС ЦС) — своей расценки нет, индекс не выводится</td></tr>
+<tr><td class=n>23</td><td class=code>21.1.06.09-0153</td><td>материал или оборудование (код ФГИС ЦС) — своей расценки нет, индекс не выводится</td></tr>
+<tr><td class=n>25</td><td class=code>20.2.05.04-0057</td><td>материал или оборудование (код ФГИС ЦС) — своей расценки нет, индекс не выводится</td></tr>
+<tr><td class=n>26</td><td class=code>20.2.05.04-0061</td><td>материал или оборудование (код ФГИС ЦС) — своей расценки нет, индекс не выводится</td></tr>
+<tr><td class=n>28</td><td class=code>21.1.06.09-0151</td><td>материал или оборудование (код ФГИС ЦС) — своей расценки нет, индекс не выводится</td></tr>
+<tr><td class=n>30</td><td class=code>21.1.06.09-0152</td><td>материал или оборудование (код ФГИС ЦС) — своей расценки нет, индекс не выводится</td></tr>
+<tr><td class=n>31</td><td class=code>21.1.06.09-0153</td><td>материал или оборудование (код ФГИС ЦС) — своей расценки нет, индекс не выводится</td></tr>
+<tr><td class=n>32</td><td class=code>20.5.02.07-0003</td><td>материал или оборудование (код ФГИС ЦС) — своей расценки нет, индекс не выводится</td></tr>
+<tr><td class=n>34</td><td class=code>62.1.01.09-1101</td><td>материал или оборудование (код ФГИС ЦС) — своей расценки нет, индекс не выводится</td></tr>
+<tr><td class=n>35</td><td class=code>62.1.05.03-1641</td><td>материал или оборудование (код ФГИС ЦС) — своей расценки нет, индекс не выводится</td></tr>
+<tr><td class=n>38</td><td class=code>21.2.03.05-0068</td><td>материал или оборудование (код ФГИС ЦС) — своей расценки нет, индекс не выводится</td></tr>
+<tr><td class=n>39</td><td class=code>20.5.02.04-0001</td><td>материал или оборудование (код ФГИС ЦС) — своей расценки нет, индекс не выводится</td></tr>
+<tr><td class=n>40</td><td class=code>ГЭСНр69-01-040-01</td><td>сверление отверстий (сб. 69) — своей ставки в базе ФЕР-2020 нет</td></tr>
+<tr><td class=n>41</td><td class=code>ГЭСНр69-01-040-01</td><td>сверление отверстий (сб. 69) — своей ставки в базе ФЕР-2020 нет</td></tr>
+<tr><td class=n>44</td><td class=code>23.3.05.02-1410</td><td>материал или оборудование (код ФГИС ЦС) — своей расценки нет, индекс не выводится</td></tr>
+<tr><td class=n>46</td><td class=code>ФССЦпг47-1</td><td>материал или оборудование (код ФГИС ЦС) — своей расценки нет, индекс не выводится</td></tr>
+<tr><td class=n>47</td><td class=code>ФССЦпг02-15-...</td><td>материал или оборудование (код ФГИС ЦС) — своей расценки нет, индекс не выводится</td></tr></tbody></table></div>
+
+<h2>Чего эта проверка не делает</h2>
+<ul><li>Это не проверка правильности цены: индекс — отношение двух чисел, а не доказательство, что цена в смете верна.</li>
+<li>Работы, которых нет в федеральной базе (ремонтные сб. 67/69, пусконаладка), остаются без индекса — так и записано, а не заменено нулём.</li>
+<li>Поресурсного разложения у нас нет: в базе ФЕР-2020 только итоговые ФОТ/ЭММ/материалы, поэтому индексы по труду и по материалам не разделены. Одно число на позицию смешивает разные индексы — отсюда разброс.</li>
+<li>Коэффициенты, применённые в смете, отдельно не выделены: они внутри цены и поэтому входят в индекс.</li></ul>
+
+<div class="foot">
+Источники: репозиторий DDC CWICR (LICENSE, NOTICE, DATA_DICTIONARY.md, CONTRIBUTING.md,
+RU-трек parquet — скачан и сверен), наша база <code>data/fsnb/fer2020.csv.gz</code> (ФСНБ-2020,
+доп. № 9, приказы Минстроя № 961/пр, 962/пр). Отчёт по смете — <code>out/implicit_index.md</code>,
+скрипт — <code>scripts/check_implicit_index.py</code>.
+</div>
+</div></body></html>
