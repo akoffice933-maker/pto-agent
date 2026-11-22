@@ -239,6 +239,12 @@ def t_assess_release_impact(args, ctx):
 def t_scan_release_batch(args, ctx):
     base = Path(ctx.get("base_dir", "."))
     sheets = load_manifest(_p(args, "manifest_path"))
+    if ctx.get("sandbox_reads") or os.environ.get("PTO_MCP_SANDBOX") == "1":
+        # пути внутри манифеста — тоже входные данные: вне корня не читаем
+        for sheet in sheets:
+            for key in ("scan", "drawing", "anchors", "texts", "truth"):
+                if sheet.get(key):
+                    safe_path(sheet[key], base)
     summary_data = None
     summary_path = args.get("summary_path")
     if summary_path and Path(summary_path).exists():
@@ -761,7 +767,9 @@ def handle_rpc(req: dict, ctx: dict) -> dict | None:
 
 # Ключи аргументов, которые являются путями ЗАПИСИ: писать вне корня нельзя никогда.
 WRITE_PATH_KEYS = {"out_path", "out_dir", "history_path", "audit_path", "output_path",
-                   "target_path", "save_path", "xlsx_path"}
+                   "target_path", "save_path", "xlsx_path", "prices_dir"}
+# Ключи-пути, не оканчивающиеся на _path/_paths/_dir: чтение вне корня запрещено.
+READ_PATH_KEYS = {"summary_source", "paths"}
 
 
 def safe_path(value, base_dir: str | Path, *, write: bool = False) -> Path:
@@ -795,15 +803,24 @@ def check_paths(arguments: dict, ctx: dict) -> None:
     sandbox_writes = bool(ctx.get("sandbox_writes")) or force
     sandbox_reads = bool(ctx.get("sandbox_reads")) or force
     for key, value in (arguments or {}).items():
-        if not isinstance(value, str) or not value:
+        if key == "base_dir":
+            # корень инструментов: вне песочницы — отказ, иначе относительные
+            # пути ниже разрешались бы от чужого каталога
+            if (sandbox_reads or sandbox_writes) and isinstance(value, str) and value:
+                safe_path(value, base)
             continue
-        if not (key.endswith("_path") or key in WRITE_PATH_KEYS):
+        if not (key.endswith(("_path", "_paths", "_dir"))
+                or key in WRITE_PATH_KEYS or key in READ_PATH_KEYS):
             continue
-        if key in WRITE_PATH_KEYS:
-            if sandbox_writes:
-                safe_path(value, base, write=True)
-        elif sandbox_reads:
-            safe_path(value, base)
+        values = value if isinstance(value, list) else [value]
+        for item in values:
+            if not isinstance(item, str) or not item:
+                continue
+            if key in WRITE_PATH_KEYS:
+                if sandbox_writes:
+                    safe_path(item, base, write=True)
+            elif sandbox_reads:
+                safe_path(item, base)
 
 
 def make_ctx(base_dir: str | Path = ".", audit_path: str | Path = "out/cad/audit.jsonl",

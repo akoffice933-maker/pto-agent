@@ -102,7 +102,11 @@ def process_sheet(sheet: dict, *, engine: str = "vlm", template_path: str = DEFA
     out_dir = Path(out_dir)
     sheet_dir = out_dir / "sheets"
     sheet_dir.mkdir(parents=True, exist_ok=True)
-    sheet_id = sheet["sheet_id"]
+    # sheet_id приходит из манифеста: только имя файла, без каталогов —
+    # иначе кэш листа перезаписывает произвольный файл (аудит 2026-11-22)
+    sheet_id = Path(str(sheet.get("sheet_id") or "sheet")).name
+    if sheet_id in ("", ".", ".."):
+        sheet_id = "sheet"
     started = time.time()
 
     scan_path = Path(sheet["scan"])

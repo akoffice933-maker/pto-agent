@@ -290,6 +290,7 @@ def create_app(*, root: str | Path | None = None, data_dir: str | Path | None = 
     @app.post("/login")
     async def login_submit(request: Request):
         form = await request.form()
+        _check_csrf(request, str(form.get("csrf") or ""))
         login = str(form.get("login") or "").strip()
         password = str(form.get("password") or "")
         payload = auth.load(store.users_path)
@@ -310,11 +311,17 @@ def create_app(*, root: str | Path | None = None, data_dir: str | Path | None = 
         _flash(request, "ok", f"Вход выполнен: {public.get('name')} · "
                               f"{matrix.role_title(str(public.get('role')))}")
         target = str(request.query_params.get("next") or "/")
-        return RedirectResponse(target if target.startswith("/") else "/", status_code=303)
+        # только локальный путь: «//host» — protocol-relative URL на чужой домен
+        if not target.startswith("/") or target.startswith("//") or "\\" in target:
+            target = "/"
+        return RedirectResponse(target, status_code=303)
 
     @app.post("/logout")
     async def logout(request: Request):
         user = current_user(request)
+        if user:
+            form = await request.form()
+            _check_csrf(request, str(form.get("csrf") or ""))
         _audit(request, user, "аутентификация.выход", (user or {}).get("login") or "")
         request.session.clear()
         return RedirectResponse("/login", status_code=303)
@@ -332,9 +339,13 @@ def create_app(*, root: str | Path | None = None, data_dir: str | Path | None = 
         period = request.query_params.get("period") or ""
         summary = store.summary(period=period or _default_period(store),
                                date=_date.today().isoformat())
-        requests = store.treasury_state().get("requests") or []
+        treasury_state = store.treasury_state()
+        requests = treasury_state.get("requests") or []
+        state_object = str(treasury_state.get("object") or "")
         open_rows = [row for row in requests
-                     if row.get("status") not in (treasury.PAID, treasury.REJECTED)][:6]
+                     if row.get("status") not in (treasury.PAID, treasury.REJECTED)
+                     and _object_visible(matrix, user,
+                                         str(row.get("object") or state_object))][:6]
         history = store.audit.history(limit=6) if store.audit.path.exists() else []
         return render(request, "dashboard.html", user, summary=summary,
                       open_requests=open_rows, history=list(reversed(history)))
@@ -346,8 +357,7 @@ def create_app(*, root: str | Path | None = None, data_dir: str | Path | None = 
         state = store.stock_state()
         warehouse_code = request.query_params.get("warehouse") or ""
         rows = stock.balances(state, warehouse=warehouse_code or None)
-        if warehouse_code:
-            _check_warehouse_allowed(state, rows, user, matrix)
+        _check_warehouse_allowed(state, rows, user, matrix)
         documents = list(reversed(state.get("documents") or []))[:12]
         return render(request, "warehouse.html", user,
                       rows=rows, documents=documents,
@@ -363,6 +373,7 @@ def create_app(*, root: str | Path | None = None, data_dir: str | Path | None = 
         state = store.stock_state()
         warehouse_code = request.query_params.get("warehouse") or ""
         rows = stock.balances(state, warehouse=warehouse_code or None)
+        _check_warehouse_allowed(state, rows, user, matrix)
         return render(request, "partials/stock_table.html", user, rows=rows,
                       warehouse_code=warehouse_code,
                       total=round(sum(float(row.get("amount") or 0) for row in rows), 2))
@@ -582,6 +593,8 @@ def create_app(*, root: str | Path | None = None, data_dir: str | Path | None = 
         row = treasury.find(state, number)
         if not row:
             raise Denied("NO_REQUEST", f"заявки {number} нет", status=404)
+        _require_object(user, str(row.get("object") or state.get("object") or ""),
+                        "request.approve")
         route = row.get("route") or []
         done = row.get("approvals") or []
         if len(done) >= len(route):
@@ -617,6 +630,8 @@ def create_app(*, root: str | Path | None = None, data_dir: str | Path | None = 
         row = treasury.find(state, number)
         if not row:
             raise Denied("NO_REQUEST", f"заявки {number} нет", status=404)
+        _require_object(user, str(row.get("object") or state.get("object") or ""),
+                        "request.approve")
         route = row.get("route") or []
         done = row.get("approvals") or []
         step = route[len(done)] if len(done) < len(route) else (route[-1] if route else "")
@@ -643,6 +658,10 @@ def create_app(*, root: str | Path | None = None, data_dir: str | Path | None = 
         form = await request.form()
         _check_csrf(request, str(form.get("csrf") or ""))
         state = store.treasury_state()
+        row = treasury.find(state, number)
+        if row:
+            _require_object(user, str(row.get("object") or state.get("object") or ""),
+                            "request.pay")
         amount = form.get("amount")
         with store.lock:
             result = treasury.pay(
@@ -1125,18 +1144,33 @@ def _default_period(store: Store) -> str:
     return f"{today.year:04d}-{today.month:02d}"
 
 
+def _object_visible(matrix: rbac.Matrix, user: dict, object_name: str) -> bool:
+    """Видит ли человек объект на чтение.
+
+    Область «own» — только свои объекты; «all» и «none» на чтение не
+    ограничиваются: сервисный актор и администратор читают всё, а запись им
+    запрещена правами и `_require_human`, а не областью объектов.
+    """
+    if matrix.scope_of(str(user.get("role"))) != "own":
+        return True
+    return matrix.object_allowed(str(user.get("role")), list(user.get("objects") or []),
+                                 object_name)
+
+
 def _check_warehouse_allowed(state: dict, rows: list[dict], user: dict,
                              matrix: rbac.Matrix) -> None:
     object_name = str(state.get("object") or "")
-    if not matrix.object_allowed(str(user.get("role")), list(user.get("objects") or []),
-                                 object_name):
+    if not _object_visible(matrix, user, object_name):
         raise Denied("OBJECT_FORBIDDEN",
                      f"склад объекта «{object_name}» не закреплён за {user.get('name')}",
                      action="warehouse.view")
 
 
 def _requests_view(state: dict, user: dict, matrix: rbac.Matrix) -> list[dict]:
-    """Строки заявок с тем, что человек вправе с ними сделать (проверка — на POST)."""
+    """Строки заявок, видимых человеку, с тем, что он вправе с ними сделать.
+
+    Чужие объекты не попадают в список вовсе; действия проверяются на POST.
+    """
     role = str(user.get("role"))
     rows = []
     for row in state.get("requests") or []:
@@ -1144,8 +1178,7 @@ def _requests_view(state: dict, user: dict, matrix: rbac.Matrix) -> list[dict]:
         done = row.get("approvals") or []
         next_step = route[len(done)] if len(done) < len(route) else ""
         object_name = str(row.get("object") or state.get("object") or "")
-        visible = matrix.object_allowed(role, list(user.get("objects") or []), object_name) \
-            or matrix.scope_of(role) == "all"
+        visible = _object_visible(matrix, user, object_name)
         rows.append({
             **row,
             "object": object_name,
@@ -1161,7 +1194,7 @@ def _requests_view(state: dict, user: dict, matrix: rbac.Matrix) -> list[dict]:
             "approved_text": ", ".join(f"{item.get('role')} ({item.get('person')})"
                                        for item in done) or "—",
         })
-    return list(reversed(rows))
+    return [row for row in reversed(rows) if row["visible"]]
 
 
 def status_text(status: str | None) -> str:
