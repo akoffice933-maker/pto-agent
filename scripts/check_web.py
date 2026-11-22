@@ -58,7 +58,13 @@ def token(client: TestClient) -> str:
 
 
 def login(client: TestClient, name: str) -> TestClient:
-    response = client.post("/login", data={"login": name, "password": PASSWORDS[name]})
+    page = client.get("/login")
+    check(page.status_code == 200, f"форма входа не открылась: {page.status_code}")
+    marker = 'name="csrf" value="'
+    start = page.text.index(marker) + len(marker)
+    csrf = page.text[start: page.text.index('"', start)]
+    response = client.post("/login", data={"login": name, "password": PASSWORDS[name],
+                                           "csrf": csrf})
     check(response.status_code == 200, f"вход {name} не удался: {response.status_code}")
     return client
 
