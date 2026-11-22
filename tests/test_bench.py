@@ -138,3 +138,50 @@ def test_cli_bench_mock_writes_report(tmp_path: Path):
     assert (tmp_path / "report.md").exists()
     assert (tmp_path / "report.json").exists()
     assert (tmp_path / "rows.jsonl").exists()
+
+
+def test_pre_registration_written_before_run(tmp_path: Path):
+    """Предрегистрация пишется до первого запроса и содержит отпечаток плана."""
+    from pto_agent.bench import pre_registration
+
+    plan = Plan(attempts=2, blocks=2, model="test-model", provider="test")
+    path = pre_registration(plan, "https://example.invalid/v1", tmp_path / "pre.md")
+    text = path.read_text(encoding="utf-8")
+    assert plan.fingerprint() in text
+    assert "до первого запроса" in text
+    assert "лучший из N" in text          # правило зафиксировано словами
+    assert "test-model" in text
+    for task in plan.tasks:
+        assert task.id in text
+
+
+def test_cli_requires_key_for_live_run(monkeypatch):
+    """Без ключа живой прогон не начинается: код 2 и понятное сообщение."""
+    import subprocess
+    import sys
+    env = {k: v for k, v in __import__("os").environ.items()
+           if "GROQ" not in k and "API_KEY" not in k}
+    result = subprocess.run(
+        [sys.executable, "-m", "pto_agent", "bench", "run", "--provider", "groq",
+         "--model", "llama"], cwd=Path(__file__).resolve().parents[1],
+        capture_output=True, text=True, timeout=120, env=env)
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "GROQ_API_KEY" in result.stderr
+
+
+def test_auth_failure_is_technical_not_silent(tmp_path: Path):
+    """Неверный ключ — это технический отказ в каждой строке, а не «0 %» без объяснений."""
+    import subprocess
+    import sys
+    result = subprocess.run(
+        [sys.executable, "-m", "pto_agent", "bench", "run", "--provider", "groq",
+         "--model", "llama", "--attempts", "1", "--blocks", "1", "--out", str(tmp_path)],
+        cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True,
+        timeout=300, env={**__import__("os").environ, "GROQ_API_KEY": "definitely-not-a-key"})
+    assert result.returncode == 0, result.stderr[-1500:]
+    rows = [json.loads(line) for line in
+            (tmp_path / "rows.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert rows and all(row["outcome"] == "technical" for row in rows)
+    # 401 или 403 — в обоих случаях это отказ авторизации, и он виден в каждой строке
+    assert all(row["error"].startswith(("HTTP 401", "HTTP 403")) for row in rows)
+    assert (tmp_path / "pre_registration.md").exists()

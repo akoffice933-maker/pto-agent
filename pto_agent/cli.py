@@ -2,6 +2,7 @@
 """CLI MVP ИИ-агента ПТО."""
 import argparse
 import json
+import os
 import sys
 from datetime import date, datetime
 from pathlib import Path
@@ -3357,9 +3358,19 @@ def cmd_harness(args):
     return 0
 
 
+# Бесплатные OpenAI-совместимые адреса: прогон стоит 0 ₽, платить не за что.
+# Лимиты у всех меняются — перед прогоном смотреть кабинет провайдера.
+FREE_PROVIDERS = {
+    "groq": ("https://api.groq.com/openai/v1", "GROQ_API_KEY"),
+    "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY"),
+    "cerebras": ("https://api.cerebras.ai/v1", "CEREBRAS_API_KEY"),
+    "openrouter": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
+}
+
+
 def cmd_bench(args):
     """Стенд: прогон плана и отчёт. По умолчанию — на mock-модели, без сети и денег."""
-    from .bench import MockModel, Plan, run_plan, to_json, to_markdown
+    from .bench import MockModel, Plan, pre_registration, run_plan, to_json, to_markdown
     from .bench.mock import HTTP_429, HTTP_500
 
     out = Path(args.out)
@@ -3368,17 +3379,26 @@ def cmd_bench(args):
     for item in args.break_ or []:
         kind, _, mode = item.partition("=")
         policy[kind] = mode
+    base_url = args.base_url or FREE_PROVIDERS.get(args.provider, (None, None))[0]
+    key_env = args.key_env or FREE_PROVIDERS.get(args.provider, (None, None))[1] or ""
+    api_key = os.environ.get(key_env, "") if key_env else ""
     mock = None
     try:
-        if args.command == "mock" or not args.base_url:
+        if args.command == "mock" or not base_url:
             mock = MockModel(policy=policy, fail_every=args.fail_every,
                              fail_with=args.fail_with).start()
             base_url = mock.base_url
-        else:
-            base_url = args.base_url
+        elif not api_key:
+            print(f"нет ключа: задайте {key_env or 'ключ'} "
+                  f"(или запустите bench mock — без сети и без ключа)",
+                  file=sys.stderr)
+            return 2
         plan = Plan(attempts=args.attempts, blocks=args.blocks, seed=args.seed,
                     model=args.model, provider=args.provider)
-        result = run_plan(plan, base_url, log_path=out / "rows.jsonl")
+        # предрегистрация пишется ДО первого запроса — иначе отпечаток плана ничего не значит
+        wrote = pre_registration(plan, base_url, out / "pre_registration.md")
+        print(f"предрегистрация: {wrote} · отпечаток {plan.fingerprint()}")
+        result = run_plan(plan, base_url, log_path=out / "rows.jsonl", api_key=api_key)
     finally:
         if mock:
             mock.stop()
@@ -4312,7 +4332,10 @@ def main(argv=None):
         node.add_argument("--base-url", default=None,
                           help="адрес провайдера; без него поднимается mock-модель")
         node.add_argument("--model", default="mock-model")
-        node.add_argument("--provider", default="mock")
+        node.add_argument("--provider", default="mock",
+                          help="mock | groq | gemini | cerebras | openrouter")
+        node.add_argument("--key-env", default=None,
+                          help="имя переменной с ключом (по умолчанию — по провайдеру)")
         node.add_argument("--out", default="out/bench")
         node.add_argument("--attempts", type=int, default=3)
         node.add_argument("--blocks", type=int, default=3)

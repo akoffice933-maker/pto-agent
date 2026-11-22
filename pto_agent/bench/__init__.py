@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from .mock import MockModel
 from .report import to_json, to_markdown
-from .runner import Plan, Task, RunResult, run_plan
+from .runner import Plan, Task, RunResult, pre_registration, run_plan
 
-__all__ = ["MockModel", "Plan", "Task", "RunResult", "run_plan", "to_markdown", "to_json"]
+__all__ = ["MockModel", "Plan", "Task", "RunResult", "run_plan", "pre_registration",
+           "to_markdown", "to_json"]
