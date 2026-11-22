@@ -3357,6 +3357,44 @@ def cmd_harness(args):
     return 0
 
 
+def cmd_bench(args):
+    """Стенд: прогон плана и отчёт. По умолчанию — на mock-модели, без сети и денег."""
+    from .bench import MockModel, Plan, run_plan, to_json, to_markdown
+    from .bench.mock import HTTP_429, HTTP_500
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    policy = {}
+    for item in args.break_ or []:
+        kind, _, mode = item.partition("=")
+        policy[kind] = mode
+    mock = None
+    try:
+        if args.command == "mock" or not args.base_url:
+            mock = MockModel(policy=policy, fail_every=args.fail_every,
+                             fail_with=args.fail_with).start()
+            base_url = mock.base_url
+        else:
+            base_url = args.base_url
+        plan = Plan(attempts=args.attempts, blocks=args.blocks, seed=args.seed,
+                    model=args.model, provider=args.provider)
+        result = run_plan(plan, base_url, log_path=out / "rows.jsonl")
+    finally:
+        if mock:
+            mock.stop()
+    to_json(result, out / "report.json")
+    markdown = to_markdown(result)
+    (out / "report.md").write_text(markdown, encoding="utf-8")
+    c = result["summary"]
+    print(f"стенд: годен с первой попытки {c['first_attempt_rate'] * 100:.1f} % "
+          f"({c['first_qualified']}/{c['first_attempts']}) · технических отказов "
+          f"{c['technical']} из {c['rows']}")
+    print(f"отчёт: {out / 'report.md'}")
+    if args.fail_on_regression and c["first_attempt_rate"] < args.min_rate:
+        print(f"годных меньше порога {args.min_rate}", file=sys.stderr)
+        raise SystemExit(1)
+
+
 def cmd_eval(args):
     """Проверка поведения: арифметика, происхождение цифр, честность, отказы."""
     from .eval import run_all
@@ -4265,6 +4303,30 @@ def main(argv=None):
     hn = sub.add_parser("harness", help="границы агента: инструменты, уровни, доказательства")
     hn.add_argument("--out", default="out/harness")
     hn.set_defaults(func=cmd_harness)
+
+    bn = sub.add_parser("bench", help="стенд: измеритель, который можно проверить")
+    bn_sub = bn.add_subparsers(dest="command")
+    for name, text in (("mock", "прогон на mock-модели: без сети, ключей и денег"),
+                       ("run", "прогон против настоящего OpenAI-совместимого адреса")):
+        node = bn_sub.add_parser(name, help=text)
+        node.add_argument("--base-url", default=None,
+                          help="адрес провайдера; без него поднимается mock-модель")
+        node.add_argument("--model", default="mock-model")
+        node.add_argument("--provider", default="mock")
+        node.add_argument("--out", default="out/bench")
+        node.add_argument("--attempts", type=int, default=3)
+        node.add_argument("--blocks", type=int, default=3)
+        node.add_argument("--seed", type=int, default=20261122)
+        node.add_argument("--break", dest="break_", action="append", default=[],
+                          metavar="ВИД=РЕЖИМ",
+                          help="заложить сбой в mock: schema=bad_json, no_data=invented, "
+                               "quote=paraphrase, chain=unknown, truncation=truncated")
+        node.add_argument("--fail-every", type=int, default=None,
+                          help="каждый N-й запрос — технический отказ (mock)")
+        node.add_argument("--fail-with", default="http_500", choices=["http_500", "http_429"])
+        node.add_argument("--min-rate", type=float, default=0.95)
+        node.add_argument("--fail-on-regression", action="store_true")
+        node.set_defaults(func=cmd_bench)
 
     ev = sub.add_parser("eval", help="проверка поведения агента, а не «выглядит правильно»")
     ev.add_argument("--out", default="out/eval")
