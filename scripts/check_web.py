@@ -1,7 +1,21 @@
 # -*- coding: utf-8 -*-
 """Сквозная проверка экранов и ролей — шаг CI, как и остальные check_*.
 
-Проверяется не «страница открылась», а то, что заявлено в этапе 5:
+Проверяется не «страница открылась», а то, что заявлено в этапе 5.
+
+Два вида проверок, и это важно для диагностики:
+
+* `gate(...)` — то, без чего остальные числа не имеют смысла: вход, права, отказ агенту,
+  закрытие периода. Падает сразу, с причиной, а не копится в списке.
+* `check(...)` — содержательные утверждения про цифры и следы (сколько списано, какие
+  действия в аудите). Копятся и печатаются все сразу: чинить их удобнее пачкой.
+
+Почему так. После CSRF-фикса 22.11 все входы отвалились, но `check` не останавливает
+выполнение — скрипт дошёл до конца и умер на посторонней строке с `StopIteration`.
+«Сломан вход» выглядело как «одна странная ошибка в закрытии месяца». Теперь отказ
+входа или прав останавливает шаг на себе самом.
+
+Заявлено в этапе 5:
 
 1. без входа экран не открывается;
 2. прораб подаёт требование М-11 из браузера — движение появляется в журнале склада,
@@ -43,8 +57,21 @@ stats = {"screens": 0, "refusals": 0, "moves": 0, "approvals": 0, "audit": 0}
 
 
 def check(condition: bool, message: str) -> None:
+    """Содержательная проверка: копится, печатается в конце пачкой."""
     if not condition:
         violations.append(message)
+
+
+def gate(condition: bool, message: str) -> None:
+    """Предусловие: без него остальные проверки бессмысленны — падаем сразу.
+
+    Печатает причину и выходит с кодом 1. Это не «мягче» и не «строже» check —
+    это другой вопрос: «можно ли вообще продолжать», а не «всё ли сошлось».
+    """
+    if not condition:
+        print(f" ✗ {message}", file=sys.stderr)
+        print("проверка остановлена: сначала устраните это", file=sys.stderr)
+        raise SystemExit(1)
 
 
 def read(root: Path, name: str) -> dict:
@@ -84,10 +111,10 @@ app = create_app(root=work, secret="check-secret")
 # ── 1. без входа экран не открывается ────────────────────────────────────────
 anonymous = TestClient(app)
 response = anonymous.get("/warehouse", follow_redirects=False)
-check(response.status_code == 303 and response.headers["location"].startswith("/login"),
-      "без входа склад открылся")
-check(anonymous.get("/requests", follow_redirects=True).url.path == "/login",
-      "без входа заявки открылись")
+gate(response.status_code == 303 and response.headers["location"].startswith("/login"),
+     "без входа склад открылся")
+gate(anonymous.get("/requests", follow_redirects=True).url.path == "/login",
+     "без входа заявки открылись")
 
 # ── 2. прораб: требование М-11 и чужой объект ────────────────────────────────
 prorab = TestClient(app)
@@ -95,9 +122,9 @@ login(prorab, "prokhorov")
 for screen in ("/", "/warehouse", "/warehouse/issue", "/requests", "/requests/new", "/acts"):
     code = prorab.get(screen).status_code
     stats["screens"] += 1
-    check(code == 200, f"прораб: экран {screen} отдал {code}")
-check(prorab.get("/closing").status_code == 403, "прораб увидел закрытие месяца")
-check(prorab.get("/audit").status_code == 403, "прораб увидел журнал аудита")
+    gate(code == 200, f"прораб: экран {screen} отдал {code}")
+gate(prorab.get("/closing").status_code == 403, "прораб увидел закрытие месяца")
+gate(prorab.get("/audit").status_code == 403, "прораб увидел журнал аудита")
 stats["refusals"] += 2
 
 csrf = token(prorab)
@@ -106,10 +133,10 @@ response = prorab.post("/warehouse/issue", data={
     "csrf": csrf, "number": "М-11 №101", "date": "2026-10-30", "warehouse": "СК-1",
     "object": OBJECT, "item_1": "Бетон B25", "qty_1": "12", "item_2": "", "qty_2": ""},
     follow_redirects=False)
-check(response.status_code == 303, f"требование не проведено: {response.status_code}")
+gate(response.status_code == 303, f"требование не проведено: {response.status_code}")
 stock_state = read(work, "stock")
 moves = [move for move in stock_state["moves"] if move.get("doc_id") == "М-11 №101"]
-check(len(moves) > 0, "движений по требованию М-11 №101 нет")
+gate(len(moves) > 0, "движений по требованию М-11 №101 нет")
 check(abs(sum(float(move["qty"]) for move in moves) - 12) < 1e-6,
       "списано не 12 м³ бетона")
 check(len(stock_state["moves"]) > before_moves, "журнал склада не изменился")
@@ -130,52 +157,52 @@ check(not [move for move in read(work, "stock")["moves"]
 # ── 3. ИИ-агент: читает, но не проводит ──────────────────────────────────────
 agent = TestClient(app)
 login(agent, "agent")
-check(agent.get("/warehouse").status_code == 200, "ИИ-агент не видит склад")
+gate(agent.get("/warehouse").status_code == 200, "ИИ-агент не видит склад")
 csrf = token(agent)
 before = len(read(work, "stock")["moves"])
 response = agent.post("/warehouse/issue", data={
     "csrf": csrf, "number": "М-11 №103", "date": "2026-10-30", "warehouse": "СК-1",
     "object": OBJECT, "item_1": "Бетон B25", "qty_1": "1", "item_2": "", "qty_2": ""})
-check(response.status_code == 403 and "AGENT_FORBIDDEN" in response.text,
-      "ИИ-агент смог провести требование")
+gate(response.status_code == 403 and "AGENT_FORBIDDEN" in response.text,
+     "ИИ-агент смог провести требование")
 
 check(len(read(work, "stock")["moves"]) == before, "ИИ-агент изменил журнал склада")
 response = agent.post("/closing", data={"period": "2026-10", "csrf": csrf})
-check(response.status_code == 403 and "AGENT_FORBIDDEN" in response.text,
-      "ИИ-агент смог закрыть месяц")
+gate(response.status_code == 403 and "AGENT_FORBIDDEN" in response.text,
+     "ИИ-агент смог закрыть месяц")
 stats["refusals"] += 2
 
 # ── 3б. зарплата: экран, права, заявки ──────────────────────────────────────
 payroll_buh = TestClient(app)
 login(payroll_buh, "buh")
 page = payroll_buh.get("/payroll")
-check(page.status_code == 200, f"экран зарплаты отдал {page.status_code}")
-check("Т-51" in page.text, "на экране зарплаты нет ведомости Т-51")
+gate(page.status_code == 200, f"экран зарплаты отдал {page.status_code}")
+gate("Т-51" in page.text, "на экране зарплаты нет ведомости Т-51")
 check("Не считается" in page.text and "больничные" in page.text
       and "приказ" in page.text,
       "на экране зарплаты не написано, чего в ней нет (больничные/отпускные — по приказам)")
 check("2 979 000" in page.text or "30 %" in page.text,
       "на экране зарплаты нет предельной базы взносов")
-check(payroll_buh.get("/payroll?period=2026-09").status_code == 200,
-      "переключение месяца в зарплате не работает")
+gate(payroll_buh.get("/payroll?period=2026-09").status_code == 200,
+     "переключение месяца в зарплате не работает")
 stats["screens"] += 1
 
 agent_payroll = agent.get("/payroll")
-check(agent_payroll.status_code == 200, "ИИ-агент не видит ведомость")
+gate(agent_payroll.status_code == 200, "ИИ-агент не видит ведомость")
 check("Провести начисление" not in agent_payroll.text,
       "у ИИ-агента на экране есть кнопка проведения зарплаты")
 csrf = token(agent)
 response = agent.post("/payroll/post", data={"period": "2026-10", "csrf": csrf})
-check(response.status_code == 403 and "AGENT_FORBIDDEN" in response.text,
-      "ИИ-агент смог провести начисление зарплаты")
+gate(response.status_code == 403 and "AGENT_FORBIDDEN" in response.text,
+     "ИИ-агент смог провести начисление зарплаты")
 response = agent.post("/payroll/requests", data={"period": "2026-10", "csrf": csrf})
-check(response.status_code == 403 and "AGENT_FORBIDDEN" in response.text,
-      "ИИ-агент смог выставить заявки на зарплату")
+gate(response.status_code == 403 and "AGENT_FORBIDDEN" in response.text,
+     "ИИ-агент смог выставить заявки на зарплату")
 stats["refusals"] += 2
 
 csrf = token(prorab)
 response = prorab.post("/payroll/post", data={"period": "2026-10", "csrf": csrf})
-check(response.status_code == 403, "прораб смог провести начисление зарплаты")
+gate(response.status_code == 403, "прораб смог провести начисление зарплаты")
 stats["refusals"] += 1
 
 before_entries = len(read(work, "ledger")["entries"])
@@ -189,17 +216,17 @@ csrf = token(payroll_buh)
 response = payroll_buh.post("/payroll/requests", data={"period": "2026-10",
                                                       "date": "2026-11-05", "csrf": csrf},
                             follow_redirects=False)
-check(response.status_code == 303, "заявки на выплату зарплаты не создались")
+gate(response.status_code == 303, "заявки на выплату зарплаты не создались")
 salary_requests = [row for row in read(work, "treasury")["requests"]
                    if str(row["number"]).startswith("ЗП-")]
-check(len(salary_requests) == 7, f"заявок на зарплату {len(salary_requests)}, а людей 7")
+gate(len(salary_requests) == 7, f"заявок на зарплату {len(salary_requests)}, а людей 7")
 check(all(row["route"] == ["руководитель"] for row in salary_requests),
       "зарплату согласует не руководитель: маршрут подобран по сумме, а не по статье")
 check(all(row["basis"]["number"] == "Т-51 за 2026-10" for row in salary_requests),
       "у заявок на зарплату нет основания Т-51")
 # ноябрь: декрет и сокращение видны на экране теми же числами, что в расчёте
 nov_page = payroll_buh.get("/payroll?period=2026-11")
-check(nov_page.status_code == 200, "экран зарплаты за ноябрь не открылся")
+gate(nov_page.status_code == 200, "экран зарплаты за ноябрь не открылся")
 check("890 760,70" in nov_page.text,
       "начисление за ноябрь не показано: выходное пособие должно входить в начисление")
 check("390 422,20" in nov_page.text, "декретные (СФР) не показаны на экране")
@@ -227,7 +254,7 @@ pto = TestClient(app)
 login(pto, "pto")
 csrf = token(pto)
 response = pto.post(f"/requests/{first}/approve", data={"csrf": csrf})
-check(response.status_code == 403, "ПТО подписало первую ступень (её подписывает снабжение)")
+gate(response.status_code == 403, "ПТО подписало первую ступень (её подписывает снабжение)")
 stats["refusals"] += 1
 
 for name in ("snab", "pto", "dir"):
@@ -236,11 +263,11 @@ for name in ("snab", "pto", "dir"):
     csrf = token(client)
     response = client.post(f"/requests/{first}/approve", data={"csrf": csrf},
                            follow_redirects=False)
-    check(response.status_code == 303, f"{name}: ступень не согласована "
-                                      f"({response.status_code})")
+    gate(response.status_code == 303, f"{name}: ступень не согласована "
+                                     f"({response.status_code})")
     stats["approvals"] += 1
 row = treasury.find(read(work, "treasury"), first)
-check(row["status"] == treasury.APPROVED, f"{first}: статус после маршрута — {row['status']}")
+gate(row["status"] == treasury.APPROVED, f"{first}: статус после маршрута — {row['status']}")
 check(len({item["person"] for item in row["approvals"]}) == 3,
       f"{first}: ступени подписаны не тремя людьми")
 
@@ -249,31 +276,31 @@ login(buh, "buh")
 csrf = token(buh)
 response = buh.post(f"/requests/{first}/pay", data={"csrf": csrf, "amount": "250000"},
                     follow_redirects=False)
-check(response.status_code == 303, "бухгалтер не смог оплатить согласованную заявку")
+gate(response.status_code == 303, "бухгалтер не смог оплатить согласованную заявку")
 row = treasury.find(read(work, "treasury"), first)
 check(abs(float(row["paid"]) - 250000) < 0.01, f"{first}: оплачено {row['paid']}")
 
 before_entries = len(read(work, "ledger")["entries"])
 response = buh.post("/postings/sync", data={"csrf": csrf}, follow_redirects=False)
-check(response.status_code == 303, "проведение оплат в журнал не сработало")
+gate(response.status_code == 303, "проведение оплат в журнал не сработало")
 check(len(read(work, "ledger")["entries"]) >= before_entries,
       "журнал проводок потерял записи")
 
 # ── 5. закрытие месяца ──────────────────────────────────────────────────────
 csrf = token(buh)
 response = buh.post("/closing", data={"period": "2026-10", "csrf": csrf})
-check(response.status_code == 200, f"закрытие месяца не открылось: {response.status_code}")
+gate(response.status_code == 200, f"закрытие месяца не открылось: {response.status_code}")
 ledger_state = read(work, "ledger")
 closed = [row["period"] for row in ledger_state["periods"] if row.get("closed")]
-check(closed == ["2026-10"], f"закрытые периоды: {closed}")
-check(ledger.verify(ledger_state)["ok"], "журнал не сходится после закрытия")
+gate(closed == ["2026-10"], f"закрытые периоды: {closed}")
+gate(ledger.verify(ledger_state)["ok"], "журнал не сходится после закрытия")
 revenue = sum(closing.balance_of(ledger_state, "90.01", date="2026-10-31").values(),
               Decimal("0"))
 check(revenue >= 0, f"выручка после закрытия отрицательная: {revenue}")
 
 # ── 5a. экран налогов ───────────────────────────────────────────────────────
 response = buh.get("/taxes")
-check(response.status_code == 200, f"/taxes не открылся: {response.status_code}")
+gate(response.status_code == 200, f"/taxes не открылся: {response.status_code}")
 page = response.text
 for marker in ("НДС за", "Налог на прибыль", "6-НДФЛ", "РСВ и травматизм",
                "НДС с авансов", "Не сделано"):
@@ -283,7 +310,7 @@ check("сдавать отчётность" in page or "сдача отчётн�
 stranger = TestClient(app)
 login(stranger, "prokhorov")
 response = stranger.get("/taxes")
-check(response.status_code == 403, f"прораб увидел налоги: {response.status_code}")
+gate(response.status_code == 403, f"прораб увидел налоги: {response.status_code}")
 stats["refusals"] += 1
 
 # ── 6. аудит: роли, IP, цепочка ─────────────────────────────────────────────
@@ -301,7 +328,7 @@ check(any(row["payload"].get("role") == "прораб" for row in records),
 check(any(row["payload"].get("code") == "AGENT_FORBIDDEN" for row in records),
       "отказ ИИ-агенту не записан в аудит")
 ok, count, why = AuditLog(work / "audit.jsonl").verify()
-check(ok, f"хэш-цепочка аудита нарушена: {why}")
+gate(ok, f"хэш-цепочка аудита нарушена: {why}")
 
 # ── 7. роли в файле данных ──────────────────────────────────────────────────
 matrix = json.loads((ROOT / "data" / "reference" / "rbac.json").read_text(encoding="utf-8"))
@@ -324,8 +351,8 @@ steps = len(closed_periods[0].get("steps") or []) if closed_periods else 0
 print(f"закрытие месяца: шагов {steps}"
       f" · журнал сходится: {'да' if ledger.verify(ledger_state)['ok'] else 'НЕТ'}")
 if violations:
-    print("НАРУШЕНИЯ:")
+    print(f"НАРУШЕНИЯ ({len(violations)}):", file=sys.stderr)
     for item in violations:
-        print(f" ✗ {item}")
+        print(f" ✗ {item}", file=sys.stderr)
     raise SystemExit(1)
 print("нарушений: 0")
