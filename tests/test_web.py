@@ -25,6 +25,9 @@ from fastapi.testclient import TestClient
 
 from pto_agent import ledger, payroll, stock, treasury
 from pto_agent.web import build_demo, create_app
+from pto_agent.weblogin import login_csrf as weblogin_login_csrf
+from pto_agent.weblogin import login as web_login
+from pto_agent.weblogin import page_csrf
 
 REPO = Path(__file__).resolve().parents[1]
 OBJECT = "ЖК «Северный», корпус 2"
@@ -55,29 +58,22 @@ def client(root) -> TestClient:
 
 
 def login(client: TestClient, login_name: str) -> TestClient:
-    response = client.post("/login", data={"login": login_name,
-                                          "password": PASSWORDS[login_name],
-                                          "csrf": login_csrf(client)})
-    assert response.status_code == 200, response.text
-    return client
+    """Вход тем же кодом, что и в `scripts/check_web.py` — см. `pto_agent/weblogin.py`.
+
+    Раньше вход был написан дважды (здесь и в CI-скрипте), и CSRF-защита сломала обе
+    копии: тесты починили, скрипт — нет. Теперь копия одна.
+    """
+    return web_login(client, login_name, PASSWORDS[login_name])
 
 
 def login_csrf(client: TestClient) -> str:
     """Токен формы входа: логин защищён CSRF, как и остальные POST."""
-    page = client.get("/login")
-    assert page.status_code == 200, page.text
-    marker = 'name="csrf" value="'
-    start = page.text.index(marker) + len(marker)
-    return page.text[start: page.text.index('"', start)]
+    return weblogin_login_csrf(client)
 
 
 def csrf(client: TestClient) -> str:
     """Токен формы берётся со сводки: она открыта всем ролям (там форма выхода)."""
-    page = client.get("/")
-    assert page.status_code == 200, page.text
-    marker = 'name="csrf" value="'
-    start = page.text.index(marker) + len(marker)
-    return page.text[start: page.text.index('"', start)]
+    return page_csrf(client)
 
 
 def state(root: Path, name: str) -> dict:
@@ -703,3 +699,54 @@ def test_statements_screen_has_prior_year_column(client, root):
         # прошлый год есть: колонка заполнена числами прошлого года
         assert "на 31.12.2025, ₽" in text
     assert "Годом ранее" in text or "первый отчётный год" in text
+
+
+# ─────────────── вход один на всех: тесты и шаги CI не расходятся ───────────────
+def test_login_without_csrf_is_refused_with_400(client):
+    """Без токена форма входа отвечает 400 — и это то, что сломало CI 22.11."""
+    response = client.post("/login", data={"login": "buh", "password": PASSWORDS["buh"]})
+    assert response.status_code == 400
+    assert "csfr" in response.text.lower() or "csrf" in response.text.lower()
+
+
+def test_login_helper_reports_refusal_with_code(client):
+    """Неверный пароль: отказ приходит с кодом в сообщении, а не молчаливым assert."""
+    from pto_agent.weblogin import LoginRefused, login as web_login_plain
+
+    with pytest.raises(LoginRefused) as caught:
+        web_login_plain(client, "buh", "не-тот-пароль")
+    assert caught.value.status == 401
+    assert "HTTP 401" in str(caught.value)
+    assert "пароль" in str(caught.value)
+
+
+def test_login_helper_reports_csrf_change_as_words():
+    """Если форма входа изменится, ошибка скажет об этом, а не упадёт индексом строки."""
+
+    class NoForm:
+        class _Response:
+            status_code = 200
+            text = "<form>без токена</form>"
+
+        def get(self, _page):
+            return self._Response()
+
+    from pto_agent.weblogin import LoginRefused, login as web_login_plain
+
+    with pytest.raises(LoginRefused) as caught:
+        web_login_plain(NoForm(), "buh", "что-угодно")
+    assert "форма входа изменилась" in str(caught.value)
+
+
+def test_all_web_entries_share_one_login_helper():
+    """CSRF сломала вход дважды, потому что он был написан дважды. Копия должна быть одна.
+
+    Проверка читает сами файлы. Если в тестах или в CI-скрипте снова появится разбор
+    формы входа своей копией, шаг CI и тесты снова разойдутся молча — как 22.11.
+    """
+    from pto_agent.weblogin import CSRF_MARKER as marker  # маркер живёт в одном месте
+    for name in ("tests/test_web.py", "scripts/check_web.py"):
+        text = (REPO / name).read_text(encoding="utf-8")
+        assert "weblogin" in text, f"{name} не использует общий вход из pto_agent.weblogin"
+        assert marker not in text, (
+            f"{name} снова разбирает форму входа сам — используйте pto_agent.weblogin")

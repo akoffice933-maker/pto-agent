@@ -29,6 +29,8 @@ from fastapi.testclient import TestClient                                       
 from pto_agent import closing, ledger, treasury                                 # noqa: E402
 from pto_agent.audit import AuditLog                                            # noqa: E402
 from pto_agent.web import build_demo, create_app                                # noqa: E402
+from pto_agent.weblogin import page_csrf                                       # noqa: E402
+from pto_agent.weblogin import LoginRefused, login as web_login                 # noqa: E402
 
 OBJECT = "ЖК «Северный», корпус 2"
 OTHER = "ЖК «Северный», корпус 3"
@@ -50,23 +52,26 @@ def read(root: Path, name: str) -> dict:
 
 
 def token(client: TestClient) -> str:
-    page = client.get("/")
-    check(page.status_code == 200, f"сводка не открылась: {page.status_code}")
-    marker = 'name="csrf" value="'
-    start = page.text.index(marker) + len(marker)
-    return page.text[start: page.text.index('"', start)]
+    """Токен для POST из открытой сессии — со сводки (там форма выхода)."""
+    try:
+        return page_csrf(client)
+    except LoginRefused as exc:
+        violations.append(str(exc))
+        return ""
 
 
 def login(client: TestClient, name: str) -> TestClient:
-    page = client.get("/login")
-    check(page.status_code == 200, f"форма входа не открылась: {page.status_code}")
-    marker = 'name="csrf" value="'
-    start = page.text.index(marker) + len(marker)
-    csrf = page.text[start: page.text.index('"', start)]
-    response = client.post("/login", data={"login": name, "password": PASSWORDS[name],
-                                           "csrf": csrf})
-    check(response.status_code == 200, f"вход {name} не удался: {response.status_code}")
-    return client
+    """Вход одной строкой и одним кодом на всех — см. `pto_agent/weblogin.py`.
+
+    Если вход не удался, скрипт останавливается здесь, а не на «закрытии месяца»:
+    раньше отказ 400 по CSRF выглядел как `StopIteration` в конце проверки.
+    """
+    try:
+        return web_login(client, name, PASSWORDS[name])
+    except LoginRefused as exc:
+        # печатаем сразу: выход из скрипта не должен скрывать причину
+        print(f" ✗ {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
 
 
 work = Path(tempfile.mkdtemp(prefix="pto-web-"))
@@ -311,7 +316,12 @@ check(not agent_rights & {"postings.post", "postings.accept", "closing.run",
 print(f"экраны: проверено {stats['screens']} · отказов по правам {stats['refusals']} · "
       f"движений по М-11 {stats['moves']} · согласований {stats['approvals']} · "
       f"записей аудита {stats['audit']}")
-print(f"закрытие месяца: шагов {len(next(row for row in ledger_state['periods'] if row.get('closed'))['steps'])}"
+closed_periods = [row for row in ledger_state.get("periods", []) if row.get("closed")]
+# Без проверки это был голый next(): при незакрытом периоде он бросал StopIteration,
+# и настоящая причина (вход не состоялся) терялась. Теперь причина называется словами.
+check(closed_periods, "нет закрытого периода: закрытие месяца не состоялось")
+steps = len(closed_periods[0].get("steps") or []) if closed_periods else 0
+print(f"закрытие месяца: шагов {steps}"
       f" · журнал сходится: {'да' if ledger.verify(ledger_state)['ok'] else 'НЕТ'}")
 if violations:
     print("НАРУШЕНИЯ:")
