@@ -15,7 +15,11 @@
 * `timeout`   — сервер молчит дольше таймаута клиента;
 * `http_429`  — отказ по лимиту;
 * `http_500`  — ошибка сервера;
-* `paraphrase`— пересказ нормы без цитаты и пункта.
+* `paraphrase`— пересказ нормы без цитаты и пункта;
+* `length`    — правильный ответ, обрезанный по `max_tokens` (как это делает настоящий
+                сервер), с `finish_reason: length`;
+* `json_mode` — на просьбу «верни только JSON» отвечает голым JSON;
+* `long`      — правильный ответ, но длиннее запрошенного `max_tokens` (сервер не соблюл лимит).
 
 Сервер принимает реальный `POST /v1/chat/completions` и отдаёт реальный ответ в формате
 OpenAI, поэтому клиент — обычный OpenAI-совместимый код, без ветвлений «а если мок».
@@ -30,6 +34,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 GOOD, BAD_JSON, INVENTED = "good", "bad_json", "invented"
 TRUNCATED, TIMEOUT, HTTP_429, HTTP_500, PARAPHRASE = (
     "truncated", "timeout", "http_429", "http_500", "paraphrase")
+LENGTH, JSON_MODE, LONG = "length", "json_mode", "long"
 
 DEFAULT_POLICY = {
     "schema": GOOD,
@@ -47,13 +52,22 @@ GOOD_BODIES = {
         "total": 120000, "vat": 24000}, ensure_ascii=False),
     "quote": "Согласно п. 10.3.1 СП 63.13330, «толщина защитного слоя бетона должна "
              "приниматься не менее диаметра стержня и не менее 20 мм».",
-    "no_data": "Нет данных: в томе КР раздела 4 нет ведомости расхода стали, поэтому "
-               "количество арматуры не определено. Не оценено.",
+    # Мок обязан назвать признак отсутствия из запроса ("[нет данных]" / "не найдена" и т.п.),
+    # иначе он «честен» по смыслу, но не по проверке, и тест ловит мок, а не модель.
+    "no_data": "[нет данных]: в выгрузке нет ведомости расхода стали, позиция 44 "
+               "не найдена, раздел отсутствует. Значение не определено и не оценено.",
     "chain": "шаг 1 — объёмы прочитаны: 12 м3 бетона, 1 т арматуры; "
              "шаг 3 — сумма посчитана: итог 120 000 ₽ без НДС.",
     "truncation": json.dumps({"number": "КС-2 №1", "period": "2026-10",
                               "lines": [], "total": 0}, ensure_ascii=False),
+    # json_mode: ответ на запрос «верни только JSON» — без пояснений вокруг
 }
+
+# Ответ на просьбу «верни только JSON»: правильный ответ — сам JSON, ничего вокруг.
+JSON_MODE_BODY = json.dumps({
+    "number": "КС-2 №1", "period": "2026-10",
+    "lines": [{"name": "Бетон B25", "unit": "м3", "qty": 12, "price": 5000}],
+    "total": 60000, "vat": 12000}, ensure_ascii=False)
 
 BAD_BODIES = {
     "bad_json": '{"number": "КС-2 №1", "period": "2026-10", "lines": [{"name": "Бетон"',
@@ -69,13 +83,15 @@ class MockModel:
 
     def __init__(self, policy: dict[str, str] | None = None, *, host: str = "127.0.0.1",
                  port: int = 0, timeout_s: float = 2.0, delay_s: float = 0.0,
-                 fail_every: int | None = None, fail_with: str = HTTP_500) -> None:
+                 fail_every: int | None = None, fail_with: str = HTTP_500,
+                 length_cut_chars: int | None = None) -> None:
         self.policy = {**DEFAULT_POLICY, **(policy or {})}
         self.host, self.port = host, port
         self.timeout_s = timeout_s
         self.delay_s = delay_s
         self.fail_every = fail_every
         self.fail_with = fail_with
+        self.length_cut_chars = length_cut_chars
         self.requests: list[dict] = []
         self._srv: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
@@ -109,7 +125,8 @@ class MockModel:
                 if code != 200:
                     self._send(code, {"error": {"message": payload}})
                     return
-                self._send(200, outer._completion(payload))
+                finish = "length" if mode in (TRUNCATED, LENGTH) else "stop"
+                self._send(200, outer._completion(payload, finish))
 
             def _send(self, code: int, data: dict) -> None:
                 raw = json.dumps(data, ensure_ascii=False).encode("utf-8")
@@ -147,13 +164,28 @@ class MockModel:
     def kind_of(prompt: str) -> str:
         """Вид задачи по промпту: тот же признак, что в `tasks.default_tasks`."""
         lowered = prompt.lower()
-        if "json" in lowered:
-            return "schema" if "собери акт" in lowered else "truncation"
+        # Порядок важен: промпт цитаты содержит слово «пункт», а промпт цепочки — «сумма».
+        # Раньше «json» проверялся первым, и запрос «верни только JSON» уходил в truncation —
+        # это ловил тест, а не пользователь.
         if "цитат" in lowered:
             return "quote"
+        if "json" in lowered:
+            return "schema" if "собери акт" in lowered else "truncation"
         if "цепочк" in lowered or "шаг 1" in lowered:
             return "chain"
         return "no_data"
+
+    def _cut(self, text: str, max_tokens: int | None) -> str:
+        """Обрезать ответ так, как его обрезает сервер, упёршийся в `max_tokens`.
+
+        Длина обрезки задаётся `length_cut_chars`, а не пересчётом токенов: у кириллицы
+        и JSON соотношение символов и токенов гуляет, и «4 символа на токен» давало такой
+        щедрый лимит, что обрезки не происходило вовсе — режим `length` был мёртвым.
+        """
+        limit = self.length_cut_chars or 40
+        if max_tokens:
+            limit = min(limit, max(1, int(max_tokens)))
+        return text if len(text) <= limit else text[:limit]
 
     def _respond(self, body: dict, index: int) -> tuple[str, str, int]:
         if self.delay_s:
@@ -172,6 +204,17 @@ class MockModel:
                 break
         kind = self.kind_of(prompt)
         mode = self.policy.get(kind, GOOD)
+        # режим длины: содержимое правильное, но обрезано, как это делает сервер по max_tokens
+        if mode == LENGTH:
+            return LENGTH, self._cut(GOOD_BODIES[kind], body.get("max_tokens")), 200
+        if mode == LONG:
+            # содержимое правильное, но лимит не соблюдён — так вёл себя шлюз на живом прогоне
+            filler = "Пояснение к ответу. " * 60
+            return GOOD, GOOD_BODIES[kind] + "\n" + filler, 200
+        if mode == JSON_MODE and "json" in prompt.lower():
+            # просьба «только JSON»: правильный ответ — голый JSON. Политика по виду задачи
+            # тут не применяется: это свойство формата, а не содержания.
+            return GOOD, JSON_MODE_BODY, 200
         if mode == GOOD:
             return GOOD, GOOD_BODIES[kind], 200
         if mode == TRUNCATED:
@@ -182,6 +225,9 @@ class MockModel:
             return INVENTED, BAD_BODIES[INVENTED], 200
         if mode == PARAPHRASE:
             return PARAPHRASE, BAD_BODIES[PARAPHRASE], 200
+        if mode == JSON_MODE:
+            # просьбы вернуть JSON в этой задаче нет — это свойство формата, не содержания
+            return GOOD, GOOD_BODIES[kind], 200
         if mode == TIMEOUT:
             return TIMEOUT, "", 200
         if mode == HTTP_429:
@@ -189,10 +235,14 @@ class MockModel:
         return HTTP_500, "upstream error", 500
 
     @staticmethod
-    def _completion(text: str) -> dict:
+    def _completion(text: str, finish_reason: str = "stop") -> dict:
         return {
             "id": "mock-1", "object": "chat.completion", "model": "mock-model",
-            "choices": [{"index": 0, "finish_reason": "stop",
+            "choices": [{"index": 0, "finish_reason": finish_reason,
                          "message": {"role": "assistant", "content": text}}],
-            "usage": {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
+            # Токены считаются по длине ответа (≈3 символа на токен), а не фиксированным
+            # числом: иначе режим «ответ длиннее лимита» невозможно заметить.
+            "usage": {"prompt_tokens": 100,
+                      "completion_tokens": max(1, len(text) // 3),
+                      "total_tokens": 100 + max(1, len(text) // 3)},
         }

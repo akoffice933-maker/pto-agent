@@ -96,6 +96,9 @@ class RunResult:
     tokens_out: int
     response: str
     error: str = ""
+    # Ответ длиннее запрошенного `max_tokens`: сервер не соблюл лимит. Это отметка, а не
+    # приговор — но в отчёте она видна, иначе «ответ длинный» не отличить от «ответ верный».
+    over_max_tokens: bool = False
 
     def to_row(self) -> dict:
         return asdict(self)
@@ -142,11 +145,14 @@ def run_plan(plan: Plan, base_url: str, *, log_path: str | Path | None = None,
         usage = data.get("usage") or {}
         text = ((data.get("choices") or [{}])[0].get("message") or {}).get("content")
         ok, why = task.evaluate(text)
+        tokens_out = int(usage.get("completion_tokens") or 0)
         rows.append(RunResult(slot["block"], task.id, task.kind, slot["attempt"],
                               QUALIFIED if ok else UNQUALIFIED, why, status, latency,
                               int(usage.get("prompt_tokens") or 0),
-                              int(usage.get("completion_tokens") or 0),
-                              (text or "")[:2000]))
+                              tokens_out,
+                              (text or "")[:2000], "",
+                              over_max_tokens=bool(task.max_tokens
+                                                   and tokens_out > task.max_tokens)))
 
     if log_path:
         path = Path(log_path)
@@ -240,7 +246,9 @@ def summarise(rows: list[RunResult]) -> dict:
         bucket["runs"] += 1
         bucket[row.outcome] += 1
     answered = [row for row in first if row.outcome != TECHNICAL]
+    over = sum(1 for row in rows if row.over_max_tokens)
     return {
+        "over_max_tokens": over,
         "rows": len(rows),
         "first_attempts": total_first,
         "first_qualified": qualified_first,
