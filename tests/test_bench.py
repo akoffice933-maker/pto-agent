@@ -185,3 +185,109 @@ def test_auth_failure_is_technical_not_silent(tmp_path: Path):
     # 401 или 403 — в обоих случаях это отказ авторизации, и он виден в каждой строке
     assert all(row["error"].startswith(("HTTP 401", "HTTP 403")) for row in rows)
     assert (tmp_path / "pre_registration.md").exists()
+
+
+# ─── дефекты, найденные ПЕРВЫМ живым прогоном (23.11.2026) ────────────────────
+# Каждый тест здесь — не про мок, а про то, что прибор мерил себя вместо модели.
+
+def test_mock_is_clean_on_every_kind():
+    """Инвариант: мок без сбоев даёт 15 из 15. Если он даёт меньше — сломан прибор.
+
+    Ровно это и случилось: три задачи были невыполнимы по построению, и первый живой
+    прогон показал 46,7 % вместо реального результата модели.
+    """
+    mock = MockModel().start()
+    try:
+        result = run_plan(Plan(attempts=1, blocks=1), mock.base_url)
+    finally:
+        mock.stop()
+    summary = result["summary"]
+    assert summary["first_qualified"] == summary["first_attempts"] == 15, summary["by_kind"]
+
+
+def test_kind_of_matches_every_default_task():
+    """Вид задачи определяется по промпту так же, как он задан в наборе.
+
+    Раньше проверка «json» стояла первой, и все 15 промптов уходили в truncation/schema:
+    мок отвечал не тем телом, а тесты этого не видели.
+    """
+    for task in default_tasks():
+        assert MockModel.kind_of(task.prompt) == task.kind, task.id
+
+
+def test_no_data_requires_the_marker_from_the_prompt():
+    """«Не вижу документа» без названного признака — отговорка, а не честность."""
+    task = next(t for t in default_tasks() if t.id == "no_data_1")
+    ok_honest, _ = task.evaluate("В выгрузке отмечено [нет данных], поэтому расход не назван.")
+    ok_evasive, why = task.evaluate("У меня нет доступа к вашим документам, не могу помочь.")
+    assert ok_honest is True
+    assert ok_evasive is False and "нет данных" in why
+
+
+def test_quote_task_is_checkable():
+    """Цитата: правильный ответ проходит, пересказ — нет."""
+    task = next(t for t in default_tasks() if t.id == "quote_norm_1")
+    assert task.evaluate("«…составляет 20 мм» (п. 10.3.1).")[0] is True
+    assert task.evaluate("Норма требует достаточного защитного слоя.")[0] is False
+
+
+def test_truncation_task_is_possible_but_not_free():
+    """Болтливый ответ обрывается, короткий и точный — проходит."""
+    task = next(t for t in default_tasks() if t.id == "truncation_1")
+    short = '{"number":"1","period":"2026-10","lines":[],"total":0}'
+    chatty = "Конечно! Вот JSON акта, который вы просили: " + short
+    assert task.evaluate(short)[0] is True
+    assert task.evaluate(chatty)[0] is False
+
+
+def test_length_mode_penalises_the_truncation_task():
+    """Если сервер обрезал ответ по max_tokens, «почти JSON» не засчитывается."""
+    mock = MockModel(policy={"truncation": "length"}, length_cut_chars=30).start()
+    try:
+        result = run_plan(Plan(attempts=1, blocks=1), mock.base_url,
+                          log_path=None)
+    finally:
+        mock.stop()
+    kind = result["summary"]["by_kind"]["truncation"]
+    assert kind["runs"] == 2
+    assert kind["unqualified"] + kind["technical"] == kind["runs"]
+
+
+def test_json_mode_satisfies_json_tasks():
+    """Ответ голым JSON на просьбу «только JSON» — это годный ответ, а не сбой."""
+    mock = MockModel(policy={"truncation": "json_mode"}).start()
+    try:
+        result = run_plan(Plan(attempts=1, blocks=1), mock.base_url)
+    finally:
+        mock.stop()
+    assert result["summary"]["first_qualified"] == 15
+
+
+def test_quote_accepts_clause_label_case_insensitive():
+    """«Пункт: 10.3.1.» — указание пункта. Точный ответ не должен считаться провалом."""
+    task = next(t for t in default_tasks() if t.id == "quote_norm_2")
+    assert task.evaluate("«…составляет 20 мм».\n\nПункт: 10.3.1.")[0] is True
+    assert task.evaluate("«…составляет 20 мм». См. таблицу.")[0] is False
+
+
+def test_no_data_accepts_morphology_but_not_excuses():
+    """Отсутствие, названное иначе («не находится»), — честность; «не могу» — нет."""
+    task = next(t for t in default_tasks() if t.id == "no_data_4")
+    assert task.evaluate("Позиция 44 не находится в смете.")[0] is True
+    assert task.evaluate("У меня нет доступа к смете, не могу помочь.")[0] is False
+
+
+def test_oversized_output_is_flagged_not_scored():
+    """Ответ длиннее max_tokens — отметка, а не оценка: иначе оценка завышается.
+
+    Живой прогон показал 640 токенов при лимите 320 — сервер шлюза лимит не соблюдал,
+    и «ответ длинный» нельзя было отличить от «ответ правильный».
+    """
+    mock = MockModel(policy={"truncation": "long"}, length_cut_chars=5000).start()
+    try:
+        result = run_plan(Plan(attempts=1, blocks=1), mock.base_url, log_path=None)
+    finally:
+        mock.stop()
+    flagged = [row for row in result["rows"] if row.over_max_tokens]
+    assert flagged, "нет ни одной отметки over_max_tokens"
+    assert result["summary"]["over_max_tokens"] == len(flagged)
