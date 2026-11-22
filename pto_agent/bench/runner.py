@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import random
 import time
+from datetime import datetime
 import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass, field
@@ -100,11 +101,13 @@ class RunResult:
         return asdict(self)
 
 
-def _post(base_url: str, body: dict, timeout: float) -> tuple[int, dict | None, str]:
+def _post(base_url: str, body: dict, timeout: float,
+          api_key: str | None = None) -> tuple[int, dict | None, str]:
     url = base_url.rstrip("/") + "/v1/chat/completions"
     request = urllib.request.Request(
         url, data=json.dumps(body, ensure_ascii=False).encode("utf-8"), method="POST",
-        headers={"Content-Type": "application/json", "Authorization": "Bearer mock"})
+        headers={"Content-Type": "application/json",
+                 "Authorization": f"Bearer {api_key or 'mock'}"})
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return response.status, json.loads(response.read().decode("utf-8")), ""
@@ -114,7 +117,8 @@ def _post(base_url: str, body: dict, timeout: float) -> tuple[int, dict | None, 
         return 0, None, f"{type(exc).__name__}: {exc}"
 
 
-def run_plan(plan: Plan, base_url: str, *, log_path: str | Path | None = None) -> dict:
+def run_plan(plan: Plan, base_url: str, *, log_path: str | Path | None = None,
+             api_key: str | None = None) -> dict:
     """Прогнать план против OpenAI-совместимого адреса и вернуть сводку + сырые строки."""
     by_id = {task.id: task for task in plan.tasks}
     rows: list[RunResult] = []
@@ -126,7 +130,7 @@ def run_plan(plan: Plan, base_url: str, *, log_path: str | Path | None = None) -
                 "max_tokens": task.max_tokens,
                 "messages": [{"role": "user", "content": task.prompt}]}
         mark = time.monotonic()
-        status, data, error = _post(base_url, body, plan.request_timeout_s)
+        status, data, error = _post(base_url, body, plan.request_timeout_s, api_key)
         latency = int((time.monotonic() - mark) * 1000)
 
         if data is None:
@@ -153,6 +157,68 @@ def run_plan(plan: Plan, base_url: str, *, log_path: str | Path | None = None) -
     return {"plan": plan.to_dict(), "fingerprint": plan.fingerprint(),
             "duration_s": round(time.time() - started, 1), "rows": rows,
             "summary": summarise(rows)}
+
+
+def pre_registration(plan: Plan, base_url: str, path: str | Path) -> Path:
+    """Записать план прогона ДО первого запроса.
+
+    Это не формальность: отпечаток плана, зафиксированный заранее, — единственное
+    доказательство, что набор задач и размер выборки не подбирались после того, как стали
+    известны результаты. Файл пишется до `run_plan`, поэтому иначе быть не может.
+    """
+    hours = round(len(plan.tasks) * plan.attempts * plan.blocks * 2.5 / 60, 1)
+    lines = [
+        "# Предрегистрация прогона стенда",
+        "",
+        f"**Зафиксировано:** {datetime.now().astimezone().isoformat(timespec='seconds')} "
+        f"(до первого запроса)",
+        f"**Методика:** v{plan.method_version} · **отпечаток плана:** `{plan.fingerprint()}`",
+        "",
+        "## Что и где",
+        "",
+        f"- Провайдер: `{plan.provider}` · модель: `{plan.model}`",
+        f"- Адрес: `{base_url}` · температура: {plan.temperature}",
+        f"- Задач: {len(plan.tasks)} · попыток на задачу: {plan.attempts} · блоков: "
+        f"{plan.blocks} · seed: `{plan.seed}`",
+        f"- Запросов всего: {len(plan.tasks) * plan.attempts * plan.blocks} "
+        f"(≈{hours} мин при 2,5 с на запрос)",
+        "",
+        "## Вопросы, на которые отвечает прогон",
+        "",
+        "1. Какова доля запросов с годным результатом **с первой попытки** — по каждому "
+        "виду задач?",
+        "2. Какие свойства держатся, а какие нет: схема акта, цитата с пунктом, «нет "
+        "данных» вместо числа, цепочка шагов, JSON при обрыве?",
+        "3. Сколько технических отказов (таймаут, 429, 5xx) и как они влияют на первую "
+        "цифру?",
+        "",
+        "## Правила, принятые заранее",
+        "",
+        "- Главная метрика — доля годного с первой попытки; «лучший из N» не считается.",
+        "- Технические отказы не выбрасываются и входят в главную метрику.",
+        "- Ретраев в основной серии нет; отдельного «повтора с подсказкой» в этом прогоне "
+        "тоже нет.",
+        "- Остановка и продление выборки по результатам запрещены: план зафиксирован выше.",
+        "- Интервал Уилсона показывается всегда; при малом числе попыток выводы "
+        "формулируются как «в этих условиях», а не «всегда».",
+        "- Отчёт не утверждает причин (подмена, деградация): фиксируется наблюдение при "
+        "заданных условиях.",
+        "- Данные: только синтетические задачи стенда. Персональных данных и документов "
+        "проекта в запросах нет.",
+        "",
+        "## Задачи",
+        "",
+        "| Задача | Вид | max_tokens | Что проверяет |",
+        "|---|---|---|---|",
+    ]
+    for task in plan.tasks:
+        lines.append(f"| {task.id} | {task.kind} | {task.max_tokens} | {task.note} |")
+    lines += ["", f"Отпечаток `{plan.fingerprint()}` повторяется в отчёте: если он "
+                  "совпадёт, план не менялся.", ""]
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("\n".join(lines), encoding="utf-8")
+    return target
 
 
 def summarise(rows: list[RunResult]) -> dict:
