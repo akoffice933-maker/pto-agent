@@ -56,9 +56,19 @@ def client(root) -> TestClient:
 
 def login(client: TestClient, login_name: str) -> TestClient:
     response = client.post("/login", data={"login": login_name,
-                                          "password": PASSWORDS[login_name]})
+                                          "password": PASSWORDS[login_name],
+                                          "csrf": login_csrf(client)})
     assert response.status_code == 200, response.text
     return client
+
+
+def login_csrf(client: TestClient) -> str:
+    """Токен формы входа: логин защищён CSRF, как и остальные POST."""
+    page = client.get("/login")
+    assert page.status_code == 200, page.text
+    marker = 'name="csrf" value="'
+    start = page.text.index(marker) + len(marker)
+    return page.text[start: page.text.index('"', start)]
 
 
 def csrf(client: TestClient) -> str:
@@ -82,14 +92,16 @@ def test_anonymous_is_sent_to_login(client):
 
 
 def test_wrong_password_explains_refusal(client):
-    response = client.post("/login", data={"login": "prokhorov", "password": "не-тот"})
+    response = client.post("/login", data={"login": "prokhorov", "password": "не-тот",
+                                           "csrf": login_csrf(client)})
     assert response.status_code == 401
     assert "неверный пароль" in response.text
 
 
 def test_login_puts_role_on_screen(client):
     response = client.post("/login", data={"login": "prokhorov",
-                                           "password": PASSWORDS["prokhorov"]})
+                                           "password": PASSWORDS["prokhorov"],
+                                           "csrf": login_csrf(client)})
     assert "Прохоров" in response.text
     assert "Прораб участка" in response.text
     assert "Вход выполнен" in response.text
