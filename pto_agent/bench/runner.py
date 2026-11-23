@@ -62,22 +62,38 @@ class Plan:
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
     def schedule(self) -> list[dict]:
-        """Расписание: блок × (задача, попытка), порядок внутри блока случайный."""
-        rng = random.Random(self.seed)
-        slots = []
+        """Расписание: блок × (задача, попытка).
+
+        Попытки одной задачи РАЗНЕСЕНЫ по разным блокам, а не идут подряд. Иначе «три
+        попытки» — это три запроса одного промпта в одну и ту же секунду: они меряют не
+        устойчивость во времени, а удачность одного момента. Побочный эффект полезен: кэш
+        ответов на стороне сервера станет виден (одинаковые тексты при temperature > 0).
+        """
+        result: list[dict] = []
         for block in range(1, self.blocks + 1):
-            for task in self.tasks:
-                for attempt in range(1, self.attempts + 1):
-                    slots.append({"block": block, "task": task.id, "attempt": attempt})
-        # перемешиваем внутри блока, а не весь список: блоки должны быть сравнимы
-        result, index = [], 0
-        per_block = len(self.tasks) * self.attempts
-        for block in range(1, self.blocks + 1):
-            chunk = slots[index:index + per_block]
-            rng.shuffle(chunk)
-            result.extend(chunk)
-            index += per_block
+            for attempt in range(1, self.attempts + 1):
+                rng = random.Random(self.seed + block * 7919 + attempt * 104729)
+                chunk = [{"block": block, "task": task.id, "attempt": attempt}
+                         for task in self.tasks]
+                rng.shuffle(chunk)
+                result.extend(chunk)
         return result
+
+    def blocks_mismatch(self) -> list[str]:
+        """Задачи, отличающиеся только идентификатором (тот же промпт и max_tokens).
+
+        Для сравнения двух адресов это ловушка: копии одной задачи выглядят как независимые
+        наблюдения и сужают интервал без оснований.
+        """
+        seen: dict[tuple[str, int], str] = {}
+        twins: list[str] = []
+        for task in self.tasks:
+            key = (task.prompt, task.max_tokens)
+            if key in seen:
+                twins.append(f"{seen[key]} = {task.id}")
+            else:
+                seen[key] = task.id
+        return twins
 
 
 @dataclass
@@ -227,6 +243,66 @@ def pre_registration(plan: Plan, base_url: str, path: str | Path) -> Path:
     return target
 
 
+def same_answers(rows: list[RunResult]) -> float:
+    """Доля задач, где ВСЕ ответы совпали дословно.
+
+    При `temperature > 0` это повод сказать «ответы идентичны» — и всё, без выводов о
+    причинах: так бывает и от кэша, и от детерминизма модели.
+    """
+    groups: dict[str, list[str]] = {}
+    for row in rows:
+        if row.outcome == TECHNICAL:
+            continue
+        groups.setdefault(row.task, []).append(row.response)
+    with_many = [texts for texts in groups.values() if len(texts) > 1]
+    if not with_many:
+        return 0.0
+    identical = sum(1 for texts in with_many if len(set(texts)) == 1)
+    return round(identical / len(with_many), 4)
+
+
+def compare(left: dict, right: dict, left_name: str, right_name: str) -> dict:
+    """Сравнение двух прогонов ОДНОГО плана: разница по задачам и её интервал.
+
+    Никаких «лучше/хуже»: только «сколько задач разошлось», «в какую сторону» и интервал
+    разницы. При малом числе наблюдений вывод честно звучит как «в этих условиях».
+    """
+    def index(result: dict) -> dict[str, dict[str, int]]:
+        """Свести строки по задачам. Строки принимаются и объектами, и словарями из JSON."""
+        out: dict[str, dict[str, int]] = {}
+        for row in result["rows"]:
+            task = row["task"] if isinstance(row, dict) else row.task
+            outcome = row["outcome"] if isinstance(row, dict) else row.outcome
+            bucket = out.setdefault(task, {"total": 0, "ok": 0})
+            if outcome == TECHNICAL:
+                continue
+            bucket["total"] += 1
+            bucket["ok"] += outcome == QUALIFIED
+        return out
+
+    a, b = index(left), index(right)
+    only_left, only_right = [], []
+    for task in sorted(set(a) & set(b)):
+        rate_a = a[task]["ok"] / max(1, a[task]["total"])
+        rate_b = b[task]["ok"] / max(1, b[task]["total"])
+        if rate_a > rate_b:
+            only_left.append(task)
+        elif rate_b > rate_a:
+            only_right.append(task)
+    return {
+        "left": left_name, "right": right_name,
+        "left_rate": left["summary"]["first_attempt_rate"],
+        "right_rate": right["summary"]["first_attempt_rate"],
+        "delta": round(right["summary"]["first_attempt_rate"]
+                       - left["summary"]["first_attempt_rate"], 4),
+        "only_left": only_left, "only_right": only_right,
+        "same_fingerprint": (left.get("fingerprint") or left.get("plan_fingerprint"))
+        == (right.get("fingerprint") or right.get("plan_fingerprint")),
+        "left_fingerprint": left.get("fingerprint") or left.get("plan_fingerprint"),
+        "right_fingerprint": right.get("fingerprint") or right.get("plan_fingerprint"),
+    }
+
+
 def summarise(rows: list[RunResult]) -> dict:
     """Сводка: главная метрика (первая попытка), все исходы и разбивка по задачам."""
     first = [row for row in rows if row.attempt == 1]
@@ -249,6 +325,8 @@ def summarise(rows: list[RunResult]) -> dict:
     over = sum(1 for row in rows if row.over_max_tokens)
     return {
         "over_max_tokens": over,
+        # доля задач, где все ответы дословно совпали (кэш или детерминизм — не гадаем)
+        "same_answers_share": same_answers(rows),
         "rows": len(rows),
         "first_attempts": total_first,
         "first_qualified": qualified_first,
