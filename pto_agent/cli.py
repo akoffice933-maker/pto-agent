@@ -3368,10 +3368,38 @@ FREE_PROVIDERS = {
 }
 
 
+def cmd_bench_compare(args):
+    """Сравнить два отчёта стенда, снятых по одному плану."""
+    from .bench.report import compare_markdown
+    from .bench.runner import compare
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    loaded = []
+    for path in (args.left, args.right):
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        loaded.append(data)
+    diff = compare(loaded[0], loaded[1], args.left_name or args.left,
+                   args.right_name or args.right)
+    left_fp = loaded[0].get("fingerprint") or loaded[0].get("plan_fingerprint")
+    right_fp = loaded[1].get("fingerprint") or loaded[1].get("plan_fingerprint")
+    diff["same_fingerprint"] = left_fp == right_fp
+    (out / "compare.json").write_text(
+        json.dumps(diff, ensure_ascii=False, indent=2), encoding="utf-8")
+    text = compare_markdown(diff)
+    (out / "compare.md").write_text(text, encoding="utf-8")
+    print(f"разница: {diff['delta'] * 100:+.1f} п.п. "
+          f"({diff['left_rate'] * 100:.1f} % → {diff['right_rate'] * 100:.1f} %) · "
+          f"отпечатки {'совпали' if diff['same_fingerprint'] else 'РАЗНЫЕ'}")
+    print(f"отчёт: {out / 'compare.md'}")
+    if args.max_delta is not None and abs(diff["delta"]) > args.max_delta:
+        return 1
+    return 0
+
+
 def cmd_bench(args):
     """Стенд: прогон плана и отчёт. По умолчанию — на mock-модели, без сети и денег."""
     from .bench import MockModel, Plan, pre_registration, run_plan, to_json, to_markdown
-    from .bench.mock import HTTP_429, HTTP_500
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -4350,6 +4378,16 @@ def main(argv=None):
         node.add_argument("--min-rate", type=float, default=0.95)
         node.add_argument("--fail-on-regression", action="store_true")
         node.set_defaults(func=cmd_bench)
+
+    cmp_node = bn_sub.add_parser("compare", help="сравнить два отчёта, снятых по одному плану")
+    cmp_node.add_argument("left", help="report.json первого прогона")
+    cmp_node.add_argument("right", help="report.json второго прогона")
+    cmp_node.add_argument("--left-name", default=None)
+    cmp_node.add_argument("--right-name", default=None)
+    cmp_node.add_argument("--out", default="out/bench_compare")
+    cmp_node.add_argument("--max-delta", type=float, default=None,
+                          help="падать, если разница больше N (доля, например 0.1)")
+    cmp_node.set_defaults(func=cmd_bench_compare)
 
     ev = sub.add_parser("eval", help="проверка поведения агента, а не «выглядит правильно»")
     ev.add_argument("--out", default="out/eval")

@@ -291,3 +291,104 @@ def test_oversized_output_is_flagged_not_scored():
     flagged = [row for row in result["rows"] if row.over_max_tokens]
     assert flagged, "нет ни одной отметки over_max_tokens"
     assert result["summary"]["over_max_tokens"] == len(flagged)
+
+
+# ─── сравнение двух адресов (шаг 2 пилота) ────────────────────────────────────
+
+def test_schedule_separates_attempts_across_blocks():
+    """Попытки одной задачи идут в разных блоках, а не подряд."""
+    plan = Plan(attempts=2, blocks=3)
+    slots = plan.schedule()
+    for attempt in (1, 2):
+        blocks = [slot["block"] for slot in slots
+                  if slot["attempt"] == attempt and slot["task"] == "schema_act_1"]
+        assert len(set(blocks)) == 3, blocks
+    assert len(slots) == len(plan.tasks) * plan.attempts * plan.blocks
+
+
+def test_plan_reports_twin_tasks():
+    """Копии одной задачи видны до прогона: иначе они выдают себя за наблюдения."""
+    twins = Plan().blocks_mismatch()
+    assert "chain_1 = chain_2" in twins
+    assert "truncation_1 = truncation_2" in twins
+
+
+def test_compare_detects_the_planted_difference():
+    """Сравнение видит ровно те виды задач, где разошлись прогоны."""
+    from pto_agent.bench.runner import compare
+
+    good = MockModel().start()
+    broken = MockModel(policy={"quote": "paraphrase", "no_data": "invented"}).start()
+    try:
+        left = run_plan(Plan(attempts=1, blocks=1), good.base_url)
+        right = run_plan(Plan(attempts=1, blocks=1), broken.base_url)
+    finally:
+        good.stop()
+        broken.stop()
+    diff = compare(left, right, "good", "broken")
+    assert diff["same_fingerprint"] is True
+    assert set(diff["only_left"]) == {
+        "quote_norm_1", "quote_norm_2", "quote_norm_3",
+        "no_data_1", "no_data_2", "no_data_3", "no_data_4"}
+    assert diff["only_right"] == []
+    assert diff["delta"] < 0
+
+
+def test_compare_refuses_mismatched_plans():
+    """Разные планы — повод сказать «сравнивать нельзя», а не молча сравнить."""
+    from pto_agent.bench.runner import compare
+
+    mock = MockModel().start()
+    try:
+        left = run_plan(Plan(attempts=1, blocks=1), mock.base_url)
+        right = run_plan(Plan(attempts=1, blocks=2), mock.base_url)
+    finally:
+        mock.stop()
+    assert compare(left, right, "a", "b")["same_fingerprint"] is False
+
+
+def test_compare_report_has_no_verdict_words():
+    """В сравнении нет «лучше/хуже»: только разница и оговорки."""
+    from pto_agent.bench.report import compare_markdown
+
+    text = compare_markdown({"left": "a", "right": "b", "left_rate": 0.5,
+                             "right_rate": 0.7, "delta": 0.2, "only_left": [],
+                             "only_right": ["quote_norm_1"], "same_fingerprint": True})
+    lowered = text.lower()
+    for word in ("лучше", "хуже", "подмен", "деградировал", "обман", "разбавлен"):
+        assert word not in lowered, word
+    assert "наблюдение" in lowered
+
+
+def test_same_answers_flags_identical_responses():
+    """Идентичные ответы при temperature > 0 — повод сказать это, а не промолчать."""
+    mock = MockModel().start()
+    try:
+        result = run_plan(Plan(attempts=2, blocks=1), mock.base_url)
+    finally:
+        mock.stop()
+    assert result["summary"]["same_answers_share"] == 1.0
+
+
+def test_cli_compare_end_to_end(tmp_path: Path):
+    """`bench compare` пишет отчёт и умеет падать по порогу разницы."""
+    import subprocess
+    import sys
+    root = Path(__file__).resolve().parents[1]
+    a, b = tmp_path / "a", tmp_path / "b"
+    for target, extra in ((a, []), (b, ["--break", "quote=paraphrase"])):
+        subprocess.run([sys.executable, "-m", "pto_agent", "bench", "mock",
+                        "--out", str(target), "--attempts", "1", "--blocks", "1", *extra],
+                       cwd=root, check=True, capture_output=True, timeout=300)
+    out = tmp_path / "cmp"
+    ok = subprocess.run([sys.executable, "-m", "pto_agent", "bench", "compare",
+                         str(a / "report.json"), str(b / "report.json"),
+                         "--out", str(out)], cwd=root, capture_output=True, text=True,
+                        timeout=300)
+    assert ok.returncode == 0, ok.stderr[-800:]
+    assert (out / "compare.md").exists() and (out / "compare.json").exists()
+    strict = subprocess.run([sys.executable, "-m", "pto_agent", "bench", "compare",
+                             str(a / "report.json"), str(b / "report.json"),
+                             "--out", str(out), "--max-delta", "0.1"],
+                            cwd=root, capture_output=True, text=True, timeout=300)
+    assert strict.returncode == 1
